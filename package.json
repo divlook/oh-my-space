@@ -1,0 +1,37 @@
+{
+  "name": "oh-my-specs",
+  "version": "0.1.0",
+  "description": "OpenSpec working space template for analyzing external repos via source aliases.",
+  "license": "MIT",
+  "homepage": "https://github.com/divlook/oh-my-specs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/divlook/oh-my-specs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/divlook/oh-my-specs/issues"
+  },
+  "keywords": [
+    "openspec",
+    "template",
+    "spec-driven",
+    "bun"
+  ],
+  "author": {
+    "name": "divlook",
+    "email": "uihyeon.cha@gmail.com",
+    "url": "https://github.com/divlook"
+  },
+  "type": "module",
+  "scripts": {
+    "clone": "bun scripts/clone.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^25.9.1"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.4.0",
+    "commander": "^14.0.3"
+  }
+}

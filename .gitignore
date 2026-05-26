@@ -1,0 +1,12 @@
+# common
+/sources/*
+!/sources/.keep
+
+# osx
+.DS_Store
+
+# node
+node_modules/
+
+# claude
+.claude/plans/
