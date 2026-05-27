@@ -23,16 +23,16 @@ OpenSpec is already initialized in this template (`openspec/` directory). For a 
 ## Quick start
 
 ```bash
-bun run sources sync --list       # list registered source repos
-bun run sources sync <alias>...   # add/init/update submodules by alias (space-separated)
-bun run sources sync --all        # add/init/update every registered source repo
-bun run sources sync              # interactive multi-select
-bun run sources fetch <alias>...  # run git fetch --all --prune inside checked-out submodules
-bun run sources pull --all        # run git pull --ff-only inside checked-out submodules
-bun run sources push <alias>...   # run git push inside explicitly selected submodules
+bun run oms sync --list       # list registered source repos
+bun run oms sync <alias>...   # add/init/update submodules by alias (space-separated)
+bun run oms sync --all        # add/init/update every registered source repo
+bun run oms sync              # interactive multi-select
+bun run oms fetch <alias>...  # run git fetch --all --prune inside checked-out submodules
+bun run oms pull --all        # run git pull --ff-only inside checked-out submodules
+bun run oms push <alias>...   # run git push inside explicitly selected submodules
 ```
 
-After `chmod +x scripts/sources.ts` you can also invoke it directly: `./scripts/sources.ts ...`.
+After `chmod +x scripts/oms.ts` you can also invoke it directly: `./scripts/oms.ts ...`.
 
 ## Managing source repositories
 
@@ -40,12 +40,12 @@ After `chmod +x scripts/sources.ts` you can also invoke it directly: `./scripts/
 
 | Command | Runs in | Does | Notes |
 | --- | --- | --- | --- |
-| `bun run sources sync <alias>` / `--all` | repo root | Adds missing submodules and initializes/updates registered ones. | Syncs `sources.yaml` to `sources/<alias>/`. |
-| `bun run sources fetch ...` | selected checked-out submodule worktree | `git fetch --all --prune` | Does not change the superproject gitlink. |
-| `bun run sources pull ...` | selected checked-out submodule worktree | `git pull --ff-only` | Requires a branch with upstream; detached HEAD/no-upstream states fail. |
-| `bun run sources push <alias>...` | explicitly selected checked-out submodule worktree | `git push` | No `--all`, force push, or automatic upstream setup. |
+| `bun run oms sync <alias>` / `--all` | repo root | Adds missing submodules and initializes/updates registered ones. | Syncs `sources.yaml` to `sources/<alias>/`. |
+| `bun run oms fetch ...` | selected checked-out submodule worktree | `git fetch --all --prune` | Does not change the superproject gitlink. |
+| `bun run oms pull ...` | selected checked-out submodule worktree | `git pull --ff-only` | Requires a branch with upstream; detached HEAD/no-upstream states fail. |
+| `bun run oms push <alias>...` | explicitly selected checked-out submodule worktree | `git push` | No `--all`, force push, or automatic upstream setup. |
 
-To add a repo, add it under `repos:` in `sources.yaml`, run `bun run sources sync <alias>`, then commit `sources.yaml`, `.gitmodules`, and the gitlink change.
+To add a repo, add it under `repos:` in `sources.yaml`, run `bun run oms sync <alias>`, then commit `sources.yaml`, `.gitmodules`, and the gitlink change.
 
 Standard Git submodule commands still work, e.g. `git submodule update --init --recursive`. VS Code + Red Hat YAML uses `sources.schema.json` for autocomplete/validation.
 

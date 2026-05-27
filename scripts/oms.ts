@@ -215,7 +215,7 @@ function manageSubmodule(repo: Repo, repoRoot: string, command: ManageCommand): 
   const sourcePath = `sources/${repo.alias}`;
   if (!isRegisteredSubmodule(repoRoot, sourcePath) || !isCheckedOutGitRepo(repoRoot, sourcePath)) {
     log.error(
-      `${repo.alias}: ${sourcePath} is not a checked-out source submodule. Run "bun run sources sync ${repo.alias}" first.`,
+      `${repo.alias}: ${sourcePath} is not a checked-out source submodule. Run "bun run oms sync ${repo.alias}" first.`,
     );
     return "failed";
   }
@@ -303,7 +303,7 @@ async function selectRepos(
   const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
   if (unknown.length > 0) {
     log.error(
-      `Unknown alias(es): ${unknown.join(", ")}. Use "bun run sources sync --list" to see available aliases.`,
+      `Unknown alias(es): ${unknown.join(", ")}. Use "bun run oms sync --list" to see available aliases.`,
     );
     return null;
   }
@@ -361,7 +361,7 @@ const commandNames = new Set(["sync", "fetch", "pull", "push", "help"]);
 const program = new Command();
 
 program
-  .name("bun run sources")
+  .name("bun run oms")
   .description("Manage source repositories listed in sources.yaml under sources/<alias>/.")
   .addHelpText("after", exitHelp);
 
