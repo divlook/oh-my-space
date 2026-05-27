@@ -15,7 +15,7 @@ Install OpenSpec globally and project dependencies:
 
 ```bash
 bun install -g @fission-ai/openspec@latest   # one-time, OpenSpec CLI (or: npm install -g @fission-ai/openspec@latest)
-bun install                                  # project deps for the clone CLI
+bun install                                  # project deps for the sources CLI
 ```
 
 OpenSpec is already initialized in this template (`openspec/` directory). For a fresh project, see the [OpenSpec quick start](https://github.com/Fission-AI/OpenSpec#quick-start) (`openspec init`).
@@ -23,22 +23,31 @@ OpenSpec is already initialized in this template (`openspec/` directory). For a 
 ## Quick start
 
 ```bash
-bun run clone --list           # list registered source repos
-bun run clone <alias>...       # add/update submodules by alias (space-separated)
-bun run clone --all            # add/update every registered source repo
-bun run clone                  # interactive multi-select
+bun run sources sync --list       # list registered source repos
+bun run sources sync <alias>...   # add/init/update submodules by alias (space-separated)
+bun run sources sync --all        # add/init/update every registered source repo
+bun run sources sync              # interactive multi-select
+bun run sources fetch <alias>...  # run git fetch --all --prune inside checked-out submodules
+bun run sources pull --all        # run git pull --ff-only inside checked-out submodules
+bun run sources push <alias>...   # run git push inside explicitly selected submodules
 ```
 
-After `chmod +x scripts/clone.ts` you can also invoke it directly: `./scripts/clone.ts ...`.
+After `chmod +x scripts/sources.ts` you can also invoke it directly: `./scripts/sources.ts ...`.
 
-## Sources
+## Managing source repositories
 
-- Aliases, URLs, and optional `branch` are managed in `sources.yaml`.
-- Running the CLI registers each source repo as a Git submodule at `sources/<alias>/`.
-- Re-run `bun run clone <alias>` or `bun run clone --all` to initialize/update registered submodules.
-- Standard Git submodule commands also work, for example: `git submodule update --init --recursive`.
-- To add a new source repo, append an entry under `repos:` and run the CLI above. Commit both `sources.yaml` and Git's generated `.gitmodules`/gitlink changes.
-- VS Code + the Red Hat YAML extension picks up `sources.schema.json` for autocomplete/validation.
+`sources.yaml` declares each source repo (`alias`, `url`, optional `branch`); checkouts live as Git submodules under `sources/<alias>/`.
+
+| Command | Runs in | Does | Notes |
+| --- | --- | --- | --- |
+| `bun run sources sync <alias>` / `--all` | repo root | Adds missing submodules and initializes/updates registered ones. | Syncs `sources.yaml` to `sources/<alias>/`. |
+| `bun run sources fetch ...` | selected checked-out submodule worktree | `git fetch --all --prune` | Does not change the superproject gitlink. |
+| `bun run sources pull ...` | selected checked-out submodule worktree | `git pull --ff-only` | Requires a branch with upstream; detached HEAD/no-upstream states fail. |
+| `bun run sources push <alias>...` | explicitly selected checked-out submodule worktree | `git push` | No `--all`, force push, or automatic upstream setup. |
+
+To add a repo, add it under `repos:` in `sources.yaml`, run `bun run sources sync <alias>`, then commit `sources.yaml`, `.gitmodules`, and the gitlink change.
+
+Standard Git submodule commands still work, e.g. `git submodule update --init --recursive`. VS Code + Red Hat YAML uses `sources.schema.json` for autocomplete/validation.
 
 ## Use as a template
 
