@@ -17,17 +17,17 @@
           "alias": {
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9-]*$",
-            "description": "Local alias used as the clone directory name under sources/"
+            "description": "Local alias used as the Git submodule path under sources/"
           },
           "url": {
             "type": "string",
             "minLength": 1,
-            "description": "git clone URL (ssh or https)"
+            "description": "Git submodule URL (ssh or https)"
           },
           "branch": {
             "type": "string",
             "minLength": 1,
-            "description": "Optional branch to clone instead of the default branch"
+            "description": "Optional branch to track instead of the default branch"
           }
         }
       }

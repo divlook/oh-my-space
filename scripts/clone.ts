@@ -11,7 +11,7 @@ type Repo = {
   branch?: string;
 };
 
-type CloneResult = "cloned" | "skipped" | "failed";
+type SubmoduleResult = "added" | "updated" | "failed";
 
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const ALLOWED_TOP_KEYS = new Set(["repos"]);
@@ -98,7 +98,7 @@ function printList(repos: Repo[]): void {
 
 async function selectInteractive(repos: Repo[]): Promise<Repo[] | null> {
   const choice = await multiselect({
-    message: "Select repos to clone (space to toggle, enter to confirm)",
+    message: "Select source repos to register/update as submodules (space to toggle, enter to confirm)",
     options: repos.map((r) => ({
       value: r.alias,
       label: r.alias,
@@ -115,38 +115,89 @@ async function selectInteractive(repos: Repo[]): Promise<Repo[] | null> {
     .filter((r): r is Repo => r !== undefined);
 }
 
-function cloneOne(repo: Repo, sourcesDir: string): CloneResult {
-  const dest = join(sourcesDir, repo.alias);
-  if (existsSync(dest)) {
-    log.warn(`${repo.alias}: ${dest} already exists, skipping`);
-    return "skipped";
+type GitResult = {
+  exitCode: number | null;
+  success: boolean;
+  stdout: string;
+};
+
+function runGit(repoRoot: string, args: string[], inheritOutput = false): GitResult {
+  const result = Bun.spawnSync(["git", ...args], {
+    cwd: repoRoot,
+    stdout: inheritOutput ? "inherit" : "pipe",
+    stderr: inheritOutput ? "inherit" : "pipe",
+  });
+
+  return {
+    exitCode: result.exitCode,
+    success: result.success,
+    stdout: inheritOutput ? "" : new TextDecoder().decode(result.stdout),
+  };
+}
+
+function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
+  if (!existsSync(join(repoRoot, ".gitmodules"))) return false;
+
+  const result = runGit(repoRoot, [
+    "config",
+    "--file",
+    ".gitmodules",
+    "--get-regexp",
+    "^submodule\\..*\\.path$",
+  ]);
+  if (!result.success) return false;
+
+  return result.stdout
+    .split("\n")
+    .some((line) => line.trim().split(/\s+/)[1] === sourcePath);
+}
+
+function syncSubmodule(repo: Repo, repoRoot: string): SubmoduleResult {
+  const sourcePath = `sources/${repo.alias}`;
+  const dest = join(repoRoot, sourcePath);
+  const registered = isRegisteredSubmodule(repoRoot, sourcePath);
+
+  if (!registered && existsSync(dest)) {
+    log.error(
+      `${repo.alias}: ${sourcePath} already exists but is not registered as a git submodule. Move or remove it manually, then retry.`,
+    );
+    return "failed";
   }
-  const args = ["clone"];
-  if (repo.branch) args.push("--branch", repo.branch);
-  args.push(repo.url, dest);
+
+  const args = registered
+    ? ["submodule", "update", "--init", "--recursive", sourcePath]
+    : [
+        "submodule",
+        "add",
+        "--name",
+        repo.alias,
+        ...(repo.branch ? ["--branch", repo.branch] : []),
+        repo.url,
+        sourcePath,
+      ];
 
   log.step(`git ${args.join(" ")}`);
-  const result = Bun.spawnSync(["git", ...args], {
-    stdout: "inherit",
-    stderr: "inherit",
-  });
+  const result = runGit(repoRoot, args, true);
   if (result.success) {
-    log.success(`${repo.alias}: cloned`);
-    return "cloned";
+    log.success(`${repo.alias}: ${registered ? "updated" : "added"}`);
+    return registered ? "updated" : "added";
   }
-  log.error(`${repo.alias}: clone failed (exit ${result.exitCode})`);
+
+  log.error(
+    `${repo.alias}: submodule ${registered ? "update" : "add"} failed (exit ${result.exitCode})`,
+  );
   return "failed";
 }
 
-function printSummary(results: CloneResult[]): void {
-  const counts = { cloned: 0, skipped: 0, failed: 0 };
+function printSummary(results: SubmoduleResult[]): void {
+  const counts = { added: 0, updated: 0, failed: 0 };
   for (const r of results) counts[r]++;
   log.message(
-    `Summary: cloned ${counts.cloned}, skipped ${counts.skipped}, failed ${counts.failed}`,
+    `Summary: added ${counts.added}, updated ${counts.updated}, failed ${counts.failed}`,
   );
 }
 
-function exitFromResults(results: CloneResult[]): number {
+function exitFromResults(results: SubmoduleResult[]): number {
   return results.includes("failed") ? 2 : 0;
 }
 
@@ -173,10 +224,9 @@ async function runAction(
   }
 
   const repoRoot = resolve(import.meta.dir, "..");
-  const sourcesDir = join(repoRoot, "sources");
 
   if (options.all) {
-    const results = repos.map((r) => cloneOne(r, sourcesDir));
+    const results = repos.map((r) => syncSubmodule(r, repoRoot));
     printSummary(results);
     return exitFromResults(results);
   }
@@ -205,7 +255,7 @@ async function runAction(
       .map((a) => repos.find((r) => r.alias === a)!);
   }
 
-  const results = picked.map((r) => cloneOne(r, sourcesDir));
+  const results = picked.map((r) => syncSubmodule(r, repoRoot));
   if (results.length > 1) printSummary(results);
   return exitFromResults(results);
 }
@@ -214,17 +264,17 @@ const program = new Command();
 program
   .name("bun run clone")
   .description(
-    "Clone repositories listed in sources.yaml into sources/<alias>/.",
+    "Register or update repositories listed in sources.yaml as git submodules under sources/<alias>/.",
   )
   .argument(
     "[aliases...]",
-    "repo aliases to clone (omit for interactive multi-select)",
+    "repo aliases to register/update (omit for interactive multi-select)",
   )
-  .option("--all", "clone every registered repo")
+  .option("--all", "register/update every registered repo")
   .option("--list", "print registered repos")
   .addHelpText(
     "after",
-    "\nExit codes: 0 ok | 1 usage/config error | 2 one or more clones failed.",
+    "\nExit codes: 0 ok | 1 usage/config error | 2 one or more submodule operations failed.",
   )
   .action(async (aliases: string[], options: Options) => {
     const code = await runAction(aliases, options);

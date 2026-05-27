@@ -1,6 +1,4 @@
 # common
-/sources/*
-!/sources/.keep
 
 # osx
 .DS_Store

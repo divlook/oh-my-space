@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=./sources.schema.json
 
-# Replace these example entries with the repositories you want to analyze.
-# Each `alias` becomes the directory name under `sources/<alias>/`.
+# Replace these example entries with the repositories you want to register as source submodules.
+# Each `alias` becomes the Git submodule path under `sources/<alias>/`.
 repos:
   - alias: example
     url: git@github.com:OWNER/REPO.git
-    # branch: develop  # optional — clone a non-default branch
+    # branch: develop  # optional — track a non-default branch for the submodule
