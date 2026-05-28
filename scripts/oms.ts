@@ -62,7 +62,7 @@ type WorktreeEntry = {
   branch: string;
   /** absolute path */
   path: string;
-  /** path relative to sources/<alias>/ */
+  /** path relative to oms/<alias>/ */
   relativePath: string;
 };
 
@@ -70,7 +70,13 @@ const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const ALLOWED_TOP_KEYS = new Set(["repos"]);
 const ALLOWED_ITEM_KEYS = new Set(["alias", "url", "branch"]);
 const FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
-const GITIGNORE_ENTRY = "sources/";
+const MANIFEST_FILENAME = "oms.yaml";
+const DATA_DIRNAME = "oms";
+const GITIGNORE_ENTRY = `${DATA_DIRNAME}/`;
+const LEGACY_MANIFEST = "sources.yaml";
+const LEGACY_DATA_DIRNAME = "sources";
+const LEGACY_MIGRATION_DOC = "docs/migrations/0.3.x-to-0.4.0.md";
+const SUBMODULE_MIGRATION_DOC = "docs/migrations/0.2.x-to-0.3.0.md";
 const MIN_GIT_MAJOR = 2;
 const MIN_GIT_MINOR = 40;
 
@@ -80,20 +86,20 @@ const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[0m` : s);
 
 function validateSources(data: unknown): Repo[] {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
-    throw new Error("sources.yaml: root must be a mapping");
+    throw new Error(`${MANIFEST_FILENAME}: root must be a mapping`);
   }
   const obj = data as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
     if (!ALLOWED_TOP_KEYS.has(key)) {
-      throw new Error(`sources.yaml: unknown top-level key "${key}"`);
+      throw new Error(`${MANIFEST_FILENAME}: unknown top-level key "${key}"`);
     }
   }
   const { repos } = obj;
   if (!Array.isArray(repos)) {
-    throw new Error('sources.yaml: "repos" must be an array');
+    throw new Error(`${MANIFEST_FILENAME}: "repos" must be an array`);
   }
   if (repos.length === 0) {
-    throw new Error('sources.yaml: "repos" must have at least one item');
+    throw new Error(`${MANIFEST_FILENAME}: "repos" must have at least one item`);
   }
 
   const validated: Repo[] = [];
@@ -102,33 +108,33 @@ function validateSources(data: unknown): Repo[] {
   repos.forEach((item, idx) => {
     const where = `repos[${idx}]`;
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      throw new Error(`sources.yaml: ${where} must be a mapping`);
+      throw new Error(`${MANIFEST_FILENAME}: ${where} must be a mapping`);
     }
     const r = item as Record<string, unknown>;
     for (const key of Object.keys(r)) {
       if (!ALLOWED_ITEM_KEYS.has(key)) {
-        throw new Error(`sources.yaml: ${where} has unknown key "${key}"`);
+        throw new Error(`${MANIFEST_FILENAME}: ${where} has unknown key "${key}"`);
       }
     }
     if (typeof r.alias !== "string" || r.alias.length === 0) {
-      throw new Error(`sources.yaml: ${where} missing required "alias"`);
+      throw new Error(`${MANIFEST_FILENAME}: ${where} missing required "alias"`);
     }
     if (!ALIAS_PATTERN.test(r.alias)) {
       throw new Error(
-        `sources.yaml: ${where}.alias "${r.alias}" must match ${ALIAS_PATTERN}`,
+        `${MANIFEST_FILENAME}: ${where}.alias "${r.alias}" must match ${ALIAS_PATTERN}`,
       );
     }
     if (seen.has(r.alias)) {
-      throw new Error(`sources.yaml: duplicate alias "${r.alias}"`);
+      throw new Error(`${MANIFEST_FILENAME}: duplicate alias "${r.alias}"`);
     }
     seen.add(r.alias);
     if (typeof r.url !== "string" || r.url.length === 0) {
-      throw new Error(`sources.yaml: ${where} missing required "url"`);
+      throw new Error(`${MANIFEST_FILENAME}: ${where} missing required "url"`);
     }
     let branch: string | undefined;
     if (r.branch !== undefined) {
       if (typeof r.branch !== "string" || r.branch.length === 0) {
-        throw new Error(`sources.yaml: ${where}.branch must be a non-empty string`);
+        throw new Error(`${MANIFEST_FILENAME}: ${where}.branch must be a non-empty string`);
       }
       branch = r.branch;
     }
@@ -184,7 +190,7 @@ function runGit(cwd: string, args: string[], inheritOutput = false): GitResult {
   };
 }
 
-/** Run git from sources/<alias>/ with safe.bareRepository=all, so the .git placeholder routes to .bare. */
+/** Run git from oms/<alias>/ with safe.bareRepository=all, so the .git placeholder routes to .bare. */
 function runBareGit(
   repoRoot: string,
   alias: string,
@@ -213,7 +219,7 @@ function isGitVersionSupported(v: { major: number; minor: number }): boolean {
 function findWorkspaceRoot(options: WorkspaceOptions = {}): string | null {
   let current = resolve(options.cwd ?? process.cwd());
   while (true) {
-    if (existsSync(join(current, "sources.yaml"))) return current;
+    if (existsSync(join(current, MANIFEST_FILENAME))) return current;
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;
@@ -221,7 +227,7 @@ function findWorkspaceRoot(options: WorkspaceOptions = {}): string | null {
 }
 
 function aliasDir(repoRoot: string, alias: string): string {
-  return join(repoRoot, "sources", alias);
+  return join(repoRoot, DATA_DIRNAME, alias);
 }
 
 function bareDir(repoRoot: string, alias: string): string {
@@ -253,19 +259,74 @@ function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
     .some((line) => line.trim().split(/\s+/)[1] === sourcePath);
 }
 
-/** Returns true when .gitmodules registers any sources/<alias> entry for the loaded repos. */
+/** Returns true when .gitmodules registers any sources/<alias> or oms/<alias> entry for the loaded repos. */
 function hasLegacySubmoduleLayout(repoRoot: string, repos: Repo[]): boolean {
   if (!existsSync(join(repoRoot, ".gitmodules"))) return false;
-  return repos.some((repo) => isRegisteredSubmodule(repoRoot, `sources/${repo.alias}`));
+  return repos.some(
+    (repo) =>
+      isRegisteredSubmodule(repoRoot, `${LEGACY_DATA_DIRNAME}/${repo.alias}`)
+      || isRegisteredSubmodule(repoRoot, `${DATA_DIRNAME}/${repo.alias}`),
+  );
 }
 
 function abortOnLegacy(repoRoot: string, repos: Repo[]): boolean {
   if (!hasLegacySubmoduleLayout(repoRoot, repos)) return false;
   log.error(
-    'detected legacy submodule layout (.gitmodules registers sources/<alias>). oh-my-space 0.3.0 uses bare clone + worktrees.\n' +
-      '  See README "Migrating from 0.2.x" for the manual steps. Aborting to avoid destructive change.',
+    'detected legacy submodule layout (.gitmodules registers an alias path). oh-my-space 0.3.0+ uses bare clone + worktrees.\n' +
+      `  See ${SUBMODULE_MIGRATION_DOC} for the manual steps. Aborting to avoid destructive change.`,
   );
   return true;
+}
+
+/** Inspect a single directory for 0.3.x rename artifacts. */
+function detectLegacyRenameArtifactsAt(dir: string): { manifest: boolean; data: boolean } | null {
+  const manifest = existsSync(join(dir, LEGACY_MANIFEST));
+  const data = existsSync(join(dir, LEGACY_DATA_DIRNAME));
+  if (!manifest && !data) return null;
+  return { manifest, data };
+}
+
+function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: boolean }): void {
+  const artifacts = [
+    found.manifest ? `'${LEGACY_MANIFEST}'` : null,
+    found.data ? `'${LEGACY_DATA_DIRNAME}/'` : null,
+  ]
+    .filter((s): s is string => s !== null)
+    .join(" and ");
+  log.error(
+    `detected legacy ${artifacts} at ${dir}.\n` +
+      `  oh-my-space 0.4.0 renamed the manifest to ${MANIFEST_FILENAME} and the data directory to ${DATA_DIRNAME}/.\n` +
+      `  See ${LEGACY_MIGRATION_DOC} for the manual steps. Aborting to avoid destructive change.`,
+  );
+}
+
+/** Block when the active oms.yaml workspace still has legacy artifacts at its root. */
+function abortOnLegacyRenameAt(repoRoot: string): boolean {
+  const found = detectLegacyRenameArtifactsAt(repoRoot);
+  if (!found) return false;
+  emitLegacyRenameMessage(repoRoot, found);
+  return true;
+}
+
+/**
+ * When oms.yaml could not be found, walk upward looking for a 0.3.x manifest (sources.yaml).
+ * Only the manifest is trusted as a positive signal — a stray sources/ directory by itself
+ * could belong to an unrelated tool. Returns true if a hint was emitted.
+ */
+function emitLegacyRenameHintWalkUp(options: WorkspaceOptions = {}): boolean {
+  let current = resolve(options.cwd ?? process.cwd());
+  while (true) {
+    if (existsSync(join(current, LEGACY_MANIFEST))) {
+      emitLegacyRenameMessage(current, {
+        manifest: true,
+        data: existsSync(join(current, LEGACY_DATA_DIRNAME)),
+      });
+      return true;
+    }
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
 }
 
 function ensureGitignore(repoRoot: string): void {
@@ -300,7 +361,7 @@ function setupBareRepo(repo: Repo, repoRoot: string): boolean {
   }
 
   // Write the placeholder before any further runBareGit calls, otherwise git ascends
-  // out of sources/<alias>/ looking for a repo and touches the wrong .git.
+  // out of oms/<alias>/ looking for a repo and touches the wrong .git.
   writeFileSync(gitPlaceholderPath(repoRoot, alias), "gitdir: ./.bare\n");
 
   const config = runBareGit(repoRoot, alias, [
@@ -355,7 +416,7 @@ function listExistingWorktrees(repoRoot: string, alias: string): WorktreeEntry[]
     }
     if (!path || bare) continue;
     const rel = relative(aliasPath, path);
-    // Skip worktrees outside sources/<alias>/ (shouldn't happen, but be safe)
+    // Skip worktrees outside oms/<alias>/ (shouldn't happen, but be safe)
     if (rel.startsWith("..")) continue;
     entries.push({ branch, path, relativePath: rel });
   }
@@ -383,7 +444,7 @@ function cleanupEmptyParents(repoRoot: string, alias: string, branch: string): v
 function addWorktree(repo: Repo, repoRoot: string, branch: string): boolean {
   const wtPath = worktreePath(repoRoot, repo.alias, branch);
   if (existsSync(wtPath)) {
-    log.warn(`${repo.alias}: sources/${repo.alias}/${branch} already exists; skipping.`);
+    log.warn(`${repo.alias}: ${DATA_DIRNAME}/${repo.alias}/${branch} already exists; skipping.`);
     return true;
   }
 
@@ -436,7 +497,7 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
       const stray = readdirSync(aliasPath).filter((e) => e !== ".git");
       if (stray.length > 0) {
         log.error(
-          `${alias}: sources/${alias}/ already exists but is not a bare clone. Move or remove it manually, then retry.`,
+          `${alias}: ${DATA_DIRNAME}/${alias}/ already exists but is not a bare clone. Move or remove it manually, then retry.`,
         );
         return "failed";
       }
@@ -475,7 +536,7 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
     const branch = repo.branch ?? detectDefaultBranch(repoRoot, alias);
     if (!branch) {
       log.error(
-        `${alias}: could not determine default branch from bare clone. Set "branch:" in sources.yaml.`,
+        `${alias}: could not determine default branch from bare clone. Set "branch:" in ${MANIFEST_FILENAME}.`,
       );
       return "failed";
     }
@@ -522,7 +583,7 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
       const status = runGit(wt.path, ["status", "--porcelain"]);
       if (status.success && status.stdout.trim().length > 0) {
         log.error(
-          `${repo.alias}: worktree at sources/${repo.alias}/${wt.relativePath} has uncommitted changes. Commit, stash, or pass --force.`,
+          `${repo.alias}: worktree at ${DATA_DIRNAME}/${repo.alias}/${wt.relativePath} has uncommitted changes. Commit, stash, or pass --force.`,
         );
         return "failed";
       }
@@ -667,14 +728,14 @@ function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repoRoot: s
   const repoRoot = findWorkspaceRoot(options);
   if (!repoRoot) {
     log.error(
-      "Could not find sources.yaml in the current directory or its parents. Create a sources.yaml in this project, then retry.",
+      `Could not find ${MANIFEST_FILENAME} in the current directory or its parents. Create a ${MANIFEST_FILENAME} in this project, then retry.`,
     );
     return null;
   }
 
   try {
-    const sourcesPath = join(repoRoot, "sources.yaml");
-    return { repos: validateSources(parseYaml(readFileSync(sourcesPath, "utf8"))), repoRoot };
+    const manifestPath = join(repoRoot, MANIFEST_FILENAME);
+    return { repos: validateSources(parseYaml(readFileSync(manifestPath, "utf8"))), repoRoot };
   } catch (e) {
     log.error(e instanceof Error ? e.message : String(e));
     return null;
@@ -716,8 +777,12 @@ async function selectRepos(
 
 async function runSync(aliases: string[], options: SourcesOptions): Promise<number> {
   const loaded = loadRepos();
-  if (!loaded) return 1;
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return 1;
+  }
   const { repos, repoRoot } = loaded;
+  if (abortOnLegacyRenameAt(repoRoot)) return 1;
 
   if (options.list) {
     printList(repos);
@@ -742,8 +807,12 @@ async function runManage(
   options: SourcesOptions,
 ): Promise<number> {
   const loaded = loadRepos();
-  if (!loaded) return 1;
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return 1;
+  }
   const { repos, repoRoot } = loaded;
+  if (abortOnLegacyRenameAt(repoRoot)) return 1;
   if (abortOnLegacy(repoRoot, repos)) return 1;
 
   const picked = await selectRepos(repos, aliases, options, command);
@@ -757,8 +826,12 @@ async function runManage(
 
 async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<number> {
   const loaded = loadRepos();
-  if (!loaded) return 1;
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return 1;
+  }
   const { repos, repoRoot } = loaded;
+  if (abortOnLegacyRenameAt(repoRoot)) return 1;
   if (abortOnLegacy(repoRoot, repos)) return 1;
 
   const picked = await selectRepos(repos, aliases, options, "unsync");
@@ -784,8 +857,12 @@ async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<num
 
 async function runWorktreeAdd(alias: string, branch: string): Promise<number> {
   const loaded = loadRepos();
-  if (!loaded) return 1;
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return 1;
+  }
   const { repos, repoRoot } = loaded;
+  if (abortOnLegacyRenameAt(repoRoot)) return 1;
   if (abortOnLegacy(repoRoot, repos)) return 1;
 
   const repo = repos.find((r) => r.alias === alias);
@@ -798,7 +875,7 @@ async function runWorktreeAdd(alias: string, branch: string): Promise<number> {
     return 1;
   }
   if (existsSync(worktreePath(repoRoot, alias, branch))) {
-    log.error(`${alias}: worktree for ${branch} already exists at sources/${alias}/${branch}.`);
+    log.error(`${alias}: worktree for ${branch} already exists at ${DATA_DIRNAME}/${alias}/${branch}.`);
     return 1;
   }
 
@@ -812,8 +889,12 @@ async function runWorktreeAdd(alias: string, branch: string): Promise<number> {
 
 async function runWorktreeList(alias: string | undefined): Promise<number> {
   const loaded = loadRepos();
-  if (!loaded) return 1;
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return 1;
+  }
   const { repos, repoRoot } = loaded;
+  if (abortOnLegacyRenameAt(repoRoot)) return 1;
   if (abortOnLegacy(repoRoot, repos)) return 1;
 
   const targets = alias ? repos.filter((r) => r.alias === alias) : repos;
@@ -837,7 +918,7 @@ async function runWorktreeList(alias: string | undefined): Promise<number> {
       rows.push({
         alias: repo.alias,
         branch: wt.branch,
-        path: `sources/${repo.alias}/${wt.relativePath}`,
+        path: `${DATA_DIRNAME}/${repo.alias}/${wt.relativePath}`,
       });
     }
   }
@@ -857,8 +938,12 @@ async function runWorktreeRemove(
   options: WorktreeRemoveOptions,
 ): Promise<number> {
   const loaded = loadRepos();
-  if (!loaded) return 1;
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return 1;
+  }
   const { repos, repoRoot } = loaded;
+  if (abortOnLegacyRenameAt(repoRoot)) return 1;
   if (abortOnLegacy(repoRoot, repos)) return 1;
 
   const repo = repos.find((r) => r.alias === alias);
@@ -890,11 +975,15 @@ async function runWorktreeRemove(
 
 async function runDoctor(): Promise<number> {
   const loaded = loadRepos();
-  if (!loaded) return 1;
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return 1;
+  }
   const { repos, repoRoot } = loaded;
+  if (abortOnLegacyRenameAt(repoRoot)) return 1;
 
   log.success(`Workspace root: ${repoRoot}`);
-  log.success(`sources.yaml: ${repos.length} repo(s) configured`);
+  log.success(`${MANIFEST_FILENAME}: ${repos.length} repo(s) configured`);
 
   const git = spawnSync("git", ["--version"], {
     encoding: "utf8",
@@ -923,7 +1012,7 @@ async function runDoctor(): Promise<number> {
 
   if (hasLegacySubmoduleLayout(repoRoot, repos)) {
     log.warn(
-      'detected legacy submodule layout (.gitmodules registers sources/<alias>). See README "Migrating from 0.2.x".',
+      `detected legacy submodule layout (.gitmodules registers an alias path). See ${SUBMODULE_MIGRATION_DOC}.`,
     );
     warnings++;
   }
@@ -947,7 +1036,7 @@ async function runDoctor(): Promise<number> {
     const refspec = runBareGit(repoRoot, repo.alias, ["config", "--get", "remote.origin.fetch"]);
     if (!refspec.success || refspec.stdout.trim().length === 0) {
       log.warn(
-        `${repo.alias}: bare clone is missing remote.origin.fetch. Run: git -C sources/${repo.alias}/.bare -c safe.bareRepository=all config remote.origin.fetch '${FETCH_REFSPEC}'`,
+        `${repo.alias}: bare clone is missing remote.origin.fetch. Run: git -C ${DATA_DIRNAME}/${repo.alias}/.bare -c safe.bareRepository=all config remote.origin.fetch '${FETCH_REFSPEC}'`,
       );
       warnings++;
     } else {
@@ -955,7 +1044,7 @@ async function runDoctor(): Promise<number> {
     }
     if (!existsSync(gitPlaceholderPath(repoRoot, repo.alias))) {
       log.warn(
-        `${repo.alias}: missing .git placeholder at sources/${repo.alias}/.git. Recreate with: echo 'gitdir: ./.bare' > sources/${repo.alias}/.git`,
+        `${repo.alias}: missing .git placeholder at ${DATA_DIRNAME}/${repo.alias}/.git. Recreate with: echo 'gitdir: ./.bare' > ${DATA_DIRNAME}/${repo.alias}/.git`,
       );
       warnings++;
     }
@@ -999,7 +1088,7 @@ const program = new Command();
 program
   .name("oms")
   .description(
-    "Manage source repositories listed in sources.yaml as bare clones + worktrees under sources/<alias>/.",
+    `Manage source repositories listed in ${MANIFEST_FILENAME} as bare clones + worktrees under ${DATA_DIRNAME}/<alias>/.`,
   )
   .version(readPackageVersion())
   .addHelpText("after", exitHelp);
@@ -1007,7 +1096,7 @@ program
 program
   .command("doctor")
   .description(
-    "Check sources.yaml, git availability, bare-clone state, and .gitignore for each registered alias.",
+    `Check ${MANIFEST_FILENAME}, git availability, bare-clone state, and .gitignore for each registered alias.`,
   )
   .addHelpText("after", exitHelp)
   .action(async () => {
@@ -1017,7 +1106,7 @@ program
 program
   .command("sync")
   .description(
-    "Bare-clone each registered repo into sources/<alias>/.bare and create the baseline worktree at sources/<alias>/<branch>/.",
+    `Bare-clone each registered repo into ${DATA_DIRNAME}/<alias>/.bare and create the baseline worktree at ${DATA_DIRNAME}/<alias>/<branch>/.`,
   )
   .argument("[aliases...]", "repo aliases to sync (omit for interactive multi-select)")
   .option("--all", "sync every registered source repo")
@@ -1063,7 +1152,7 @@ program
 program
   .command("unsync")
   .description(
-    "Remove all worktrees and the bare clone for each alias (keeps sources.yaml entry).",
+    `Remove all worktrees and the bare clone for each alias (keeps ${MANIFEST_FILENAME} entry).`,
   )
   .argument("[aliases...]", "repo aliases to unsync (omit for interactive multi-select)")
   .option("--all", "unsync every registered source repo")
@@ -1080,7 +1169,7 @@ const worktreeCmd = program
 
 worktreeCmd
   .command("add")
-  .description("Create a worktree for <branch> at sources/<alias>/<branch>/.")
+  .description(`Create a worktree for <branch> at ${DATA_DIRNAME}/<alias>/<branch>/.`)
   .argument("<alias>", "registered source alias")
   .argument("<branch>", "branch name (may include slashes)")
   .addHelpText("after", exitHelp)
@@ -1099,7 +1188,7 @@ worktreeCmd
 
 worktreeCmd
   .command("remove")
-  .description("Remove the worktree at sources/<alias>/<branch>.")
+  .description(`Remove the worktree at ${DATA_DIRNAME}/<alias>/<branch>.`)
   .argument("<alias>", "registered source alias")
   .argument("<branch>", "branch name (may include slashes)")
   .option("--force", "discard uncommitted changes")

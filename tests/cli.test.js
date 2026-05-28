@@ -35,7 +35,7 @@ function tempWorkspace() {
 
 function writeSources(cwd, content) {
   writeFileSync(
-    join(cwd, "sources.yaml"),
+    join(cwd, "oms.yaml"),
     content
       ?? "repos:\n  - alias: sample\n    url: git@example.com:org/repo.git\n    branch: main\n",
   );
@@ -93,7 +93,7 @@ test("help is exposed as oms with new commands", () => {
   assert.doesNotMatch(result.stdout, /\bmigrate\b/);
 });
 
-test("sync --list loads sources.yaml from a parent workspace", () => {
+test("sync --list loads oms.yaml from a parent workspace", () => {
   const cwd = tempWorkspace();
   mkdirSync(join(cwd, "nested"));
   writeSources(cwd);
@@ -105,15 +105,15 @@ test("sync --list loads sources.yaml from a parent workspace", () => {
   assert.match(result.stdout, /main/);
 });
 
-test("missing sources.yaml fails with creation guidance", () => {
+test("missing oms.yaml fails with creation guidance", () => {
   const cwd = tempWorkspace();
   const result = run(["sync", "--list"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1);
-  assert.match(output, /Could not find sources\.yaml/);
+  assert.match(output, /Could not find oms\.yaml/);
 });
 
-test("invalid sources.yaml fails before any disk side effects", () => {
+test("invalid oms.yaml fails before any disk side effects", () => {
   const cwd = tempWorkspace();
   writeSources(
     cwd,
@@ -124,10 +124,10 @@ test("invalid sources.yaml fails before any disk side effects", () => {
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1);
   assert.match(output, /must match/);
-  assert.equal(existsSync(join(cwd, "sources")), false);
+  assert.equal(existsSync(join(cwd, "oms")), false);
 });
 
-test("doctor reports workspace, sources count, git version, and gitignore warning", () => {
+test("doctor reports workspace, manifest count, git version, and gitignore warning", () => {
   const cwd = tempWorkspace();
   writeSources(cwd);
   const result = run(["doctor"], { cwd });
@@ -135,9 +135,9 @@ test("doctor reports workspace, sources count, git version, and gitignore warnin
   // doctor returns 2 when warnings exist (missing .gitignore is a warning)
   assert.ok(result.status === 0 || result.status === 2, output);
   assert.match(output, /Workspace root:/);
-  assert.match(output, /sources\.yaml: 1 repo\(s\) configured/);
+  assert.match(output, /oms\.yaml: 1 repo\(s\) configured/);
   assert.match(output, /git:/);
-  assert.match(output, /\.gitignore does not exclude sources\//);
+  assert.match(output, /\.gitignore does not exclude oms\//);
 });
 
 test("unsync rejects an unknown alias", () => {
@@ -170,21 +170,21 @@ test("sync creates .bare, .git placeholder, baseline worktree, and adds gitignor
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
 
-  assert.ok(existsSync(join(cwd, "sources", "probe", ".bare")));
-  assert.ok(existsSync(join(cwd, "sources", "probe", ".git")));
+  assert.ok(existsSync(join(cwd, "oms", "probe", ".bare")));
+  assert.ok(existsSync(join(cwd, "oms", "probe", ".git")));
   assert.equal(
-    readFileSync(join(cwd, "sources", "probe", ".git"), "utf8"),
+    readFileSync(join(cwd, "oms", "probe", ".git"), "utf8"),
     "gitdir: ./.bare\n",
   );
-  assert.ok(existsSync(join(cwd, "sources", "probe", "main")));
+  assert.ok(existsSync(join(cwd, "oms", "probe", "main")));
 
-  // gitignore was created and includes sources/
+  // gitignore was created and includes oms/
   const gi = readFileSync(join(cwd, ".gitignore"), "utf8");
-  assert.match(gi, /^sources\/$/m);
+  assert.match(gi, /^oms\/$/m);
 
   // fetch refspec is set in the bare clone
   const refspec = gitOut(
-    join(cwd, "sources", "probe", ".bare"),
+    join(cwd, "oms", "probe", ".bare"),
     "-c",
     "safe.bareRepository=all",
     "config",
@@ -194,10 +194,10 @@ test("sync creates .bare, .git placeholder, baseline worktree, and adds gitignor
   assert.equal(refspec, "+refs/heads/*:refs/remotes/origin/*");
 
   // baseline worktree has the branch checked out (not detached) with upstream
-  const branch = gitOut(join(cwd, "sources", "probe", "main"), "branch", "--show-current");
+  const branch = gitOut(join(cwd, "oms", "probe", "main"), "branch", "--show-current");
   assert.equal(branch, "main");
   const upstream = gitOut(
-    join(cwd, "sources", "probe", "main"),
+    join(cwd, "oms", "probe", "main"),
     "rev-parse",
     "--abbrev-ref",
     "--symbolic-full-name",
@@ -218,7 +218,7 @@ test("sync rejects a missing branch via preflight and leaves no debris", () => {
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
   assert.match(output, /branch "nonexistent" not found/);
-  assert.equal(existsSync(join(cwd, "sources", "probe")), false);
+  assert.equal(existsSync(join(cwd, "oms", "probe")), false);
 });
 
 test("worktree add creates a worktree for a non-default branch with slash", () => {
@@ -233,10 +233,10 @@ test("worktree add creates a worktree for a non-default branch with slash", () =
 
   const add = run(["worktree", "add", "api", "feature/foo"], { cwd });
   assert.equal(add.status, 0, add.stdout + add.stderr);
-  assert.ok(existsSync(join(cwd, "sources", "api", "feature", "foo")));
+  assert.ok(existsSync(join(cwd, "oms", "api", "feature", "foo")));
 
   const branch = gitOut(
-    join(cwd, "sources", "api", "feature", "foo"),
+    join(cwd, "oms", "api", "feature", "foo"),
     "branch",
     "--show-current",
   );
@@ -268,16 +268,16 @@ test("worktree remove refuses to discard uncommitted changes", () => {
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
   assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
 
-  writeFileSync(join(cwd, "sources", "api", "dev", "dirty.txt"), "x");
+  writeFileSync(join(cwd, "oms", "api", "dev", "dirty.txt"), "x");
   const blocked = run(["worktree", "remove", "api", "dev"], { cwd });
   const output = blocked.stdout + blocked.stderr;
   assert.equal(blocked.status, 2, output);
   assert.match(output, /uncommitted changes/);
-  assert.ok(existsSync(join(cwd, "sources", "api", "dev")));
+  assert.ok(existsSync(join(cwd, "oms", "api", "dev")));
 
   const forced = run(["worktree", "remove", "api", "dev", "--force"], { cwd });
   assert.equal(forced.status, 0, forced.stdout + forced.stderr);
-  assert.equal(existsSync(join(cwd, "sources", "api", "dev")), false);
+  assert.equal(existsSync(join(cwd, "oms", "api", "dev")), false);
 });
 
 test("worktree remove cleans up empty parent directories for slash branches", () => {
@@ -288,9 +288,9 @@ test("worktree remove cleans up empty parent directories for slash branches", ()
   assert.equal(run(["worktree", "add", "api", "feature/foo"], { cwd }).status, 0);
 
   assert.equal(run(["worktree", "remove", "api", "feature/foo"], { cwd }).status, 0);
-  assert.equal(existsSync(join(cwd, "sources", "api", "feature", "foo")), false);
-  assert.equal(existsSync(join(cwd, "sources", "api", "feature")), false);
-  assert.ok(existsSync(join(cwd, "sources", "api", "main")));
+  assert.equal(existsSync(join(cwd, "oms", "api", "feature", "foo")), false);
+  assert.equal(existsSync(join(cwd, "oms", "api", "feature")), false);
+  assert.ok(existsSync(join(cwd, "oms", "api", "main")));
 });
 
 test("fetch updates origin refs in the bare clone", () => {
@@ -318,7 +318,7 @@ test("push delivers new worktree commits to the bare upstream", () => {
   writeSources(cwd, `repos:\n  - alias: api\n    url: file://${bare}\n    branch: main\n`);
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
 
-  const wt = join(cwd, "sources", "api", "main");
+  const wt = join(cwd, "oms", "api", "main");
   configIdentity(wt);
   writeFileSync(join(wt, "new-file.txt"), "hello");
   git(wt, "add", "new-file.txt");
@@ -349,7 +349,7 @@ test("push fails clearly when the baseline worktree has no upstream", () => {
     "git",
     [
       "-C",
-      join(cwd, "sources", "api", "main"),
+      join(cwd, "oms", "api", "main"),
       "branch",
       "--unset-upstream",
       "main",
@@ -375,7 +375,7 @@ test("pull --ff-only succeeds on the baseline worktree", () => {
   assert.match(output, /pulled/);
 });
 
-test("sync + worktree round-trip preserves sources.yaml and allows re-sync", () => {
+test("sync + worktree round-trip preserves oms.yaml and allows re-sync", () => {
   const bare = initBareUpstream({ branches: ["main", "dev"] });
   const cwd = initGitWorkspace();
   writeSources(cwd, `repos:\n  - alias: api\n    url: file://${bare}\n    branch: main\n`);
@@ -385,14 +385,14 @@ test("sync + worktree round-trip preserves sources.yaml and allows re-sync", () 
 
   const unsynced = run(["unsync", "api"], { cwd });
   assert.equal(unsynced.status, 0, unsynced.stdout + unsynced.stderr);
-  assert.equal(existsSync(join(cwd, "sources", "api")), false);
-  const yaml = readFileSync(join(cwd, "sources.yaml"), "utf8");
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+  const yaml = readFileSync(join(cwd, "oms.yaml"), "utf8");
   assert.match(yaml, /alias: api/);
 
   const resynced = run(["sync", "api"], { cwd });
   assert.equal(resynced.status, 0, resynced.stdout + resynced.stderr);
-  assert.ok(existsSync(join(cwd, "sources", "api", ".bare")));
-  assert.ok(existsSync(join(cwd, "sources", "api", "main")));
+  assert.ok(existsSync(join(cwd, "oms", "api", ".bare")));
+  assert.ok(existsSync(join(cwd, "oms", "api", "main")));
 });
 
 test("legacy .gitmodules with registered sources/<alias> blocks sync with migration hint", () => {
@@ -408,7 +408,46 @@ test("legacy .gitmodules with registered sources/<alias> blocks sync with migrat
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
   assert.match(output, /legacy submodule layout/);
-  assert.match(output, /Migrating from 0\.2\.x/);
+  assert.match(output, /docs\/migrations\/0\.2\.x-to-0\.3\.0\.md/);
+});
+
+test("legacy sources.yaml without oms.yaml is blocked with migration hint", () => {
+  const cwd = initGitWorkspace();
+  writeFileSync(
+    join(cwd, "sources.yaml"),
+    "repos:\n  - alias: sample\n    url: git@example.com:org/repo.git\n    branch: main\n",
+  );
+
+  const result = run(["sync", "sample"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /detected legacy 'sources\.yaml'/);
+  assert.match(output, /docs\/migrations\/0\.3\.x-to-0\.4\.0\.md/);
+});
+
+test("legacy sources/ directory inside an oms.yaml workspace is blocked", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  mkdirSync(join(cwd, "sources"));
+
+  const result = run(["sync", "--list"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /detected legacy 'sources\/'/);
+  assert.match(output, /docs\/migrations\/0\.3\.x-to-0\.4\.0\.md/);
+});
+
+test("unrelated sources/ directory above the workspace does not block oms", () => {
+  const parent = tempWorkspace();
+  mkdirSync(join(parent, "sources"));
+  const child = join(parent, "child");
+  mkdirSync(child);
+  execFileSync("git", ["init", "-b", "main", child], { stdio: "ignore" });
+  writeSources(child);
+
+  const result = run(["sync", "--list"], { cwd: child });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /sample/);
 });
 
 test("doctor reports remote.origin.fetch present after sync and no warnings", () => {
@@ -456,7 +495,7 @@ test("doctor warns when remote.origin.fetch is missing and suggests a fix", () =
     "git",
     [
       "-C",
-      join(cwd, "sources", "api", ".bare"),
+      join(cwd, "oms", "api", ".bare"),
       "-c",
       "safe.bareRepository=all",
       "config",
