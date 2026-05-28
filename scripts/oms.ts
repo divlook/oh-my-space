@@ -1,9 +1,11 @@
-#!/usr/bin/env bun
-import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { cancel, isCancel, log, multiselect } from "@clack/prompts";
-import sourcesData from "../sources.yaml";
+import { parse as parseYaml } from "yaml";
 
 type Repo = {
   alias: string;
@@ -16,7 +18,24 @@ type SourcesOptions = {
   list?: boolean;
 };
 
-type OperationResult = "added" | "updated" | "fetched" | "pulled" | "pushed" | "failed";
+type UnsyncOptions = SourcesOptions & {
+  force?: boolean;
+};
+
+type WorkspaceOptions = {
+  cwd?: string;
+};
+
+type OperationResult =
+  | "added"
+  | "updated"
+  | "fetched"
+  | "pulled"
+  | "pushed"
+  | "unsynced"
+  | "failed";
+
+type RemoveOutcome = "removed" | "nothing-to-remove" | "failed";
 
 type GitResult = {
   exitCode: number | null;
@@ -40,6 +59,7 @@ const RESULT_BY_COMMAND: Record<ManageCommand, OperationResult> = {
   push: "pushed",
 };
 
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const useColor = process.stdout.isTTY;
 const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[0m` : s);
 
@@ -136,17 +156,27 @@ async function selectInteractive(repos: Repo[], actionLabel: string): Promise<Re
 }
 
 function runGit(cwd: string, args: string[], inheritOutput = false): GitResult {
-  const result = Bun.spawnSync(["git", ...args], {
+  const result = spawnSync("git", args, {
     cwd,
-    stdout: inheritOutput ? "inherit" : "pipe",
-    stderr: inheritOutput ? "inherit" : "pipe",
+    encoding: "utf8",
+    stdio: inheritOutput ? "inherit" : ["ignore", "pipe", "pipe"],
   });
 
   return {
-    exitCode: result.exitCode,
-    success: result.success,
-    stdout: inheritOutput ? "" : new TextDecoder().decode(result.stdout),
+    exitCode: result.status,
+    success: result.status === 0,
+    stdout: inheritOutput ? "" : (result.stdout ?? ""),
   };
+}
+
+function findWorkspaceRoot(options: WorkspaceOptions = {}): string | null {
+  let current = resolve(options.cwd ?? process.cwd());
+  while (true) {
+    if (existsSync(join(current, "sources.yaml"))) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
 }
 
 function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
@@ -174,6 +204,80 @@ function isCheckedOutGitRepo(repoRoot: string, sourcePath: string): boolean {
   return result.success && result.stdout.trim() === "true";
 }
 
+function removeSubmoduleArtifacts(
+  repo: Repo,
+  repoRoot: string,
+  options: { force?: boolean } = {},
+): RemoveOutcome {
+  const sourcePath = `sources/${repo.alias}`;
+  const dest = join(repoRoot, sourcePath);
+  const modulesDir = join(repoRoot, ".git", "modules", repo.alias);
+  const registered = isRegisteredSubmodule(repoRoot, sourcePath);
+  const worktreeExists = existsSync(dest);
+  const worktreeIsGitRepo = worktreeExists && isCheckedOutGitRepo(repoRoot, sourcePath);
+  const moduleDirExists = existsSync(modulesDir);
+
+  if (!registered && !worktreeExists && !moduleDirExists) {
+    return "nothing-to-remove";
+  }
+
+  if (worktreeExists && !registered && !moduleDirExists && !worktreeIsGitRepo) {
+    log.error(
+      `${repo.alias}: ${sourcePath} exists but is not a git submodule. Remove it manually if intended.`,
+    );
+    return "failed";
+  }
+
+  if (!options.force && worktreeIsGitRepo) {
+    const status = runGit(dest, ["status", "--porcelain"]);
+    if (status.success && status.stdout.trim().length > 0) {
+      log.error(
+        `${repo.alias}: ${sourcePath} has uncommitted changes. Commit or stash them, or pass --force to discard.`,
+      );
+      return "failed";
+    }
+  }
+
+  let didSomething = false;
+
+  if (registered) {
+    const deinit = runGit(repoRoot, ["submodule", "deinit", "-f", sourcePath]);
+    if (!deinit.success) {
+      log.error(
+        `${repo.alias}: git submodule deinit failed (exit ${deinit.exitCode}) for ${sourcePath}`,
+      );
+      return "failed";
+    }
+    didSomething = true;
+  }
+
+  if (registered || worktreeIsGitRepo) {
+    const rm = runGit(repoRoot, ["rm", "-f", sourcePath]);
+    if (!rm.success) {
+      log.error(
+        `${repo.alias}: git rm failed (exit ${rm.exitCode}) for ${sourcePath}`,
+      );
+      return "failed";
+    }
+    didSomething = true;
+  }
+
+  runGit(repoRoot, [
+    "config",
+    "--file",
+    ".gitmodules",
+    "--remove-section",
+    `submodule.${repo.alias}`,
+  ]);
+
+  if (moduleDirExists) {
+    rmSync(modulesDir, { recursive: true, force: true });
+    didSomething = true;
+  }
+
+  return didSomething ? "removed" : "nothing-to-remove";
+}
+
 function syncSubmodule(repo: Repo, repoRoot: string): OperationResult {
   const sourcePath = `sources/${repo.alias}`;
   const dest = join(repoRoot, sourcePath);
@@ -184,6 +288,27 @@ function syncSubmodule(repo: Repo, repoRoot: string): OperationResult {
       `${repo.alias}: ${sourcePath} already exists but is not registered as a git submodule. Move or remove it manually, then retry.`,
     );
     return "failed";
+  }
+
+  if (!registered && repo.branch) {
+    const lsRemote = runGit(repoRoot, [
+      "ls-remote",
+      "--exit-code",
+      "--heads",
+      repo.url,
+      repo.branch,
+    ]);
+    if (lsRemote.exitCode === 2) {
+      log.error(
+        `${repo.alias}: branch "${repo.branch}" not found on ${repo.url}. Push the branch upstream or fix the alias, then retry.`,
+      );
+      return "failed";
+    }
+    if (!lsRemote.success && lsRemote.exitCode !== 2) {
+      log.warn(
+        `${repo.alias}: branch existence check failed (exit ${lsRemote.exitCode}); proceeding with submodule add.`,
+      );
+    }
   }
 
   const args = registered
@@ -208,6 +333,16 @@ function syncSubmodule(repo: Repo, repoRoot: string): OperationResult {
   log.error(
     `${repo.alias}: submodule ${registered ? "update" : "add"} failed (exit ${result.exitCode})`,
   );
+
+  if (!registered) {
+    const cleanup = removeSubmoduleArtifacts(repo, repoRoot, { force: true });
+    if (cleanup === "removed") {
+      log.info(
+        `${repo.alias}: cleaned up partial submodule state. Retry once the upstream issue is resolved.`,
+      );
+    }
+  }
+
   return "failed";
 }
 
@@ -215,7 +350,7 @@ function manageSubmodule(repo: Repo, repoRoot: string, command: ManageCommand): 
   const sourcePath = `sources/${repo.alias}`;
   if (!isRegisteredSubmodule(repoRoot, sourcePath) || !isCheckedOutGitRepo(repoRoot, sourcePath)) {
     log.error(
-      `${repo.alias}: ${sourcePath} is not a checked-out source submodule. Run "bun run oms sync ${repo.alias}" first.`,
+      `${repo.alias}: ${sourcePath} is not a checked-out source submodule. Run "oms sync ${repo.alias}" first.`,
     );
     return "failed";
   }
@@ -256,6 +391,7 @@ function printSummary(results: OperationResult[]): void {
     fetched: 0,
     pulled: 0,
     pushed: 0,
+    unsynced: 0,
     failed: 0,
   };
   for (const r of results) counts[r]++;
@@ -270,9 +406,18 @@ function exitFromResults(results: OperationResult[]): number {
   return results.includes("failed") ? 2 : 0;
 }
 
-function loadRepos(): Repo[] | null {
+function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repoRoot: string } | null {
+  const repoRoot = findWorkspaceRoot(options);
+  if (!repoRoot) {
+    log.error(
+      "Could not find sources.yaml in the current directory or its parents. Create a sources.yaml in this project, then retry.",
+    );
+    return null;
+  }
+
   try {
-    return validateSources(sourcesData);
+    const sourcesPath = join(repoRoot, "sources.yaml");
+    return { repos: validateSources(parseYaml(readFileSync(sourcesPath, "utf8"))), repoRoot };
   } catch (e) {
     log.error(e instanceof Error ? e.message : String(e));
     return null;
@@ -302,9 +447,7 @@ async function selectRepos(
 
   const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
   if (unknown.length > 0) {
-    log.error(
-      `Unknown alias(es): ${unknown.join(", ")}. Use "bun run oms sync --list" to see available aliases.`,
-    );
+    log.error(`Unknown alias(es): ${unknown.join(", ")}. Use "oms sync --list" to see available aliases.`);
     return null;
   }
 
@@ -313,8 +456,9 @@ async function selectRepos(
 }
 
 async function runSync(aliases: string[], options: SourcesOptions): Promise<number> {
-  const repos = loadRepos();
-  if (!repos) return 1;
+  const loaded = loadRepos();
+  if (!loaded) return 1;
+  const { repos, repoRoot } = loaded;
 
   if (options.list) {
     printList(repos);
@@ -324,7 +468,6 @@ async function runSync(aliases: string[], options: SourcesOptions): Promise<numb
   const picked = await selectRepos(repos, aliases, options, "sync");
   if (!picked || picked.length === 0) return 1;
 
-  const repoRoot = resolve(import.meta.dir, "..");
   const results = picked.map((repo) => syncSubmodule(repo, repoRoot));
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results);
@@ -335,16 +478,71 @@ async function runManage(
   aliases: string[],
   options: SourcesOptions,
 ): Promise<number> {
-  const repos = loadRepos();
-  if (!repos) return 1;
+  const loaded = loadRepos();
+  if (!loaded) return 1;
+  const { repos, repoRoot } = loaded;
 
   const picked = await selectRepos(repos, aliases, options, command);
   if (!picked || picked.length === 0) return 1;
 
-  const repoRoot = resolve(import.meta.dir, "..");
   const results = picked.map((repo) => manageSubmodule(repo, repoRoot, command));
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results);
+}
+
+async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<number> {
+  const loaded = loadRepos();
+  if (!loaded) return 1;
+  const { repos, repoRoot } = loaded;
+
+  const picked = await selectRepos(repos, aliases, options, "unsync");
+  if (!picked || picked.length === 0) return 1;
+
+  const results: OperationResult[] = picked.map((repo) => {
+    log.step(`${repo.alias}: unsync`);
+    const outcome = removeSubmoduleArtifacts(repo, repoRoot, { force: options.force });
+    if (outcome === "removed") {
+      log.success(
+        `${repo.alias}: unsynced (commit staged changes in .gitmodules and sources/${repo.alias} to finalize)`,
+      );
+      return "unsynced";
+    }
+    if (outcome === "nothing-to-remove") {
+      log.info(`${repo.alias}: nothing to remove`);
+      return "unsynced";
+    }
+    return "failed";
+  });
+
+  if (results.length > 1 || options.all) printSummary(results);
+  return exitFromResults(results);
+}
+
+async function runDoctor(): Promise<number> {
+  const loaded = loadRepos();
+  if (!loaded) return 1;
+
+  log.success(`Workspace root: ${loaded.repoRoot}`);
+  log.success(`sources.yaml: ${loaded.repos.length} repo(s) configured`);
+
+  const git = spawnSync("git", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  if (git.status === 0) {
+    log.success(`git: ${git.stdout.trim()}`);
+    return 0;
+  }
+
+  log.error("git: not found");
+  return 1;
+}
+
+function readJson<T>(path: string): T | null {
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+
+function readPackageVersion(): string {
+  const pkg = readJson<{ version?: string }>(join(packageRoot, "package.json"));
+  return pkg?.version ?? "0.0.0";
 }
 
 async function exitWith(action: Promise<number>): Promise<void> {
@@ -357,13 +555,22 @@ async function exitWith(action: Promise<number>): Promise<void> {
 }
 
 const exitHelp = "\nExit codes: 0 ok | 1 usage/config error | 2 one or more git operations failed.";
-const commandNames = new Set(["sync", "fetch", "pull", "push", "help"]);
+const commandNames = new Set(["doctor", "sync", "fetch", "pull", "push", "unsync", "help"]);
 const program = new Command();
 
 program
-  .name("bun run oms")
+  .name("oms")
   .description("Manage source repositories listed in sources.yaml under sources/<alias>/.")
+  .version(readPackageVersion())
   .addHelpText("after", exitHelp);
+
+program
+  .command("doctor")
+  .description("Check sources.yaml configuration and git availability.")
+  .addHelpText("after", exitHelp)
+  .action(async () => {
+    await exitWith(runDoctor());
+  });
 
 program
   .command("sync")
@@ -405,12 +612,21 @@ program
     await exitWith(runManage("push", aliases, {}));
   });
 
+program
+  .command("unsync")
+  .description(
+    "Remove submodule registration and worktree (keeps sources.yaml entry). Leaves staged changes in .gitmodules and the submodule path to commit.",
+  )
+  .argument("[aliases...]", "repo aliases to unsync (omit for interactive multi-select)")
+  .option("--all", "unsync every registered source repo")
+  .option("--force", "discard uncommitted changes in the source worktree")
+  .addHelpText("after", exitHelp)
+  .action(async (aliases: string[], options: UnsyncOptions) => {
+    await exitWith(runUnsync(aliases, options));
+  });
+
 const requestedCommand = process.argv[2];
-if (
-  requestedCommand &&
-  !requestedCommand.startsWith("-") &&
-  !commandNames.has(requestedCommand)
-) {
+if (requestedCommand && !requestedCommand.startsWith("-") && !commandNames.has(requestedCommand)) {
   console.error(`error: unknown command '${requestedCommand}'`);
   process.exit(1);
 }
