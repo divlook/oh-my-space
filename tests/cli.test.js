@@ -98,10 +98,12 @@ test("invalid sources.yaml fails before git operations", () => {
   const cwd = tempWorkspace();
   writeSources(cwd, "repos:\n  - alias: Invalid_Alias\n    url: git@example.com:org/repo.git\n");
 
-  const result = run(["sync", "--list"], { cwd });
+  const result = run(["sync", "sample"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1);
   assert.match(output, /must match/);
+  assert.equal(existsSync(join(cwd, "sources", "sample")), false);
+  assert.equal(existsSync(join(cwd, ".git", "modules", "sample")), false);
 });
 
 test("doctor checks sources.yaml and git without OpenSpec", () => {

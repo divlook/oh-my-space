@@ -241,12 +241,24 @@ function removeSubmoduleArtifacts(
   let didSomething = false;
 
   if (registered) {
-    runGit(repoRoot, ["submodule", "deinit", "-f", sourcePath]);
+    const deinit = runGit(repoRoot, ["submodule", "deinit", "-f", sourcePath]);
+    if (!deinit.success) {
+      log.error(
+        `${repo.alias}: git submodule deinit failed (exit ${deinit.exitCode}) for ${sourcePath}`,
+      );
+      return "failed";
+    }
     didSomething = true;
   }
 
   if (registered || worktreeIsGitRepo) {
-    runGit(repoRoot, ["rm", "-f", sourcePath]);
+    const rm = runGit(repoRoot, ["rm", "-f", sourcePath]);
+    if (!rm.success) {
+      log.error(
+        `${repo.alias}: git rm failed (exit ${rm.exitCode}) for ${sourcePath}`,
+      );
+      return "failed";
+    }
     didSomething = true;
   }
 
