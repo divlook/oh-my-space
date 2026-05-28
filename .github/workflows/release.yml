@@ -23,7 +23,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20.19.0'
+          node-version-file: .nvmrc
           registry-url: https://registry.npmjs.org
           cache: npm
       - name: Install dependencies
@@ -32,20 +32,6 @@ jobs:
         run: npm test
       - name: Pack dry run
         run: npm pack --dry-run
-      - name: Inspect OIDC claims for npm (debug, minimal)
-        run: |
-          TOKEN=$(curl -sLS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" \
-            | jq -r .value)
-          echo "::add-mask::$TOKEN"
-          node -e '
-            const p = JSON.parse(Buffer.from(process.argv[1].split(".")[1], "base64url").toString());
-            const keep = ["iss", "aud", "repository", "repository_owner", "job_workflow_ref", "workflow_ref", "ref", "environment"];
-            const out = {};
-            for (const k of keep) if (k in p) out[k] = p[k];
-            console.log(JSON.stringify(out, null, 2));
-          ' "$TOKEN"
       - name: Create release PR or publish
         uses: changesets/action@v1
         with:
