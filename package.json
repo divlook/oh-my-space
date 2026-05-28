@@ -40,7 +40,7 @@
     "prepack": "npm test",
     "changeset": "changeset",
     "version": "changeset version",
-    "release": "npm test && npm publish --provenance --access public"
+    "release": "changeset publish"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",
