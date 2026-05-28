@@ -312,6 +312,57 @@ test("fetch updates origin refs in the bare clone", () => {
   assert.match(output, /fetched/);
 });
 
+test("push delivers new worktree commits to the bare upstream", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, `repos:\n  - alias: api\n    url: file://${bare}\n    branch: main\n`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const wt = join(cwd, "sources", "api", "main");
+  configIdentity(wt);
+  writeFileSync(join(wt, "new-file.txt"), "hello");
+  git(wt, "add", "new-file.txt");
+  git(wt, "commit", "-m", "add new-file");
+  const localSha = gitOut(wt, "rev-parse", "HEAD");
+
+  const result = run(["push", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /pushed/);
+
+  const upstreamSha = execFileSync(
+    "git",
+    ["-c", "safe.bareRepository=all", "-C", bare, "rev-parse", "refs/heads/main"],
+    { encoding: "utf8" },
+  ).trim();
+  assert.equal(upstreamSha, localSha);
+});
+
+test("push fails clearly when the baseline worktree has no upstream", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, `repos:\n  - alias: api\n    url: file://${bare}\n    branch: main\n`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  // Strip the upstream that oms sync set up.
+  execFileSync(
+    "git",
+    [
+      "-C",
+      join(cwd, "sources", "api", "main"),
+      "branch",
+      "--unset-upstream",
+      "main",
+    ],
+    { stdio: "ignore" },
+  );
+
+  const result = run(["push", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /requires an upstream/);
+});
+
 test("pull --ff-only succeeds on the baseline worktree", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
