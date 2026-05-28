@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Setup minimum supported Node.js
         if: ${{ matrix.kind == 'version' }}
         uses: actions/setup-node@v6

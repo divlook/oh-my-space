@@ -43,14 +43,17 @@ repos:
     url: git@github.com:example/web.git
 ```
 
-List and sync registered source repositories:
+List, sync, and unsync registered source repositories:
 
 ```bash
-oms doctor           # check sources.yaml and git availability
-oms sync --list      # list registered source repos
-oms sync <alias>...  # add/init/update submodules by alias
-oms sync --all       # add/init/update every registered source repo
-oms sync             # interactive multi-select
+oms doctor              # check sources.yaml and git availability
+oms sync --list         # list registered source repos
+oms sync <alias>...     # add/init/update submodules by alias
+oms sync --all          # add/init/update every registered source repo
+oms sync                # interactive multi-select
+oms unsync <alias>...   # remove submodule + worktree (sources.yaml entry kept)
+oms unsync --all        # unsync every registered source repo
+oms unsync --force ...  # discard uncommitted changes in the source worktree
 ```
 
 ## Managing source repositories
@@ -61,6 +64,7 @@ oms sync             # interactive multi-select
 | --- | --- | --- | --- |
 | `oms doctor` | project root or child path | Validates `sources.yaml` and checks `git --version`. | Fails when `sources.yaml` is missing or invalid. |
 | `oms sync <alias>` / `--all` | workspace root | Adds missing submodules and initializes/updates registered ones. | Syncs `sources.yaml` to `sources/<alias>/`. |
+| `oms unsync <alias>` / `--all` | workspace root | Deinits the submodule and removes `sources/<alias>/` (leaves the staged change to commit). | Keeps the entry in `sources.yaml`; pass `--force` to discard uncommitted changes in the worktree. |
 | `oms fetch ...` | selected checked-out submodule worktree | `git fetch --all --prune` | Does not change the superproject gitlink. |
 | `oms pull ...` | selected checked-out submodule worktree | `git pull --ff-only` | Requires a branch with upstream; detached HEAD/no-upstream states fail. |
 | `oms push <alias>...` | explicitly selected checked-out submodule worktree | `git push` | No `--all`, force push, or automatic upstream setup. |
