@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/divlook/oh-my-space/main/sources.schema.json",
-  "title": "oh-my-space sources.yaml",
-  "description": "Declarative list of external source repositories for the oms CLI. Each entry becomes a bare clone + worktree under sources/<alias>/.",
+  "$id": "https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json",
+  "title": "oh-my-space oms.yaml",
+  "description": "Declarative list of external source repositories for the oms CLI. Each entry becomes a bare clone + worktree under oms/<alias>/.",
   "type": "object",
   "additionalProperties": false,
   "required": ["repos"],
@@ -18,7 +18,7 @@
           "alias": {
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9-]*$",
-            "description": "Unique identifier; becomes the directory name under sources/."
+            "description": "Unique identifier; becomes the directory name under oms/."
           },
           "url": {
             "type": "string",
