@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.3.1
+
+### Patch Changes
+
+- [#9](https://github.com/divlook/oh-my-space/pull/9) [`ca314be`](https://github.com/divlook/oh-my-space/commit/ca314beb8c0df0c04800573fc55a87e141f59803) Thanks [@divlook](https://github.com/divlook)! - `oms doctor` now warns when the installed git is older than 2.40. The new model uses `git worktree add --track -B <branch> <branch> origin/<branch>` and older git versions can produce cryptic failures from `oms sync`/`worktree add` instead of a clear diagnostic. Detection is best-effort: if `git --version` output can't be parsed, doctor warns and continues.
+
 ## 0.3.0
 
 ### Minor Changes
