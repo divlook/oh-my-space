@@ -1,57 +1,107 @@
-# oh-my-specs
+# oh-my-space
 
-An [OpenSpec](https://github.com/Fission-AI/OpenSpec) working space template for writing spec docs against external repositories.
-Source repos are registered as Git submodules under `sources/<alias>/` and referenced read-only from specs.
+`oh-my-space` provides the `oms` CLI for managing external source repositories declared in `sources.yaml`. It syncs those entries into Git submodules under `sources/<alias>/` and runs safe fetch/pull/push operations inside selected source worktrees.
+
+Package name: `oh-my-space`
+
+Command name: `oms`
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) 20.19.0+ (required by OpenSpec)
-- [Bun](https://bun.sh) 1.2+ (uses native YAML import for the source submodule CLI)
+- [Node.js](https://nodejs.org) `>=20.19.0` for running `oms`; development uses the version in `.nvmrc` (`24`)
 - git
 
-## Setup
-
-Install OpenSpec globally and project dependencies:
+For local development:
 
 ```bash
-bun install -g @fission-ai/openspec@latest   # one-time, OpenSpec CLI (or: npm install -g @fission-ai/openspec@latest)
-bun install                                  # project deps for the sources CLI
+nvm use
+npm ci
+npm test
 ```
 
-OpenSpec is already initialized in this template (`openspec/` directory). For a fresh project, see the [OpenSpec quick start](https://github.com/Fission-AI/OpenSpec#quick-start) (`openspec init`).
+## Install
+
+Install globally with your package manager of choice:
+
+```bash
+npm install -g oh-my-space
+pnpm add -g oh-my-space
+yarn global add oh-my-space
+bun install -g oh-my-space
+```
 
 ## Quick start
 
-```bash
-bun run oms sync --list       # list registered source repos
-bun run oms sync <alias>...   # add/init/update submodules by alias (space-separated)
-bun run oms sync --all        # add/init/update every registered source repo
-bun run oms sync              # interactive multi-select
-bun run oms fetch <alias>...  # run git fetch --all --prune inside checked-out submodules
-bun run oms pull --all        # run git pull --ff-only inside checked-out submodules
-bun run oms push <alias>...   # run git push inside explicitly selected submodules
+Create a `sources.yaml` in your project root:
+
+```yaml
+repos:
+  - alias: api
+    url: git@github.com:example/api.git
+    branch: main
+  - alias: web
+    url: git@github.com:example/web.git
 ```
 
-After `chmod +x scripts/oms.ts` you can also invoke it directly: `./scripts/oms.ts ...`.
+List and sync registered source repositories:
+
+```bash
+oms doctor           # check sources.yaml and git availability
+oms sync --list      # list registered source repos
+oms sync <alias>...  # add/init/update submodules by alias
+oms sync --all       # add/init/update every registered source repo
+oms sync             # interactive multi-select
+```
 
 ## Managing source repositories
 
-`sources.yaml` declares each source repo (`alias`, `url`, optional `branch`); checkouts live as Git submodules under `sources/<alias>/`.
+`sources.yaml` declares each source repo with `alias`, `url`, and optional `branch`. Checkouts live as Git submodules under `sources/<alias>/`.
 
 | Command | Runs in | Does | Notes |
 | --- | --- | --- | --- |
-| `bun run oms sync <alias>` / `--all` | repo root | Adds missing submodules and initializes/updates registered ones. | Syncs `sources.yaml` to `sources/<alias>/`. |
-| `bun run oms fetch ...` | selected checked-out submodule worktree | `git fetch --all --prune` | Does not change the superproject gitlink. |
-| `bun run oms pull ...` | selected checked-out submodule worktree | `git pull --ff-only` | Requires a branch with upstream; detached HEAD/no-upstream states fail. |
-| `bun run oms push <alias>...` | explicitly selected checked-out submodule worktree | `git push` | No `--all`, force push, or automatic upstream setup. |
+| `oms doctor` | project root or child path | Validates `sources.yaml` and checks `git --version`. | Fails when `sources.yaml` is missing or invalid. |
+| `oms sync <alias>` / `--all` | workspace root | Adds missing submodules and initializes/updates registered ones. | Syncs `sources.yaml` to `sources/<alias>/`. |
+| `oms fetch ...` | selected checked-out submodule worktree | `git fetch --all --prune` | Does not change the superproject gitlink. |
+| `oms pull ...` | selected checked-out submodule worktree | `git pull --ff-only` | Requires a branch with upstream; detached HEAD/no-upstream states fail. |
+| `oms push <alias>...` | explicitly selected checked-out submodule worktree | `git push` | No `--all`, force push, or automatic upstream setup. |
 
-To add a repo, add it under `repos:` in `sources.yaml`, run `bun run oms sync <alias>`, then commit `sources.yaml`, `.gitmodules`, and the gitlink change.
+To add a repo, add it under `repos:` in `sources.yaml`, run `oms sync <alias>`, then commit `sources.yaml`, `.gitmodules`, and the gitlink change.
 
-Standard Git submodule commands still work, e.g. `git submodule update --init --recursive`. VS Code + Red Hat YAML uses `sources.schema.json` for autocomplete/validation.
+Standard Git submodule commands still work, for example:
 
-## Use as a template
+```bash
+git submodule update --init --recursive
+```
 
-Click **Use this template → Create a new repository** on GitHub to scaffold your own OpenSpec workspace. Then edit `sources.yaml` to point at the repos you want to analyze.
+## `sources.yaml` format
+
+```yaml
+repos:
+  - alias: service-a
+    url: git@github.com:example/service-a.git
+    branch: main
+  - alias: docs
+    url: https://github.com/example/docs.git
+```
+
+Rules:
+
+- `repos` must be a non-empty array.
+- `alias` must be unique and match `/^[a-z0-9][a-z0-9-]*$/`.
+- `url` is required.
+- `branch` is optional and is passed to `git submodule add --branch` only when adding a new submodule.
+
+## Release and versioning
+
+`oh-my-space` uses SemVer:
+
+- Patch: bug fixes and documentation changes.
+- Minor: new commands/options or backward-compatible behavior additions.
+- Major: removed/renamed CLI behavior, incompatible `sources.yaml` semantics, or a higher required runtime.
+
+GitHub Releases are the user-facing release notes. This repository intentionally does not maintain a separate `CHANGELOG.md`.
+
+Publishing is automated from `main` through Changesets. Feature branches and pull requests run tests on Node.js `20.19.0` and the `.nvmrc` development line (`24`), plus `npm pack --dry-run`; publish only happens through the release workflow after the release PR is merged. The release job builds and publishes on Node.js `20.19.0` so the package is verified against the minimum supported runtime.
 
 ## License
 

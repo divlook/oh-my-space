@@ -1,21 +1,21 @@
 {
-  "name": "oh-my-specs",
+  "name": "oh-my-space",
   "version": "0.1.0",
-  "description": "OpenSpec working space template for analyzing external repos via source aliases.",
+  "description": "CLI for managing external source repositories declared in sources.yaml.",
   "license": "MIT",
-  "homepage": "https://github.com/divlook/oh-my-specs",
+  "homepage": "https://github.com/divlook/oh-my-space",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/divlook/oh-my-specs.git"
+    "url": "git+https://github.com/divlook/oh-my-space.git"
   },
   "bugs": {
-    "url": "https://github.com/divlook/oh-my-specs/issues"
+    "url": "https://github.com/divlook/oh-my-space/issues"
   },
   "keywords": [
-    "openspec",
-    "template",
-    "spec-driven",
-    "bun"
+    "sources",
+    "submodule",
+    "git",
+    "cli"
   ],
   "author": {
     "name": "divlook",
@@ -23,15 +23,33 @@
     "url": "https://github.com/divlook"
   },
   "type": "module",
+  "bin": {
+    "oms": "./dist/oms.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
-    "oms": "bun scripts/oms.ts"
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/oms.js', 0o755)\"",
+    "test": "npm run build && node --test tests/*.test.js",
+    "prepack": "npm test",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "npm test && npm publish --provenance --access public"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14",
-    "@types/node": "^25.9.1"
+    "@changesets/cli": "^2.29.7",
+    "@types/node": "^25.9.1",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@clack/prompts": "^1.4.0",
-    "commander": "^14.0.3"
+    "commander": "^14.0.3",
+    "yaml": "^2.8.1"
   }
 }

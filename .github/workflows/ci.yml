@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minimum-supported
+            kind: version
+            node-version: '20.19.0'
+          - name: development
+            kind: nvmrc
+            node-version-file: .nvmrc
+    name: test (${{ matrix.name }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup minimum supported Node.js
+        if: ${{ matrix.kind == 'version' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Setup development Node.js
+        if: ${{ matrix.kind == 'nvmrc' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: ${{ matrix.node-version-file }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test
+        run: npm test
+      - name: Pack dry run
+        run: npm pack --dry-run
