@@ -71,6 +71,8 @@ const ALLOWED_TOP_KEYS = new Set(["repos"]);
 const ALLOWED_ITEM_KEYS = new Set(["alias", "url", "branch"]);
 const FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const GITIGNORE_ENTRY = "sources/";
+const MIN_GIT_MAJOR = 2;
+const MIN_GIT_MINOR = 40;
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const useColor = process.stdout.isTTY;
@@ -194,6 +196,18 @@ function runBareGit(
     ["-c", "safe.bareRepository=all", ...args],
     inheritOutput,
   );
+}
+
+function parseGitVersion(s: string): { major: number; minor: number } | null {
+  const m = s.match(/git version (\d+)\.(\d+)/);
+  if (!m) return null;
+  return { major: Number.parseInt(m[1], 10), minor: Number.parseInt(m[2], 10) };
+}
+
+function isGitVersionSupported(v: { major: number; minor: number }): boolean {
+  if (v.major > MIN_GIT_MAJOR) return true;
+  if (v.major < MIN_GIT_MAJOR) return false;
+  return v.minor >= MIN_GIT_MINOR;
 }
 
 function findWorkspaceRoot(options: WorkspaceOptions = {}): string | null {
@@ -886,14 +900,26 @@ async function runDoctor(): Promise<number> {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (git.status === 0) {
-    log.success(`git: ${git.stdout.trim()}`);
-  } else {
+  if (git.status !== 0) {
     log.error("git: not found");
     return 1;
   }
+  log.success(`git: ${git.stdout.trim()}`);
 
   let warnings = 0;
+
+  const parsed = parseGitVersion(git.stdout);
+  if (!parsed) {
+    log.warn(
+      `git: could not parse version from "${git.stdout.trim()}"; oms expects git >=${MIN_GIT_MAJOR}.${MIN_GIT_MINOR}.`,
+    );
+    warnings++;
+  } else if (!isGitVersionSupported(parsed)) {
+    log.warn(
+      `git ${parsed.major}.${parsed.minor} is older than the recommended ${MIN_GIT_MAJOR}.${MIN_GIT_MINOR}. oms uses "git worktree add --track -B" which may fail on older releases — upgrade git.`,
+    );
+    warnings++;
+  }
 
   if (hasLegacySubmoduleLayout(repoRoot, repos)) {
     log.warn(

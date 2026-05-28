@@ -373,6 +373,27 @@ test("doctor reports remote.origin.fetch present after sync and no warnings", ()
   assert.match(output, /refspec: \+refs\/heads\/\*:refs\/remotes\/origin\/\*/);
 });
 
+test("doctor warns when git is older than the recommended 2.40", () => {
+  const cwd = tempWorkspace();
+  writeSources(cwd);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "$1" = "--version" ]; then echo "git version 2.30.0"; exit 0; fi\nexec ${realGit} "$@"\n`,
+  );
+  execFileSync("chmod", ["+x", stubGit]);
+
+  const result = run(["doctor"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` },
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /git 2\.30 is older than the recommended 2\.40/);
+});
+
 test("doctor warns when remote.origin.fetch is missing and suggests a fix", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
