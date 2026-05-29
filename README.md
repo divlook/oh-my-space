@@ -32,9 +32,10 @@ bun install -g oh-my-space
 
 ## Quick start
 
-Create an `oms.yaml` in your project root:
+Run `oms init` to scaffold a starter `oms.yaml` (also adds `oms/` to `.gitignore`), or create one by hand in your project root:
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
 repos:
   - alias: api
     url: git@github.com:example/api.git
@@ -46,6 +47,7 @@ repos:
 Sync and explore:
 
 ```bash
+oms init                           # scaffold a starter oms.yaml
 oms doctor                         # validate oms.yaml + bare/worktree state
 oms sync --list                    # list registered source repos
 oms sync <alias>...                # bare-clone + create the baseline worktree
@@ -81,6 +83,7 @@ Slash-containing branch names are kept nested as directories.
 
 | Command | Runs in | Does | Notes |
 | --- | --- | --- | --- |
+| `oms init` | current directory | Writes a starter `oms.yaml` and adds `oms/` to `.gitignore`. | Refuses if `oms.yaml` exists; use `--force` to overwrite. |
 | `oms doctor` | project root or child path | Checks `oms.yaml`, git availability, `.gitignore`, and each alias's bare clone + `remote.origin.fetch`. | Returns exit 2 if any warning is raised. |
 | `oms sync <alias>` / `--all` | workspace root | Bare-clones missing repos, fetches origin, creates the baseline worktree. | Adds `oms/` to `.gitignore` if absent. |
 | `oms unsync <alias>` / `--all` | workspace root | Removes every worktree, the bare clone, and the `.git` placeholder for the alias. | Keeps the `oms.yaml` entry. Use `--force` to discard uncommitted changes. |
@@ -94,6 +97,7 @@ Slash-containing branch names are kept nested as directories.
 ## `oms.yaml` format
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
 repos:
   - alias: service-a
     url: git@github.com:example/service-a.git

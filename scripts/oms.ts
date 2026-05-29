@@ -73,6 +73,7 @@ const FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const MANIFEST_FILENAME = "oms.yaml";
 const DATA_DIRNAME = "oms";
 const GITIGNORE_ENTRY = `${DATA_DIRNAME}/`;
+const GITIGNORE_COMMENT = "# managed by oms";
 const LEGACY_MANIFEST = "sources.yaml";
 const LEGACY_DATA_DIRNAME = "sources";
 const LEGACY_MIGRATION_DOC = "docs/migrations/0.3.x-to-0.4.0.md";
@@ -340,7 +341,8 @@ function ensureGitignore(repoRoot: string): void {
     if (present) return;
   }
   const needsNewline = content.length > 0 && !content.endsWith("\n");
-  writeFileSync(path, `${content}${needsNewline ? "\n" : ""}${GITIGNORE_ENTRY}\n`);
+  const block = `${GITIGNORE_COMMENT}\n${GITIGNORE_ENTRY}\n`;
+  writeFileSync(path, `${content}${needsNewline ? "\n" : ""}${block}`);
   log.info(`added ${GITIGNORE_ENTRY} to .gitignore`);
 }
 
@@ -973,6 +975,27 @@ async function runWorktreeRemove(
   return 0;
 }
 
+const INIT_TEMPLATE = `# yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
+repos:
+  - alias: example
+    url: git@github.com:example/repo.git
+    branch: main
+`;
+
+/** 현재 디렉터리에 기본 oms.yaml 템플릿을 생성합니다. */
+async function runInit(options: { force?: boolean }): Promise<number> {
+  const target = join(process.cwd(), MANIFEST_FILENAME);
+  if (existsSync(target) && !options.force) {
+    log.error(`${MANIFEST_FILENAME} already exists at ${target}. Use --force to overwrite.`);
+    return 1;
+  }
+  writeFileSync(target, INIT_TEMPLATE);
+  log.success(`created ${MANIFEST_FILENAME} at ${target}`);
+  ensureGitignore(process.cwd());
+  log.info(`edit alias/url/branch, then run "oms sync".`);
+  return 0;
+}
+
 async function runDoctor(): Promise<number> {
   const loaded = loadRepos();
   if (!loaded) {
@@ -1074,6 +1097,7 @@ async function exitWith(action: Promise<number>): Promise<void> {
 
 const exitHelp = "\nExit codes: 0 ok | 1 usage/config error | 2 one or more git operations failed.";
 const commandNames = new Set([
+  "init",
   "doctor",
   "sync",
   "fetch",
@@ -1092,6 +1116,15 @@ program
   )
   .version(readPackageVersion())
   .addHelpText("after", exitHelp);
+
+program
+  .command("init")
+  .description(`Create a starter ${MANIFEST_FILENAME} in the current directory.`)
+  .option("--force", `overwrite an existing ${MANIFEST_FILENAME}`)
+  .addHelpText("after", exitHelp)
+  .action(async (options: { force?: boolean }) => {
+    await exitWith(runInit(options));
+  });
 
 program
   .command("doctor")
