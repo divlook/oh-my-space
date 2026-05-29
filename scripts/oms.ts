@@ -12,12 +12,13 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
-import { cancel, isCancel, log, multiselect } from "@clack/prompts";
+import { cancel, isCancel, log, multiselect, select } from "@clack/prompts";
 import { parse as parseYaml } from "yaml";
 
 type Repo = {
   alias: string;
-  url: string;
+  /** Named git remotes; must include "origin". Maps remote name to its clonable URL. */
+  remotes: Record<string, string>;
   branch?: string;
 };
 
@@ -32,6 +33,11 @@ type UnsyncOptions = SourcesOptions & {
 
 type PushOptions = {
   commit?: boolean;
+};
+
+type RemoteOptions = {
+  /** Remote name(s) requested via repeatable --remote; empty/undefined means "resolve interactively or default to origin". */
+  remote?: string[];
 };
 
 type CheckoutOptions = {
@@ -62,8 +68,9 @@ type GitResult = {
 type ManageCommand = "fetch" | "pull" | "push";
 
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+const REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const ALLOWED_TOP_KEYS = new Set(["repos"]);
-const ALLOWED_ITEM_KEYS = new Set(["alias", "url", "branch"]);
+const ALLOWED_ITEM_KEYS = new Set(["alias", "remotes", "branch"]);
 const MANIFEST_FILENAME = "oms.yaml";
 const DATA_DIRNAME = "oms";
 const GITIGNORE_ENTRY = `${DATA_DIRNAME}/`;
@@ -72,6 +79,7 @@ const LEGACY_MANIFEST = "sources.yaml";
 const LEGACY_DATA_DIRNAME = "sources";
 const RENAME_MIGRATION_DOC = "docs/migrations/0.3.x-to-0.4.0.md";
 const WORKTREE_MIGRATION_DOC = "docs/migrations/0.5.x-to-0.6.0.md";
+const REMOTES_MIGRATION_DOC = "docs/migrations/0.6.x-to-0.7.0.md";
 /** GitHub blob base for the clickable doc permalinks shown in CLI messages. */
 const DOCS_REPO_BLOB_BASE = "https://github.com/divlook/oh-my-space/blob";
 const MIN_GIT_MAJOR = 2;
@@ -108,6 +116,12 @@ function validateSources(data: unknown): Repo[] {
       throw new Error(`${MANIFEST_FILENAME}: ${where} must be a mapping`);
     }
     const r = item as Record<string, unknown>;
+    // Friendlier than "unknown key url": the 0.7.0 manifest replaced url with a remotes mapping.
+    if ("url" in r && !("remotes" in r)) {
+      throw new Error(
+        `${MANIFEST_FILENAME}: ${where}.url is no longer supported; use a "remotes" mapping with an "origin" entry. See ${docUrl(REMOTES_MIGRATION_DOC)}`,
+      );
+    }
     for (const key of Object.keys(r)) {
       if (!ALLOWED_ITEM_KEYS.has(key)) {
         throw new Error(`${MANIFEST_FILENAME}: ${where} has unknown key "${key}"`);
@@ -125,8 +139,29 @@ function validateSources(data: unknown): Repo[] {
       throw new Error(`${MANIFEST_FILENAME}: duplicate alias "${r.alias}"`);
     }
     seen.add(r.alias);
-    if (typeof r.url !== "string" || r.url.length === 0) {
-      throw new Error(`${MANIFEST_FILENAME}: ${where} missing required "url"`);
+    if (!r.remotes || typeof r.remotes !== "object" || Array.isArray(r.remotes)) {
+      throw new Error(`${MANIFEST_FILENAME}: ${where} missing required "remotes" mapping`);
+    }
+    const remoteEntries = Object.entries(r.remotes as Record<string, unknown>);
+    if (remoteEntries.length === 0) {
+      throw new Error(`${MANIFEST_FILENAME}: ${where}.remotes must have at least one remote`);
+    }
+    const remotes: Record<string, string> = {};
+    for (const [name, url] of remoteEntries) {
+      if (!REMOTE_NAME_PATTERN.test(name)) {
+        throw new Error(
+          `${MANIFEST_FILENAME}: ${where}.remotes name "${name}" must match ${REMOTE_NAME_PATTERN}`,
+        );
+      }
+      if (typeof url !== "string" || url.length === 0) {
+        throw new Error(
+          `${MANIFEST_FILENAME}: ${where}.remotes.${name} must be a non-empty string URL`,
+        );
+      }
+      remotes[name] = url;
+    }
+    if (!remotes.origin) {
+      throw new Error(`${MANIFEST_FILENAME}: ${where}.remotes must include an "origin" entry`);
     }
     let branch: string | undefined;
     if (r.branch !== undefined) {
@@ -135,7 +170,7 @@ function validateSources(data: unknown): Repo[] {
       }
       branch = r.branch;
     }
-    validated.push({ alias: r.alias, url: r.url, branch });
+    validated.push({ alias: r.alias, remotes, branch });
   });
 
   return validated;
@@ -145,12 +180,24 @@ function pad(s: string, width: number): string {
   return s + " ".repeat(Math.max(0, width - s.length));
 }
 
+/** Names of a repo's non-origin remotes, in declared order (origin is shown via its URL column). */
+function extraRemoteNames(repo: Repo): string[] {
+  return Object.keys(repo.remotes).filter((name) => name !== "origin");
+}
+
 function printList(repos: Repo[]): void {
+  const extras = (r: Repo) => {
+    const names = extraRemoteNames(r);
+    return names.length > 0 ? ` (+${names.join(",")})` : "";
+  };
   const aliasW = Math.max("ALIAS".length, ...repos.map((r) => r.alias.length));
-  const urlW = Math.max("URL".length, ...repos.map((r) => r.url.length));
-  console.log(dim(`${pad("ALIAS", aliasW)}  ${pad("URL", urlW)}  BRANCH`));
+  const urlW = Math.max(
+    "ORIGIN".length,
+    ...repos.map((r) => (r.remotes.origin + extras(r)).length),
+  );
+  console.log(dim(`${pad("ALIAS", aliasW)}  ${pad("ORIGIN", urlW)}  BRANCH`));
   for (const r of repos) {
-    console.log(`${pad(r.alias, aliasW)}  ${pad(r.url, urlW)}  ${r.branch ?? ""}`);
+    console.log(`${pad(r.alias, aliasW)}  ${pad(r.remotes.origin + extras(r), urlW)}  ${r.branch ?? ""}`);
   }
 }
 
@@ -171,6 +218,65 @@ async function selectInteractive(repos: Repo[], actionLabel: string): Promise<Re
   return choice
     .map((alias) => repos.find((r) => r.alias === alias))
     .filter((r): r is Repo => r !== undefined);
+}
+
+/**
+ * Decide which remote(s) a fetch/pull/push targets for one repo. Honors an explicit --remote list,
+ * otherwise prompts interactively on a TTY (origin preselected) and falls back to origin off-TTY.
+ * pull is restricted to a single remote since --ff-only can advance to at most one. Returns the
+ * resolved remote names, or null when the request is invalid or the prompt was cancelled.
+ */
+async function resolveRemotes(
+  repo: Repo,
+  requested: string[] | undefined,
+  command: ManageCommand,
+): Promise<string[] | null> {
+  const declared = Object.keys(repo.remotes);
+
+  if (requested && requested.length > 0) {
+    const unique = uniqueAliases(requested);
+    const unknown = unique.filter((name) => !declared.includes(name));
+    if (unknown.length > 0) {
+      log.error(
+        `${repo.alias}: unknown remote(s): ${unknown.join(", ")}. Declared: ${declared.join(", ")}.`,
+      );
+      return null;
+    }
+    if (command === "pull" && unique.length > 1) {
+      log.error(`${repo.alias}: pull targets a single remote (git pull --ff-only can advance only one).`);
+      return null;
+    }
+    return unique;
+  }
+
+  // No explicit remote: a lone origin needs no prompt, and a non-interactive shell defaults to origin.
+  if (declared.length === 1) return declared;
+  if (!process.stdin.isTTY) return ["origin"];
+
+  if (command === "pull") {
+    const choice = await select({
+      message: `${repo.alias}: select a remote to ${command}`,
+      options: declared.map((name) => ({ value: name, label: name, hint: repo.remotes[name] })),
+      initialValue: "origin",
+    });
+    if (isCancel(choice)) {
+      cancel("Cancelled.");
+      return null;
+    }
+    return [choice as string];
+  }
+
+  const choice = await multiselect({
+    message: `${repo.alias}: select remote(s) to ${command} (space to toggle, enter to confirm)`,
+    options: declared.map((name) => ({ value: name, label: name, hint: repo.remotes[name] })),
+    initialValues: ["origin"],
+    required: true,
+  });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return null;
+  }
+  return choice as string[];
 }
 
 function runGit(cwd: string, args: string[], inheritOutput = false): GitResult {
@@ -310,6 +416,21 @@ function attachBranch(repoRoot: string, alias: string, branch: string): void {
   }
 }
 
+/**
+ * Reconcile the submodule's git remotes with the declared `remotes` map: add missing remotes and
+ * update URLs that drifted. Non-destructive — remotes no longer in oms.yaml are left untouched.
+ */
+function ensureRemotes(repoRoot: string, alias: string, remotes: Record<string, string>): void {
+  for (const [name, url] of Object.entries(remotes)) {
+    const existing = runSub(repoRoot, alias, ["remote", "get-url", name]);
+    if (!existing.success) {
+      runSub(repoRoot, alias, ["remote", "add", name, url]);
+    } else if (existing.stdout.trim() !== url) {
+      runSub(repoRoot, alias, ["remote", "set-url", name, url]);
+    }
+  }
+}
+
 /** Stage the submodule gitlink in the parent so a moved pointer shows up and is ready to commit. */
 function stagePointer(repoRoot: string, alias: string): void {
   runGit(repoRoot, ["add", "--", submodulePath(alias)]);
@@ -434,12 +555,12 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
         "ls-remote",
         "--exit-code",
         "--heads",
-        repo.url,
+        repo.remotes.origin,
         repo.branch,
       ]);
       if (lsRemote.exitCode === 2) {
         log.error(
-          `${alias}: branch "${repo.branch}" not found on ${repo.url}. Push the branch upstream or fix the alias, then retry.`,
+          `${alias}: branch "${repo.branch}" not found on ${repo.remotes.origin}. Push the branch upstream or fix the alias, then retry.`,
         );
         return "failed";
       }
@@ -455,14 +576,15 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
       writeFileSync(gitmodules, "");
     }
 
-    log.step(`${alias}: git submodule add${repo.branch ? ` -b ${repo.branch}` : ""} ${repo.url} ${path}`);
-    const args = ["submodule", "add", ...(repo.branch ? ["-b", repo.branch] : []), "--", repo.url, path];
+    log.step(`${alias}: git submodule add${repo.branch ? ` -b ${repo.branch}` : ""} ${repo.remotes.origin} ${path}`);
+    const args = ["submodule", "add", ...(repo.branch ? ["-b", repo.branch] : []), "--", repo.remotes.origin, path];
     const add = runGit(repoRoot, args, true);
     if (!add.success) {
       log.error(`${alias}: git submodule add failed (exit ${add.exitCode})`);
       cleanupFailedAdd(repoRoot, alias);
       return "failed";
     }
+    ensureRemotes(repoRoot, alias, repo.remotes);
     const branch = repo.branch ?? currentBranch(aliasDir(repoRoot, alias));
     if (branch) attachBranch(repoRoot, alias, branch);
     log.success(`${alias}: added${branch ? ` (branch=${branch})` : ""}`);
@@ -476,12 +598,14 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
       log.error(`${alias}: git submodule update --init failed (exit ${upd.exitCode})`);
       return "failed";
     }
+    ensureRemotes(repoRoot, alias, repo.remotes);
     const branch = gitmodulesBranch(repoRoot, alias) ?? repo.branch;
     if (branch) attachBranch(repoRoot, alias, branch);
     log.success(`${alias}: initialized${branch ? ` (branch=${branch})` : ""}`);
     return "added";
   }
 
+  ensureRemotes(repoRoot, alias, repo.remotes);
   log.step(`${alias}: git fetch origin --prune`);
   const fetch = runSub(repoRoot, alias, ["fetch", "origin", "--prune"], true);
   if (!fetch.success) {
@@ -540,22 +664,24 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
   return "removed";
 }
 
-function fetchRepo(repo: Repo, repoRoot: string): OperationResult {
+function fetchRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
   if (!submoduleInitialized(repoRoot, repo.alias)) {
     log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
     return "failed";
   }
-  log.step(`${repo.alias}: git fetch origin --prune`);
-  const r = runSub(repoRoot, repo.alias, ["fetch", "origin", "--prune"], true);
-  if (r.success) {
-    log.success(`${repo.alias}: fetched`);
-    return "fetched";
+  for (const remote of remotes) {
+    log.step(`${repo.alias}: git fetch ${remote} --prune`);
+    const r = runSub(repoRoot, repo.alias, ["fetch", remote, "--prune"], true);
+    if (!r.success) {
+      log.error(`${repo.alias}: fetch ${remote} failed (exit ${r.exitCode})`);
+      return "failed";
+    }
   }
-  log.error(`${repo.alias}: fetch failed (exit ${r.exitCode})`);
-  return "failed";
+  log.success(`${repo.alias}: fetched (${remotes.join(", ")})`);
+  return "fetched";
 }
 
-function pullRepo(repo: Repo, repoRoot: string): OperationResult {
+function pullRepo(repo: Repo, repoRoot: string, remote: string): OperationResult {
   if (!submoduleInitialized(repoRoot, repo.alias)) {
     log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
     return "failed";
@@ -567,18 +693,18 @@ function pullRepo(repo: Repo, repoRoot: string): OperationResult {
     );
     return "failed";
   }
-  log.step(`${repo.alias}/${branch}: git pull --ff-only`);
-  const r = runSub(repoRoot, repo.alias, ["pull", "--ff-only"], true);
+  log.step(`${repo.alias}/${branch}: git pull --ff-only ${remote} ${branch}`);
+  const r = runSub(repoRoot, repo.alias, ["pull", "--ff-only", remote, branch], true);
   if (r.success) {
     stagePointer(repoRoot, repo.alias);
-    log.success(`${repo.alias}/${branch}: pulled`);
+    log.success(`${repo.alias}/${branch}: pulled from ${remote}`);
     return "pulled";
   }
-  log.error(`${repo.alias}/${branch}: pull failed (exit ${r.exitCode})`);
+  log.error(`${repo.alias}/${branch}: pull from ${remote} failed (exit ${r.exitCode})`);
   return "failed";
 }
 
-function pushRepo(repo: Repo, repoRoot: string, commit: boolean): OperationResult {
+function pushRepo(repo: Repo, repoRoot: string, remotes: string[], commit: boolean): OperationResult {
   if (!submoduleInitialized(repoRoot, repo.alias)) {
     log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
     return "failed";
@@ -590,18 +716,22 @@ function pushRepo(repo: Repo, repoRoot: string, commit: boolean): OperationResul
     );
     return "failed";
   }
-  log.step(`${repo.alias}/${branch}: git push -u origin ${branch}`);
-  const r = runSub(repoRoot, repo.alias, ["push", "-u", "origin", branch], true);
-  if (!r.success) {
-    log.error(`${repo.alias}/${branch}: push failed (exit ${r.exitCode})`);
-    return "failed";
+  for (const remote of remotes) {
+    // Only origin sets upstream — repointing @{u} to a fork would skew "oms status" ahead/behind.
+    const args = remote === "origin" ? ["push", "-u", "origin", branch] : ["push", remote, branch];
+    log.step(`${repo.alias}/${branch}: git ${args.join(" ")}`);
+    const r = runSub(repoRoot, repo.alias, args, true);
+    if (!r.success) {
+      log.error(`${repo.alias}/${branch}: push to ${remote} failed (exit ${r.exitCode})`);
+      return "failed";
+    }
   }
   stagePointer(repoRoot, repo.alias);
   if (commit) {
     const sha = shortSha(aliasDir(repoRoot, repo.alias));
     runGit(repoRoot, ["commit", "-m", `oms: bump ${repo.alias} to ${sha}`, "--", submodulePath(repo.alias)]);
   }
-  log.success(`${repo.alias}/${branch}: pushed${commit ? " and recorded pointer" : ""}`);
+  log.success(`${repo.alias}/${branch}: pushed to ${remotes.join(", ")}${commit ? " and recorded pointer" : ""}`);
   return "pushed";
 }
 
@@ -732,7 +862,7 @@ async function runSync(aliases: string[], options: SourcesOptions): Promise<numb
 async function runManage(
   command: ManageCommand,
   aliases: string[],
-  options: SourcesOptions & PushOptions,
+  options: SourcesOptions & PushOptions & RemoteOptions,
 ): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
@@ -741,11 +871,17 @@ async function runManage(
   const picked = await selectRepos(repos, aliases, options, command);
   if (!picked || picked.length === 0) return 1;
 
-  const results = picked.map((repo) => {
-    if (command === "fetch") return fetchRepo(repo, repoRoot);
-    if (command === "pull") return pullRepo(repo, repoRoot);
-    return pushRepo(repo, repoRoot, options.commit ?? false);
-  });
+  const results: OperationResult[] = [];
+  for (const repo of picked) {
+    const remotes = await resolveRemotes(repo, options.remote, command);
+    if (!remotes || remotes.length === 0) {
+      results.push("failed");
+      continue;
+    }
+    if (command === "fetch") results.push(fetchRepo(repo, repoRoot, remotes));
+    else if (command === "pull") results.push(pullRepo(repo, repoRoot, remotes[0]));
+    else results.push(pushRepo(repo, repoRoot, remotes, options.commit ?? false));
+  }
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results);
 }
@@ -902,7 +1038,9 @@ async function runStatus(aliases: string[], options: SourcesOptions): Promise<nu
 const INIT_TEMPLATE = `# yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
 repos:
   - alias: example
-    url: git@github.com:example/repo.git
+    remotes:
+      origin: git@github.com:example/repo.git
+      # upstream: git@github.com:upstream/repo.git
     branch: main
 `;
 
@@ -920,7 +1058,7 @@ async function runInit(options: { force?: boolean }): Promise<number> {
   if (!isGitRepo(process.cwd())) {
     log.info(`oms manages sources as git submodules; run "git init" here if this is not a git repo yet.`);
   }
-  log.info(`edit alias/url/branch, then run "oms sync".`);
+  log.info(`edit alias/remotes/branch, then run "oms sync".`);
   return 0;
 }
 
@@ -1112,37 +1250,42 @@ program
     await exitWith(runCheckout(alias, branch, options));
   });
 
+const collectRemote = (value: string, acc: string[]): string[] => [...acc, value];
+
 program
   .command("fetch")
-  .description("Run git fetch origin --prune in each submodule.")
+  .description("Run git fetch <remote> --prune in each submodule (defaults to origin).")
   .argument("[aliases...]", "repo aliases to fetch (omit for interactive multi-select)")
   .option("--all", "fetch every registered source repo")
+  .option("--remote <name>", "remote to fetch (repeatable; omit to choose interactively)", collectRemote, [])
   .addHelpText("after", exitHelp)
-  .action(async (aliases: string[], options: SourcesOptions) => {
+  .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
     await exitWith(runManage("fetch", aliases, options));
   });
 
 program
   .command("pull")
   .description(
-    "Run git pull --ff-only on each submodule's current branch and stage the moved pointer.",
+    "Run git pull --ff-only <remote> on each submodule's current branch and stage the moved pointer (defaults to origin).",
   )
   .argument("[aliases...]", "repo aliases to pull (omit for interactive multi-select)")
   .option("--all", "pull every registered source repo")
+  .option("--remote <name>", "remote to pull from (single; omit to choose interactively)", collectRemote, [])
   .addHelpText("after", exitHelp)
-  .action(async (aliases: string[], options: SourcesOptions) => {
+  .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
     await exitWith(runManage("pull", aliases, options));
   });
 
 program
   .command("push")
   .description(
-    "Run git push -u origin <branch> on each listed submodule (creating the remote branch on first push) and stage the moved pointer.",
+    "Run git push <remote> <branch> on each listed submodule (creating the remote branch on first push) and stage the moved pointer (defaults to origin).",
   )
   .argument("<aliases...>", "repo aliases to push")
   .option("--commit", "also commit the pointer update in the parent repo")
+  .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRemote, [])
   .addHelpText("after", exitHelp)
-  .action(async (aliases: string[], options: PushOptions) => {
+  .action(async (aliases: string[], options: PushOptions & RemoteOptions) => {
     await exitWith(runManage("push", aliases, options));
   });
 

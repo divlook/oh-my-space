@@ -13,17 +13,25 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["alias", "url"],
+        "required": ["alias", "remotes"],
         "properties": {
           "alias": {
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9-]*$",
             "description": "Unique identifier; becomes the directory name under oms/."
           },
-          "url": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Clonable git URL (ssh, https, or file://)."
+          "remotes": {
+            "type": "object",
+            "minProperties": 1,
+            "required": ["origin"],
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "propertyNames": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+            },
+            "description": "Named git remotes; must include \"origin\". Each value is a clonable git URL (ssh, https, or file://). origin becomes the submodule's primary remote; others are added on sync."
           },
           "branch": {
             "type": "string",
