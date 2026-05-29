@@ -1,6 +1,6 @@
 {
   "name": "oh-my-space",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "CLI for managing external source repositories declared in oms.yaml.",
   "license": "MIT",
   "homepage": "https://github.com/divlook/oh-my-space",
