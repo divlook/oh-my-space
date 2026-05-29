@@ -12,7 +12,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
-import { cancel, isCancel, log, multiselect, select } from "@clack/prompts";
+import { cancel, isCancel, log, multiselect, select, text } from "@clack/prompts";
 import { parse as parseYaml } from "yaml";
 
 type Repo = {
@@ -221,6 +221,101 @@ async function selectInteractive(repos: Repo[], actionLabel: string): Promise<Re
 }
 
 /**
+ * Resolve a single alias for a per-repo branch command (switch/checkout). An explicit alias is
+ * validated and must be a synced submodule; when omitted, the user picks one interactively from the
+ * synced submodules. Returns null (with a clear message) on an unknown/unsynced alias, an empty set,
+ * a non-interactive shell, or cancellation.
+ */
+async function resolveInitializedAlias(
+  repos: Repo[],
+  repoRoot: string,
+  alias: string | undefined,
+  actionLabel: string,
+): Promise<Repo | null> {
+  if (alias) {
+    const repo = repos.find((r) => r.alias === alias);
+    if (!repo) {
+      log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
+      return null;
+    }
+    if (!submoduleInitialized(repoRoot, alias)) {
+      log.error(`${alias}: not synced. Run "oms sync ${alias}" first.`);
+      return null;
+    }
+    return repo;
+  }
+
+  const initialized = repos.filter((r) => submoduleInitialized(repoRoot, r.alias));
+  if (initialized.length === 0) {
+    log.error(`No synced submodules to ${actionLabel}. Run "oms sync" first.`);
+    return null;
+  }
+  if (!process.stdin.isTTY) {
+    log.error(`No alias given and stdin is not a TTY. Pass an alias: "oms ${actionLabel} <alias>".`);
+    return null;
+  }
+  const choice = await select({
+    message: `Select a source repo to ${actionLabel}`,
+    options: initialized.map((r) => ({
+      value: r.alias,
+      label: r.alias,
+      hint: r.branch ? `branch: ${r.branch}` : undefined,
+    })),
+  });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return null;
+  }
+  return initialized.find((r) => r.alias === (choice as string)) ?? null;
+}
+
+/** Sentinel chosen in pickBranch to create a new branch instead of selecting an existing one. */
+const CREATE_NEW_BRANCH = "\0create-new-branch";
+
+/**
+ * Prompt for a branch from the given list. When allowCreate is set, a "create new branch" option
+ * collects a name via a text prompt. Returns null (with a clear message) on a non-interactive shell,
+ * an empty list with no create option, an empty name, or cancellation.
+ */
+async function pickBranch(
+  branches: string[],
+  message: string,
+  allowCreate: boolean,
+): Promise<string | null> {
+  if (!process.stdin.isTTY) {
+    log.error(`No branch given and stdin is not a TTY. Pass a branch name explicitly.`);
+    return null;
+  }
+  if (branches.length === 0 && !allowCreate) {
+    log.error(`No branches available to select.`);
+    return null;
+  }
+  const options = [
+    ...(allowCreate ? [{ value: CREATE_NEW_BRANCH, label: "+ create new branch" }] : []),
+    ...branches.map((b) => ({ value: b, label: b })),
+  ];
+  const choice = await select({ message, options });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return null;
+  }
+  if (choice === CREATE_NEW_BRANCH) {
+    const name = await text({ message: "New branch name", placeholder: "feature/login" });
+    if (isCancel(name)) {
+      cancel("Cancelled.");
+      return null;
+    }
+    const trimmed = (name as string).trim();
+    if (!trimmed) {
+      log.error("Branch name is empty.");
+      return null;
+    }
+    return trimmed;
+  }
+  return choice as string;
+}
+
+/**
  * Decide which remote(s) a fetch/pull/push targets for one repo. Honors an explicit --remote list,
  * otherwise prompts interactively on a TTY (origin preselected) and falls back to origin off-TTY.
  * pull is restricted to a single remote since --ff-only can advance to at most one. Returns the
@@ -386,6 +481,25 @@ function localBranchExists(dir: string, branch: string): boolean {
 
 function remoteBranchExists(dir: string, branch: string): boolean {
   return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]).success;
+}
+
+/** Local branch short names (refs/heads), e.g. ["main", "dev"]. Empty on failure or none. */
+function listLocalBranches(dir: string): string[] {
+  const r = runGit(dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+  if (!r.success) return [];
+  return r.stdout.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/** Remote branch short names under origin, with the "origin/" prefix stripped and origin/HEAD excluded. */
+function listRemoteBranches(dir: string): string[] {
+  const r = runGit(dir, ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"]);
+  if (!r.success) return [];
+  return r.stdout
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && s !== "origin/HEAD")
+    .map((s) => (s.startsWith("origin/") ? s.slice("origin/".length) : s))
+    .filter((s) => s !== "HEAD");
 }
 
 function isDirty(dir: string): boolean {
@@ -710,7 +824,7 @@ function pullRepo(repo: Repo, repoRoot: string, remote: string): OperationResult
   const branch = currentBranch(aliasDir(repoRoot, repo.alias));
   if (!branch) {
     log.error(
-      `${repo.alias}: detached HEAD. Run "oms checkout ${repo.alias} <branch>" before pulling.`,
+      `${repo.alias}: detached HEAD. Run "oms switch ${repo.alias} <branch>" before pulling.`,
     );
     return "failed";
   }
@@ -733,7 +847,7 @@ function pushRepo(repo: Repo, repoRoot: string, remotes: string[], commit: boole
   const branch = currentBranch(aliasDir(repoRoot, repo.alias));
   if (!branch) {
     log.error(
-      `${repo.alias}: detached HEAD. Run "oms checkout ${repo.alias} <branch>" before pushing.`,
+      `${repo.alias}: detached HEAD. Run "oms switch ${repo.alias} <branch>" before pushing.`,
     );
     return "failed";
   }
@@ -940,47 +1054,92 @@ async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<num
   return exitFromResults(results);
 }
 
-async function runCheckout(alias: string, branch: string, options: CheckoutOptions): Promise<number> {
+/**
+ * LOCAL branch management: switch the submodule to an existing local branch or create a new one.
+ * No remote is consulted — creating a brand-new branch needs no remote precondition and sets no
+ * upstream (that is checkout's job). Omitting alias and/or branch prompts for them interactively.
+ */
+async function runSwitch(
+  alias: string | undefined,
+  branch: string | undefined,
+  options: CheckoutOptions,
+): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
 
-  const repo = repos.find((r) => r.alias === alias);
-  if (!repo) {
-    log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
-    return 1;
-  }
-  if (!submoduleInitialized(repoRoot, alias)) {
-    log.error(`${alias}: not synced. Run "oms sync ${alias}" first.`);
-    return 1;
+  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "switch");
+  if (!repo) return 1;
+  const dir = aliasDir(repoRoot, repo.alias);
+
+  let target = branch;
+  if (!target) {
+    const picked = await pickBranch(listLocalBranches(dir), `${repo.alias}: select a local branch`, true);
+    if (!picked) return 1;
+    target = picked;
   }
 
-  const dir = aliasDir(repoRoot, alias);
-  // Best-effort refresh so an existing remote branch is recognized; offline is fine.
-  runSub(repoRoot, alias, ["fetch", "origin", "--quiet"]);
-
-  if (localBranchExists(dir, branch)) {
-    log.step(`${alias}: git switch ${branch}`);
-    const r = runSub(repoRoot, alias, ["switch", branch], true);
+  if (localBranchExists(dir, target)) {
+    log.step(`${repo.alias}: git switch ${target}`);
+    const r = runSub(repoRoot, repo.alias, ["switch", target], true);
     if (!r.success) return 2;
-    log.success(`${alias}: on ${branch}`);
-    return 0;
-  }
-  if (remoteBranchExists(dir, branch)) {
-    log.step(`${alias}: git switch -c ${branch} origin/${branch}`);
-    const r = runSub(repoRoot, alias, ["switch", "-c", branch, `origin/${branch}`], true);
-    if (!r.success) return 2;
-    log.success(`${alias}: on ${branch} (tracking origin/${branch})`);
+    log.success(`${repo.alias}: on ${target}`);
     return 0;
   }
 
-  // Brand-new branch: created locally, no remote precondition. Push later with "oms push".
-  const args = ["switch", "-c", branch, ...(options.from ? [options.from] : [])];
-  log.step(`${alias}: git ${args.join(" ")}`);
-  const r = runSub(repoRoot, alias, args, true);
+  // Brand-new local branch: no remote precondition, no upstream tracking (use "oms checkout" for that).
+  const args = ["switch", "-c", target, ...(options.from ? [options.from] : [])];
+  log.step(`${repo.alias}: git ${args.join(" ")}`);
+  const r = runSub(repoRoot, repo.alias, args, true);
   if (!r.success) return 2;
-  log.success(`${alias}: created new local branch ${branch}. Push it with "oms push ${alias}".`);
+  log.success(`${repo.alias}: created new local branch ${target}. Push it with "oms push ${repo.alias}".`);
   return 0;
+}
+
+/**
+ * REMOTE branch exploration: fetch origin, then check out a remote branch as a local tracking
+ * branch (or switch to an existing local counterpart). Omitting alias and/or branch prompts for
+ * them interactively. Creating brand-new local branches is "oms switch"'s job.
+ */
+async function runCheckout(alias: string | undefined, branch: string | undefined): Promise<number> {
+  const loaded = loadForSubmodules();
+  if (!loaded) return 1;
+  const { repos, repoRoot } = loaded;
+
+  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "checkout");
+  if (!repo) return 1;
+  const dir = aliasDir(repoRoot, repo.alias);
+
+  log.step(`${repo.alias}: git fetch origin --prune`);
+  const fetch = runSub(repoRoot, repo.alias, ["fetch", "origin", "--prune"], true);
+  if (!fetch.success) return 2;
+
+  let target = branch;
+  if (!target) {
+    const picked = await pickBranch(listRemoteBranches(dir), `${repo.alias}: select a remote branch (origin/*)`, false);
+    if (!picked) return 1;
+    target = picked;
+  }
+
+  if (localBranchExists(dir, target)) {
+    log.step(`${repo.alias}: git switch ${target}`);
+    const r = runSub(repoRoot, repo.alias, ["switch", target], true);
+    if (!r.success) return 2;
+    log.success(`${repo.alias}: on ${target}`);
+    return 0;
+  }
+  if (remoteBranchExists(dir, target)) {
+    log.step(`${repo.alias}: git switch -c ${target} origin/${target}`);
+    const r = runSub(repoRoot, repo.alias, ["switch", "-c", target, `origin/${target}`], true);
+    if (!r.success) return 2;
+    log.success(`${repo.alias}: on ${target} (tracking origin/${target})`);
+    return 0;
+  }
+
+  log.error(
+    `${repo.alias}: "${target}" not found on origin. To create a new local branch, run "oms switch ${repo.alias} ${target}".`,
+  );
+  return 1;
 }
 
 type StatusRow = {
@@ -1154,7 +1313,7 @@ async function runDoctor(): Promise<number> {
     const dir = aliasDir(repoRoot, repo.alias);
     const branch = currentBranch(dir);
     if (!branch) {
-      log.warn(`${repo.alias}: detached HEAD. Run "oms checkout ${repo.alias} <branch>" to get on a branch.`);
+      log.warn(`${repo.alias}: detached HEAD. Run "oms switch ${repo.alias} <branch>" to get on a branch.`);
       warnings++;
     } else {
       log.success(`${repo.alias}: submodule OK (branch=${branch})`);
@@ -1206,6 +1365,7 @@ const commandNames = new Set([
   "doctor",
   "sync",
   "status",
+  "switch",
   "checkout",
   "fetch",
   "pull",
@@ -1266,16 +1426,28 @@ program
   });
 
 program
-  .command("checkout")
+  .command("switch")
   .description(
-    "Switch a submodule to <branch>, creating it locally if it does not exist yet (no remote required).",
+    "Switch a submodule to a LOCAL branch, creating it locally if it does not exist yet (no remote required).",
   )
-  .argument("<alias>", "registered source alias")
-  .argument("<branch>", "branch name (may include slashes)")
+  .argument("[alias]", "registered source alias (omit to pick interactively)")
+  .argument("[branch]", "local branch name (omit to pick from local branches or create one)")
   .option("--from <ref>", "start point for a new branch (default: current HEAD)")
   .addHelpText("after", exitHelp)
-  .action(async (alias: string, branch: string, options: CheckoutOptions) => {
-    await exitWith(runCheckout(alias, branch, options));
+  .action(async (alias: string | undefined, branch: string | undefined, options: CheckoutOptions) => {
+    await exitWith(runSwitch(alias, branch, options));
+  });
+
+program
+  .command("checkout")
+  .description(
+    "Fetch origin, then check out a REMOTE branch (origin/*) as a local tracking branch.",
+  )
+  .argument("[alias]", "registered source alias (omit to pick interactively)")
+  .argument("[branch]", "remote branch name (omit to pick from origin/* branches)")
+  .addHelpText("after", exitHelp)
+  .action(async (alias: string | undefined, branch: string | undefined) => {
+    await exitWith(runCheckout(alias, branch));
   });
 
 const collectRemote = (value: string, acc: string[]): string[] => [...acc, value];
