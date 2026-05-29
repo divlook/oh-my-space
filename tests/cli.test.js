@@ -87,10 +87,65 @@ test("help is exposed as oms with new commands", () => {
   const result = run(["--help"]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Usage: oms/);
+  assert.match(result.stdout, /\binit\b/);
   assert.match(result.stdout, /sync/);
   assert.match(result.stdout, /\bunsync\b/);
   assert.match(result.stdout, /\bworktree\b/);
   assert.doesNotMatch(result.stdout, /\bmigrate\b/);
+});
+
+test("init scaffolds oms.yaml with schema comment and updates gitignore", () => {
+  const cwd = tempWorkspace();
+  const result = run(["init"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+
+  const manifest = readFileSync(join(cwd, "oms.yaml"), "utf8");
+  assert.match(
+    manifest,
+    /# yaml-language-server: \$schema=https:\/\/raw\.githubusercontent\.com\/divlook\/oh-my-space\/main\/oms\.schema\.json/,
+  );
+  assert.match(manifest, /alias: example/);
+
+  const gi = readFileSync(join(cwd, ".gitignore"), "utf8");
+  assert.match(gi, /# managed by oms/);
+  assert.match(gi, /^oms\/$/m);
+});
+
+test("init refuses to overwrite an existing oms.yaml without --force", () => {
+  const cwd = tempWorkspace();
+  writeSources(cwd);
+  const result = run(["init"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /already exists/);
+  // original content is untouched
+  assert.match(readFileSync(join(cwd, "oms.yaml"), "utf8"), /alias: sample/);
+});
+
+test("init --force overwrites and does not duplicate the gitignore entry", () => {
+  const cwd = tempWorkspace();
+  writeSources(cwd);
+  writeFileSync(join(cwd, ".gitignore"), "# managed by oms\noms/\n");
+
+  const result = run(["init", "--force"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(readFileSync(join(cwd, "oms.yaml"), "utf8"), /alias: example/);
+
+  const gi = readFileSync(join(cwd, ".gitignore"), "utf8");
+  assert.equal(gi.match(/^oms\/$/gm)?.length, 1);
+});
+
+test("doctor accepts the init-generated oms.yaml", () => {
+  const cwd = tempWorkspace();
+  run(["init"], { cwd });
+  const result = run(["doctor"], { cwd });
+  const output = result.stdout + result.stderr;
+  // exit 0 or 2 (warnings) are both fine; the point is repos is non-empty so validation passes
+  assert.ok(result.status === 0 || result.status === 2, output);
+  assert.doesNotMatch(output, /must have at least one item/);
+  assert.match(output, /1 repo\(s\) configured/);
 });
 
 test("sync --list loads oms.yaml from a parent workspace", () => {
