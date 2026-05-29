@@ -1,5 +1,15 @@
 # oh-my-space
 
+## 0.7.0
+
+### Minor Changes
+
+- [#21](https://github.com/divlook/oh-my-space/pull/21) [`d609555`](https://github.com/divlook/oh-my-space/commit/d609555bc025e54e0301ac98bc1a7d8ae11970c3) Thanks [@divlook](https://github.com/divlook)! - Support multiple git remotes per source. The `oms.yaml` `url` field is replaced by a `remotes` mapping (which must include an `origin` entry), and `oms sync` configures every declared remote on the submodule. `fetch`, `pull`, and `push` accept a repeatable `--remote <name>` flag, and prompt to choose a remote interactively when one is not given (defaulting to `origin` on a non-interactive shell). `push` sets the upstream only for `origin` so `oms status` keeps measuring against it. This is a breaking manifest change; see docs/migrations/0.6.x-to-0.7.0.md.
+
+### Patch Changes
+
+- [#19](https://github.com/divlook/oh-my-space/pull/19) [`bd7330b`](https://github.com/divlook/oh-my-space/commit/bd7330b82a062c9f2e4ee55a4ae2475c94ab5844) Thanks [@divlook](https://github.com/divlook)! - Print migration-doc hints as clickable GitHub permalinks pinned to the build commit, instead of repo-relative paths, so they are clickable in the terminal and never break when files move on the default branch.
+
 ## 0.6.0
 
 ### Minor Changes
