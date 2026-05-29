@@ -449,6 +449,70 @@ test("unsync removes the submodule, keeps oms.yaml, and re-sync works", () => {
   assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "main");
 });
 
+/** A multi-repo oms.yaml mapping each alias to its own bare origin. */
+function sourcesFor(entries) {
+  const body = entries
+    .map(({ alias, bare }) => `  - alias: ${alias}\n    remotes:\n      origin: file://${bare}\n    branch: main`)
+    .join("\n");
+  return `repos:\n${body}\n`;
+}
+
+/** Count submodule.*.path entries remaining in .gitmodules (0 when the file is gone). */
+function gitmodulesSectionCount(cwd) {
+  const path = join(cwd, ".gitmodules");
+  if (!existsSync(path)) return 0;
+  const r = spawnSync("git", ["config", "--file", path, "--get-regexp", "^submodule\\..*\\.path$"], {
+    encoding: "utf8",
+    env: testEnv,
+  });
+  if (r.status !== 0) return 0;
+  return r.stdout.split("\n").filter((l) => l.trim().length > 0).length;
+}
+
+test("unsync of all aliases leaves no orphan .gitmodules section", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const c = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }, { alias: "docs", bare: c }]));
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  git(cwd, "add", "-A");
+  git(cwd, "commit", "-m", "add submodules");
+
+  const result = run(["unsync", "api", "web", "docs"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitmodulesSectionCount(cwd), 0, "no submodule section should remain");
+  assert.equal(existsSync(join(cwd, ".gitmodules")), false, ".gitmodules should be removed");
+  assert.equal(existsSync(join(cwd, ".git", "modules", "oms")), false, ".git/modules/oms should be gone");
+});
+
+test("a dirty submodule among several is surfaced and only it remains", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const c = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }, { alias: "docs", bare: c }]));
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  git(cwd, "add", "-A");
+  git(cwd, "commit", "-m", "add submodules");
+
+  // An untracked file (e.g. .DS_Store) makes web dirty, so it must be protected, not deleted.
+  writeFileSync(join(cwd, "oms", "web", ".DS_Store"), "x");
+
+  const result = run(["unsync", "api", "web", "docs"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  // The failed alias is named explicitly so it isn't lost among the successes.
+  assert.match(output, /Not unsynced:.*web/);
+  // web is preserved; api and docs are fully cleaned up.
+  assert.equal(existsSync(join(cwd, "oms", "web")), true);
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+  assert.equal(existsSync(join(cwd, "oms", "docs")), false);
+  assert.equal(gitmodulesSectionCount(cwd), 1, "only web's section should remain");
+  assert.match(readFileSync(join(cwd, ".gitmodules"), "utf8"), /oms\/web/);
+  assert.doesNotMatch(readFileSync(join(cwd, ".gitmodules"), "utf8"), /oms\/api|oms\/docs/);
+});
+
 test("a committed pointer reproduces on a fresh clone via sync", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();

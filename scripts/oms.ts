@@ -333,9 +333,9 @@ function isGitRepo(repoRoot: string): boolean {
   return runGit(repoRoot, ["rev-parse", "--is-inside-work-tree"]).stdout.trim() === "true";
 }
 
-/** True when .gitmodules registers a submodule at the given path (sources/<alias> or oms/<alias>). */
-function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
-  if (!existsSync(join(repoRoot, ".gitmodules"))) return false;
+/** Every submodule path registered in .gitmodules (empty when the file is absent or registers none). */
+function registeredSubmodulePaths(repoRoot: string): string[] {
+  if (!existsSync(join(repoRoot, ".gitmodules"))) return [];
 
   const result = runGit(repoRoot, [
     "config",
@@ -344,11 +344,22 @@ function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
     "--get-regexp",
     "^submodule\\..*\\.path$",
   ]);
-  if (!result.success) return false;
+  if (!result.success) return [];
 
   return result.stdout
     .split("\n")
-    .some((line) => line.trim().split(/\s+/)[1] === sourcePath);
+    .map((line) => line.trim().split(/\s+/)[1])
+    .filter((p): p is string => Boolean(p));
+}
+
+/** True when .gitmodules registers a submodule at the given path (sources/<alias> or oms/<alias>). */
+function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
+  return registeredSubmodulePaths(repoRoot).includes(sourcePath);
+}
+
+/** True when .gitmodules still registers at least one submodule. */
+function hasRegisteredSubmodules(repoRoot: string): boolean {
+  return registeredSubmodulePaths(repoRoot).length > 0;
 }
 
 /** A submodule is initialized when its working tree has a .git gitlink file/dir. */
@@ -628,7 +639,7 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
 
   if (!force && submoduleInitialized(repoRoot, alias) && isDirty(aliasDir(repoRoot, alias))) {
     log.error(
-      `${alias}: ${path} has uncommitted changes. Commit, stash, or pass --force.`,
+      `${alias}: ${path} has uncommitted or untracked changes. Commit, stash, remove them, or pass --force.`,
     );
     return "failed";
   }
@@ -636,13 +647,23 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
   runGit(repoRoot, ["submodule", "deinit", ...(force ? ["-f"] : []), "--", path]);
   const rm = runGit(repoRoot, ["rm", "-f", "--", path], true);
   if (!rm.success) {
-    // Fall back to manual unregistration (e.g. the submodule was never initialized).
+    // git rm couldn't stage the removal (e.g. the submodule was never initialized).
     runGit(repoRoot, ["rm", "-f", "--cached", "--", path]);
-    runGit(repoRoot, ["config", "--file", ".gitmodules", "--remove-section", `submodule.${path}`]);
-    if (existsSync(join(repoRoot, ".gitmodules"))) runGit(repoRoot, ["add", ".gitmodules"]);
   }
+  // Always strip the registration explicitly: git rm's implicit .gitmodules edit is unreliable
+  // across git versions/states, and when it silently no-ops the section is orphaned for good.
+  // A missing section just makes these exit non-zero — harmless, output stays captured.
+  runGit(repoRoot, ["config", "--file", ".gitmodules", "--remove-section", `submodule.${path}`]);
+  if (existsSync(join(repoRoot, ".gitmodules"))) runGit(repoRoot, ["add", ".gitmodules"]);
+  // Drop the matching .git/config section too, in case deinit was skipped or failed.
+  runGit(repoRoot, ["config", "--remove-section", `submodule.${path}`]);
   try {
     rmSync(join(repoRoot, ".git", "modules", DATA_DIRNAME, alias), { recursive: true, force: true });
+  } catch {}
+  // Drop the now-empty .git/modules/oms/ container so no stale gitdir scaffolding lingers.
+  try {
+    const modulesParent = join(repoRoot, ".git", "modules", DATA_DIRNAME);
+    if (existsSync(modulesParent) && readdirSync(modulesParent).length === 0) rmdirSync(modulesParent);
   } catch {}
   if (existsSync(aliasDir(repoRoot, alias))) {
     rmSync(aliasDir(repoRoot, alias), { recursive: true, force: true });
@@ -653,9 +674,9 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
     if (existsSync(parent) && readdirSync(parent).length === 0) rmdirSync(parent);
   } catch {}
 
-  // Drop a .gitmodules that no longer registers any submodule (git rm leaves it empty).
+  // Drop .gitmodules once it no longer registers any submodule (judged by content, not byte-emptiness).
   const gitmodules = join(repoRoot, ".gitmodules");
-  if (existsSync(gitmodules) && readFileSync(gitmodules, "utf8").trim().length === 0) {
+  if (existsSync(gitmodules) && !hasRegisteredSubmodules(repoRoot)) {
     if (!runGit(repoRoot, ["rm", "-f", "--", ".gitmodules"]).success) {
       rmSync(gitmodules, { force: true });
     }
@@ -909,6 +930,13 @@ async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<num
   });
 
   if (results.length > 1 || options.all) printSummary(results);
+  // Name the failed aliases so a buried failure among several isn't read as "all unsynced".
+  const failed = picked.filter((_, i) => results[i] === "failed").map((r) => r.alias);
+  if (failed.length > 0) {
+    log.error(
+      `Not unsynced: ${failed.join(", ")}. The submodule had uncommitted or untracked changes — commit/stash/remove them, or re-run with --force.`,
+    );
+  }
   return exitFromResults(results);
 }
 
