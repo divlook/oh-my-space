@@ -9,7 +9,7 @@ import {
   rmdirSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { cancel, isCancel, log, multiselect } from "@clack/prompts";
@@ -30,8 +30,12 @@ type UnsyncOptions = SourcesOptions & {
   force?: boolean;
 };
 
-type WorktreeRemoveOptions = {
-  force?: boolean;
+type PushOptions = {
+  commit?: boolean;
+};
+
+type CheckoutOptions = {
+  from?: string;
 };
 
 type WorkspaceOptions = {
@@ -57,27 +61,17 @@ type GitResult = {
 
 type ManageCommand = "fetch" | "pull" | "push";
 
-type WorktreeEntry = {
-  /** branch short name, or "(detached)" if no branch */
-  branch: string;
-  /** absolute path */
-  path: string;
-  /** path relative to oms/<alias>/ */
-  relativePath: string;
-};
-
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const ALLOWED_TOP_KEYS = new Set(["repos"]);
 const ALLOWED_ITEM_KEYS = new Set(["alias", "url", "branch"]);
-const FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const MANIFEST_FILENAME = "oms.yaml";
 const DATA_DIRNAME = "oms";
 const GITIGNORE_ENTRY = `${DATA_DIRNAME}/`;
 const GITIGNORE_COMMENT = "# managed by oms";
 const LEGACY_MANIFEST = "sources.yaml";
 const LEGACY_DATA_DIRNAME = "sources";
-const LEGACY_MIGRATION_DOC = "docs/migrations/0.3.x-to-0.4.0.md";
-const SUBMODULE_MIGRATION_DOC = "docs/migrations/0.2.x-to-0.3.0.md";
+const RENAME_MIGRATION_DOC = "docs/migrations/0.3.x-to-0.4.0.md";
+const WORKTREE_MIGRATION_DOC = "docs/migrations/0.5.x-to-0.6.0.md";
 const MIN_GIT_MAJOR = 2;
 const MIN_GIT_MINOR = 40;
 
@@ -191,18 +185,9 @@ function runGit(cwd: string, args: string[], inheritOutput = false): GitResult {
   };
 }
 
-/** Run git from oms/<alias>/ with safe.bareRepository=all, so the .git placeholder routes to .bare. */
-function runBareGit(
-  repoRoot: string,
-  alias: string,
-  args: string[],
-  inheritOutput = false,
-): GitResult {
-  return runGit(
-    aliasDir(repoRoot, alias),
-    ["-c", "safe.bareRepository=all", ...args],
-    inheritOutput,
-  );
+/** Run git inside the submodule working tree at oms/<alias>/. */
+function runSub(repoRoot: string, alias: string, args: string[], inheritOutput = false): GitResult {
+  return runGit(aliasDir(repoRoot, alias), args, inheritOutput);
 }
 
 function parseGitVersion(s: string): { major: number; minor: number } | null {
@@ -231,18 +216,16 @@ function aliasDir(repoRoot: string, alias: string): string {
   return join(repoRoot, DATA_DIRNAME, alias);
 }
 
-function bareDir(repoRoot: string, alias: string): string {
-  return join(aliasDir(repoRoot, alias), ".bare");
+/** Submodule name and path are identical under our convention: oms/<alias>. */
+function submodulePath(alias: string): string {
+  return `${DATA_DIRNAME}/${alias}`;
 }
 
-function gitPlaceholderPath(repoRoot: string, alias: string): string {
-  return join(aliasDir(repoRoot, alias), ".git");
+function isGitRepo(repoRoot: string): boolean {
+  return runGit(repoRoot, ["rev-parse", "--is-inside-work-tree"]).stdout.trim() === "true";
 }
 
-function worktreePath(repoRoot: string, alias: string, branch: string): string {
-  return join(aliasDir(repoRoot, alias), branch);
-}
-
+/** True when .gitmodules registers a submodule at the given path (sources/<alias> or oms/<alias>). */
 function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
   if (!existsSync(join(repoRoot, ".gitmodules"))) return false;
 
@@ -260,31 +243,74 @@ function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
     .some((line) => line.trim().split(/\s+/)[1] === sourcePath);
 }
 
-/** Returns true when .gitmodules registers any sources/<alias> or oms/<alias> entry for the loaded repos. */
-function hasLegacySubmoduleLayout(repoRoot: string, repos: Repo[]): boolean {
-  if (!existsSync(join(repoRoot, ".gitmodules"))) return false;
-  return repos.some(
-    (repo) =>
-      isRegisteredSubmodule(repoRoot, `${LEGACY_DATA_DIRNAME}/${repo.alias}`)
-      || isRegisteredSubmodule(repoRoot, `${DATA_DIRNAME}/${repo.alias}`),
-  );
+/** A submodule is initialized when its working tree has a .git gitlink file/dir. */
+function submoduleInitialized(repoRoot: string, alias: string): boolean {
+  return existsSync(join(aliasDir(repoRoot, alias), ".git"));
 }
 
-function abortOnLegacy(repoRoot: string, repos: Repo[]): boolean {
-  if (!hasLegacySubmoduleLayout(repoRoot, repos)) return false;
-  log.error(
-    'detected legacy submodule layout (.gitmodules registers an alias path). oh-my-space 0.3.0+ uses bare clone + worktrees.\n' +
-      `  See ${SUBMODULE_MIGRATION_DOC} for the manual steps. Aborting to avoid destructive change.`,
-  );
-  return true;
+/** Short branch name, or null when HEAD is detached. */
+function currentBranch(dir: string): string | null {
+  const r = runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (!r.success) return null;
+  const b = r.stdout.trim();
+  return b && b !== "HEAD" ? b : null;
 }
 
-/** Inspect a single directory for 0.3.x rename artifacts. */
-function detectLegacyRenameArtifactsAt(dir: string): { manifest: boolean; data: boolean } | null {
-  const manifest = existsSync(join(dir, LEGACY_MANIFEST));
-  const data = existsSync(join(dir, LEGACY_DATA_DIRNAME));
-  if (!manifest && !data) return null;
-  return { manifest, data };
+function shortSha(dir: string): string {
+  const r = runGit(dir, ["rev-parse", "--short", "HEAD"]);
+  return r.success ? r.stdout.trim() : "???????";
+}
+
+function localBranchExists(dir: string, branch: string): boolean {
+  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).success;
+}
+
+function remoteBranchExists(dir: string, branch: string): boolean {
+  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]).success;
+}
+
+function isDirty(dir: string): boolean {
+  const r = runGit(dir, ["status", "--porcelain"]);
+  return r.success && r.stdout.trim().length > 0;
+}
+
+/** The branch recorded in .gitmodules for the submodule, if any. */
+function gitmodulesBranch(repoRoot: string, alias: string): string | null {
+  const r = runGit(repoRoot, [
+    "config",
+    "--file",
+    ".gitmodules",
+    "--get",
+    `submodule.${submodulePath(alias)}.branch`,
+  ]);
+  if (!r.success) return null;
+  const b = r.stdout.trim();
+  return b.length > 0 ? b : null;
+}
+
+/**
+ * Keep the submodule on a branch instead of a detached HEAD. Only acts when HEAD is detached,
+ * so a branch the user is already working on is never disturbed. When no local branch exists
+ * yet, a branch is created at the current (pinned) commit — the checked-out commit is preserved,
+ * which keeps the parent's recorded pointer reproducible.
+ */
+function attachBranch(repoRoot: string, alias: string, branch: string): void {
+  if (currentBranch(aliasDir(repoRoot, alias)) !== null) return;
+
+  if (localBranchExists(aliasDir(repoRoot, alias), branch)) {
+    runSub(repoRoot, alias, ["switch", branch]);
+    return;
+  }
+  // Create the branch at the current HEAD (the pinned commit) so the worktree stays put.
+  if (!runSub(repoRoot, alias, ["switch", "-c", branch]).success) return;
+  if (remoteBranchExists(aliasDir(repoRoot, alias), branch)) {
+    runSub(repoRoot, alias, ["branch", "--set-upstream-to", `origin/${branch}`, branch]);
+  }
+}
+
+/** Stage the submodule gitlink in the parent so a moved pointer shows up and is ready to commit. */
+function stagePointer(repoRoot: string, alias: string): void {
+  runGit(repoRoot, ["add", "--", submodulePath(alias)]);
 }
 
 function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: boolean }): void {
@@ -297,15 +323,16 @@ function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: 
   log.error(
     `detected legacy ${artifacts} at ${dir}.\n` +
       `  oh-my-space 0.4.0 renamed the manifest to ${MANIFEST_FILENAME} and the data directory to ${DATA_DIRNAME}/.\n` +
-      `  See ${LEGACY_MIGRATION_DOC} for the manual steps. Aborting to avoid destructive change.`,
+      `  See ${RENAME_MIGRATION_DOC} for the manual steps. Aborting to avoid destructive change.`,
   );
 }
 
-/** Block when the active oms.yaml workspace still has legacy artifacts at its root. */
+/** Block when the active oms.yaml workspace still has 0.3.x rename artifacts at its root. */
 function abortOnLegacyRenameAt(repoRoot: string): boolean {
-  const found = detectLegacyRenameArtifactsAt(repoRoot);
-  if (!found) return false;
-  emitLegacyRenameMessage(repoRoot, found);
+  const manifest = existsSync(join(repoRoot, LEGACY_MANIFEST));
+  const data = existsSync(join(repoRoot, LEGACY_DATA_DIRNAME));
+  if (!manifest && !data) return false;
+  emitLegacyRenameMessage(repoRoot, { manifest, data });
   return true;
 }
 
@@ -330,179 +357,74 @@ function emitLegacyRenameHintWalkUp(options: WorkspaceOptions = {}): boolean {
   }
 }
 
-function ensureGitignore(repoRoot: string): void {
-  const path = join(repoRoot, ".gitignore");
-  let content = "";
-  if (existsSync(path)) {
-    content = readFileSync(path, "utf8");
-    const present = content
-      .split("\n")
-      .some((line) => line.trim() === GITIGNORE_ENTRY || line.trim() === `/${GITIGNORE_ENTRY}`);
-    if (present) return;
-  }
-  const needsNewline = content.length > 0 && !content.endsWith("\n");
-  const block = `${GITIGNORE_COMMENT}\n${GITIGNORE_ENTRY}\n`;
-  writeFileSync(path, `${content}${needsNewline ? "\n" : ""}${block}`);
-  log.info(`added ${GITIGNORE_ENTRY} to .gitignore`);
-}
-
-function setupBareRepo(repo: Repo, repoRoot: string): boolean {
-  const alias = repo.alias;
-  const aliasPath = aliasDir(repoRoot, alias);
-  const barePath = bareDir(repoRoot, alias);
-
-  mkdirSync(aliasPath, { recursive: true });
-
-  const relBare = relative(repoRoot, barePath);
-  log.step(`git clone --bare ${repo.url} ${relBare}`);
-  const clone = runGit(repoRoot, ["clone", "--bare", repo.url, relBare], true);
-  if (!clone.success) {
-    log.error(`${alias}: git clone --bare failed (exit ${clone.exitCode})`);
-    if (existsSync(barePath)) rmSync(barePath, { recursive: true, force: true });
-    return false;
-  }
-
-  // Write the placeholder before any further runBareGit calls, otherwise git ascends
-  // out of oms/<alias>/ looking for a repo and touches the wrong .git.
-  writeFileSync(gitPlaceholderPath(repoRoot, alias), "gitdir: ./.bare\n");
-
-  const config = runBareGit(repoRoot, alias, [
-    "config",
-    "remote.origin.fetch",
-    FETCH_REFSPEC,
-  ]);
-  if (!config.success) {
-    log.error(`${alias}: failed to set remote.origin.fetch (exit ${config.exitCode})`);
-    return false;
-  }
-
-  log.step(`${alias}: git fetch origin`);
-  const fetch = runBareGit(repoRoot, alias, ["fetch", "origin", "--prune"], true);
-  if (!fetch.success) {
-    log.error(`${alias}: initial fetch failed (exit ${fetch.exitCode})`);
-    return false;
-  }
-
-  return true;
-}
-
-function detectDefaultBranch(repoRoot: string, alias: string): string | null {
-  const r = runBareGit(repoRoot, alias, ["symbolic-ref", "--short", "HEAD"]);
-  if (r.success) {
-    const out = r.stdout.trim();
-    return out.length > 0 ? out : null;
-  }
-  return null;
-}
-
-function listExistingWorktrees(repoRoot: string, alias: string): WorktreeEntry[] {
-  if (!existsSync(bareDir(repoRoot, alias))) return [];
-  const result = runBareGit(repoRoot, alias, ["worktree", "list", "--porcelain"]);
-  if (!result.success) return [];
-
-  const aliasPath = aliasDir(repoRoot, alias);
-  const entries: WorktreeEntry[] = [];
-  const blocks = result.stdout
-    .split(/\n\n+/)
-    .map((b) => b.trim())
-    .filter((b) => b.length > 0);
-  for (const block of blocks) {
-    let path = "";
-    let branch = "(detached)";
-    let bare = false;
-    for (const line of block.split("\n")) {
-      if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
-      else if (line.startsWith("branch ")) {
-        branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
-      } else if (line === "bare") bare = true;
-    }
-    if (!path || bare) continue;
-    const rel = relative(aliasPath, path);
-    // Skip worktrees outside oms/<alias>/ (shouldn't happen, but be safe)
-    if (rel.startsWith("..")) continue;
-    entries.push({ branch, path, relativePath: rel });
-  }
-  return entries;
-}
-
-function cleanupEmptyParents(repoRoot: string, alias: string, branch: string): void {
-  const parts = branch.split("/").filter((p) => p.length > 0);
-  if (parts.length < 2) return;
-  for (let i = parts.length - 1; i >= 1; i--) {
-    const dirPath = join(aliasDir(repoRoot, alias), ...parts.slice(0, i));
-    try {
-      const entries = readdirSync(dirPath);
-      if (entries.length === 0) {
-        rmdirSync(dirPath);
-      } else {
-        break;
-      }
-    } catch {
-      break;
-    }
-  }
-}
-
-function addWorktree(repo: Repo, repoRoot: string, branch: string): boolean {
-  const wtPath = worktreePath(repoRoot, repo.alias, branch);
-  if (existsSync(wtPath)) {
-    log.warn(`${repo.alias}: ${DATA_DIRNAME}/${repo.alias}/${branch} already exists; skipping.`);
-    return true;
-  }
-
-  log.step(`${repo.alias}: git worktree add --track -B ${branch} ${branch} origin/${branch}`);
-  const result = runBareGit(
-    repoRoot,
-    repo.alias,
-    ["worktree", "add", "--track", "-B", branch, branch, `origin/${branch}`],
-    true,
+/** Detect leftover 0.3.x–0.5.x bare clone + worktree artifacts (oms/<alias>/.bare). */
+function abortOnLegacyWorktree(repoRoot: string, repos: Repo[]): boolean {
+  const stale = repos.find((repo) => existsSync(join(aliasDir(repoRoot, repo.alias), ".bare")));
+  if (!stale) return false;
+  log.error(
+    `detected a legacy bare clone at ${DATA_DIRNAME}/${stale.alias}/.bare. oh-my-space 0.6.0 manages sources as git submodules.\n` +
+      `  See ${WORKTREE_MIGRATION_DOC} for the manual steps. Aborting to avoid destructive change.`,
   );
-  if (!result.success) {
-    log.error(`${repo.alias}: worktree add for ${branch} failed (exit ${result.exitCode})`);
-    cleanupEmptyParents(repoRoot, repo.alias, branch);
-    return false;
-  }
   return true;
 }
 
-function removeWorktree(
-  repo: Repo,
-  repoRoot: string,
-  branch: string,
-  force: boolean,
-): boolean {
-  const wtPath = worktreePath(repoRoot, repo.alias, branch);
-  if (!existsSync(wtPath)) return true;
-
-  const args = ["worktree", "remove", ...(force ? ["--force"] : []), branch];
-  log.step(`${repo.alias}: git worktree remove ${branch}${force ? " --force" : ""}`);
-  const result = runBareGit(repoRoot, repo.alias, args, true);
-  if (!result.success) {
-    log.error(
-      `${repo.alias}: worktree remove for ${branch} failed (exit ${result.exitCode})`,
-    );
-    return false;
+/** Submodules live inside the parent's history, so oms/ must not be gitignored. Strip a managed entry. */
+function ensureOmsNotIgnored(repoRoot: string): void {
+  const path = join(repoRoot, ".gitignore");
+  if (!existsSync(path)) return;
+  const lines = readFileSync(path, "utf8").split("\n");
+  const out: string[] = [];
+  let removed = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === GITIGNORE_ENTRY || trimmed === `/${GITIGNORE_ENTRY}`) {
+      if (out.length > 0 && out[out.length - 1].trim() === GITIGNORE_COMMENT) out.pop();
+      removed = true;
+      continue;
+    }
+    out.push(line);
   }
-  cleanupEmptyParents(repoRoot, repo.alias, branch);
-  return true;
+  if (removed) {
+    writeFileSync(path, out.join("\n"));
+    log.info(`removed ${GITIGNORE_ENTRY} from .gitignore (submodules are tracked, not ignored)`);
+  }
+}
+
+function gitignoreIgnoresOms(repoRoot: string): boolean {
+  const gi = join(repoRoot, ".gitignore");
+  return (
+    existsSync(gi)
+    && readFileSync(gi, "utf8")
+      .split("\n")
+      .some((l) => l.trim() === GITIGNORE_ENTRY || l.trim() === `/${GITIGNORE_ENTRY}`)
+  );
+}
+
+function cleanupFailedAdd(repoRoot: string, alias: string): void {
+  const path = submodulePath(alias);
+  runGit(repoRoot, ["submodule", "deinit", "-f", "--", path]);
+  runGit(repoRoot, ["rm", "-f", "--cached", "--", path]);
+  runGit(repoRoot, ["config", "--file", ".gitmodules", "--remove-section", `submodule.${path}`]);
+  if (existsSync(join(repoRoot, ".gitmodules"))) runGit(repoRoot, ["add", ".gitmodules"]);
+  try {
+    rmSync(join(repoRoot, ".git", "modules", DATA_DIRNAME, alias), { recursive: true, force: true });
+  } catch {}
+  try {
+    if (existsSync(aliasDir(repoRoot, alias))) rmSync(aliasDir(repoRoot, alias), { recursive: true, force: true });
+  } catch {}
 }
 
 function syncRepo(repo: Repo, repoRoot: string): OperationResult {
   const alias = repo.alias;
-  const aliasPath = aliasDir(repoRoot, alias);
-  const barePath = bareDir(repoRoot, alias);
-  const placeholderPath = gitPlaceholderPath(repoRoot, alias);
-  const bareExists = existsSync(barePath);
+  const path = submodulePath(alias);
+  const registered = isRegisteredSubmodule(repoRoot, path);
 
-  if (!bareExists) {
-    if (existsSync(aliasPath)) {
-      const stray = readdirSync(aliasPath).filter((e) => e !== ".git");
-      if (stray.length > 0) {
-        log.error(
-          `${alias}: ${DATA_DIRNAME}/${alias}/ already exists but is not a bare clone. Move or remove it manually, then retry.`,
-        );
-        return "failed";
-      }
+  if (!registered) {
+    if (existsSync(aliasDir(repoRoot, alias)) && readdirSync(aliasDir(repoRoot, alias)).length > 0) {
+      log.error(
+        `${alias}: ${path}/ already exists but is not a registered submodule. Move or remove it manually, then retry.`,
+      );
+      return "failed";
     }
 
     if (repo.branch) {
@@ -520,105 +442,109 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
         return "failed";
       }
       if (!lsRemote.success && lsRemote.exitCode !== 2) {
-        log.warn(
-          `${alias}: branch existence check failed (exit ${lsRemote.exitCode}); proceeding.`,
-        );
+        log.warn(`${alias}: branch existence check failed (exit ${lsRemote.exitCode}); proceeding.`);
       }
     }
 
-    if (!setupBareRepo(repo, repoRoot)) {
-      if (existsSync(barePath)) rmSync(barePath, { recursive: true, force: true });
-      if (existsSync(placeholderPath)) rmSync(placeholderPath);
-      try {
-        if (readdirSync(aliasPath).length === 0) rmdirSync(aliasPath);
-      } catch {}
-      return "failed";
+    // `git submodule add` refuses when .gitmodules is tracked in HEAD but missing from the
+    // working tree — the state left by an uncommitted unsync. Restore an empty one so it can append.
+    const gitmodules = join(repoRoot, ".gitmodules");
+    if (!existsSync(gitmodules) && runGit(repoRoot, ["cat-file", "-e", "HEAD:.gitmodules"]).success) {
+      writeFileSync(gitmodules, "");
     }
 
-    const branch = repo.branch ?? detectDefaultBranch(repoRoot, alias);
-    if (!branch) {
-      log.error(
-        `${alias}: could not determine default branch from bare clone. Set "branch:" in ${MANIFEST_FILENAME}.`,
-      );
+    log.step(`${alias}: git submodule add${repo.branch ? ` -b ${repo.branch}` : ""} ${repo.url} ${path}`);
+    const args = ["submodule", "add", ...(repo.branch ? ["-b", repo.branch] : []), "--", repo.url, path];
+    const add = runGit(repoRoot, args, true);
+    if (!add.success) {
+      log.error(`${alias}: git submodule add failed (exit ${add.exitCode})`);
+      cleanupFailedAdd(repoRoot, alias);
       return "failed";
     }
-    if (!addWorktree(repo, repoRoot, branch)) return "failed";
-    log.success(`${alias}: added (branch=${branch})`);
+    const branch = repo.branch ?? currentBranch(aliasDir(repoRoot, alias));
+    if (branch) attachBranch(repoRoot, alias, branch);
+    log.success(`${alias}: added${branch ? ` (branch=${branch})` : ""}`);
     return "added";
   }
 
-  if (!existsSync(placeholderPath)) {
-    writeFileSync(placeholderPath, "gitdir: ./.bare\n");
+  if (!submoduleInitialized(repoRoot, alias)) {
+    log.step(`${alias}: git submodule update --init ${path}`);
+    const upd = runGit(repoRoot, ["submodule", "update", "--init", "--", path], true);
+    if (!upd.success) {
+      log.error(`${alias}: git submodule update --init failed (exit ${upd.exitCode})`);
+      return "failed";
+    }
+    const branch = gitmodulesBranch(repoRoot, alias) ?? repo.branch;
+    if (branch) attachBranch(repoRoot, alias, branch);
+    log.success(`${alias}: initialized${branch ? ` (branch=${branch})` : ""}`);
+    return "added";
   }
 
-  log.step(`${alias}: git fetch origin`);
-  const fetch = runBareGit(repoRoot, alias, ["fetch", "origin", "--prune"], true);
+  log.step(`${alias}: git fetch origin --prune`);
+  const fetch = runSub(repoRoot, alias, ["fetch", "origin", "--prune"], true);
   if (!fetch.success) {
     log.error(`${alias}: fetch failed (exit ${fetch.exitCode})`);
     return "failed";
   }
-
-  const branch = repo.branch ?? detectDefaultBranch(repoRoot, alias);
-  if (branch && !existsSync(worktreePath(repoRoot, alias, branch))) {
-    if (!addWorktree(repo, repoRoot, branch)) return "failed";
-  }
-
-  runBareGit(repoRoot, alias, ["worktree", "prune"]);
+  const branch = gitmodulesBranch(repoRoot, alias) ?? repo.branch;
+  if (branch) attachBranch(repoRoot, alias, branch);
   log.success(`${alias}: updated`);
   return "updated";
 }
 
 function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome {
-  const aliasPath = aliasDir(repoRoot, repo.alias);
-  const barePath = bareDir(repoRoot, repo.alias);
-  const placeholderPath = gitPlaceholderPath(repoRoot, repo.alias);
+  const alias = repo.alias;
+  const path = submodulePath(alias);
+  const registered = isRegisteredSubmodule(repoRoot, path);
+  const exists = existsSync(aliasDir(repoRoot, alias));
 
-  const aliasExists = existsSync(aliasPath);
-  const bareExists = existsSync(barePath);
+  if (!registered && !exists) return "nothing-to-remove";
 
-  if (!aliasExists && !bareExists) return "nothing-to-remove";
-
-  const worktrees = bareExists ? listExistingWorktrees(repoRoot, repo.alias) : [];
-
-  if (!force) {
-    for (const wt of worktrees) {
-      const status = runGit(wt.path, ["status", "--porcelain"]);
-      if (status.success && status.stdout.trim().length > 0) {
-        log.error(
-          `${repo.alias}: worktree at ${DATA_DIRNAME}/${repo.alias}/${wt.relativePath} has uncommitted changes. Commit, stash, or pass --force.`,
-        );
-        return "failed";
-      }
-    }
+  if (!force && submoduleInitialized(repoRoot, alias) && isDirty(aliasDir(repoRoot, alias))) {
+    log.error(
+      `${alias}: ${path} has uncommitted changes. Commit, stash, or pass --force.`,
+    );
+    return "failed";
   }
 
-  for (const wt of worktrees) {
-    const target = wt.branch === "(detached)" ? wt.relativePath : wt.branch;
-    if (!removeWorktree(repo, repoRoot, target, force)) {
-      return "failed";
-    }
+  runGit(repoRoot, ["submodule", "deinit", ...(force ? ["-f"] : []), "--", path]);
+  const rm = runGit(repoRoot, ["rm", "-f", "--", path], true);
+  if (!rm.success) {
+    // Fall back to manual unregistration (e.g. the submodule was never initialized).
+    runGit(repoRoot, ["rm", "-f", "--cached", "--", path]);
+    runGit(repoRoot, ["config", "--file", ".gitmodules", "--remove-section", `submodule.${path}`]);
+    if (existsSync(join(repoRoot, ".gitmodules"))) runGit(repoRoot, ["add", ".gitmodules"]);
   }
-
-  if (existsSync(barePath)) rmSync(barePath, { recursive: true, force: true });
-  if (existsSync(placeholderPath)) rmSync(placeholderPath);
-
   try {
-    if (existsSync(aliasPath)) {
-      const remaining = readdirSync(aliasPath);
-      if (remaining.length === 0) rmdirSync(aliasPath);
-    }
+    rmSync(join(repoRoot, ".git", "modules", DATA_DIRNAME, alias), { recursive: true, force: true });
   } catch {}
+  if (existsSync(aliasDir(repoRoot, alias))) {
+    rmSync(aliasDir(repoRoot, alias), { recursive: true, force: true });
+  }
+  // Drop the now-empty oms/ directory if nothing else lives there.
+  try {
+    const parent = join(repoRoot, DATA_DIRNAME);
+    if (existsSync(parent) && readdirSync(parent).length === 0) rmdirSync(parent);
+  } catch {}
+
+  // Drop a .gitmodules that no longer registers any submodule (git rm leaves it empty).
+  const gitmodules = join(repoRoot, ".gitmodules");
+  if (existsSync(gitmodules) && readFileSync(gitmodules, "utf8").trim().length === 0) {
+    if (!runGit(repoRoot, ["rm", "-f", "--", ".gitmodules"]).success) {
+      rmSync(gitmodules, { force: true });
+    }
+  }
 
   return "removed";
 }
 
 function fetchRepo(repo: Repo, repoRoot: string): OperationResult {
-  if (!existsSync(bareDir(repoRoot, repo.alias))) {
+  if (!submoduleInitialized(repoRoot, repo.alias)) {
     log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
     return "failed";
   }
   log.step(`${repo.alias}: git fetch origin --prune`);
-  const r = runBareGit(repoRoot, repo.alias, ["fetch", "origin", "--prune"], true);
+  const r = runSub(repoRoot, repo.alias, ["fetch", "origin", "--prune"], true);
   if (r.success) {
     log.success(`${repo.alias}: fetched`);
     return "fetched";
@@ -627,81 +553,54 @@ function fetchRepo(repo: Repo, repoRoot: string): OperationResult {
   return "failed";
 }
 
-function resolveTargetWorktree(
-  repo: Repo,
-  repoRoot: string,
-): { branch: string; path: string } | null {
-  const defaultBranch = repo.branch ?? detectDefaultBranch(repoRoot, repo.alias);
-  if (defaultBranch) {
-    const path = worktreePath(repoRoot, repo.alias, defaultBranch);
-    if (existsSync(path)) return { branch: defaultBranch, path };
-  }
-  const wts = listExistingWorktrees(repoRoot, repo.alias);
-  if (wts.length === 1) {
-    const only = wts[0];
-    return { branch: only.branch === "(detached)" ? only.relativePath : only.branch, path: only.path };
-  }
-  return null;
-}
-
 function pullRepo(repo: Repo, repoRoot: string): OperationResult {
-  if (!existsSync(bareDir(repoRoot, repo.alias))) {
+  if (!submoduleInitialized(repoRoot, repo.alias)) {
     log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
     return "failed";
   }
-  const target = resolveTargetWorktree(repo, repoRoot);
-  if (!target) {
+  const branch = currentBranch(aliasDir(repoRoot, repo.alias));
+  if (!branch) {
     log.error(
-      `${repo.alias}: cannot determine which worktree to pull. Use "oms worktree list ${repo.alias}".`,
+      `${repo.alias}: detached HEAD. Run "oms checkout ${repo.alias} <branch>" before pulling.`,
     );
     return "failed";
   }
-  log.step(`${repo.alias}/${target.branch}: git pull --ff-only`);
-  const r = runGit(target.path, ["pull", "--ff-only"], true);
+  log.step(`${repo.alias}/${branch}: git pull --ff-only`);
+  const r = runSub(repoRoot, repo.alias, ["pull", "--ff-only"], true);
   if (r.success) {
-    log.success(`${repo.alias}/${target.branch}: pulled`);
+    stagePointer(repoRoot, repo.alias);
+    log.success(`${repo.alias}/${branch}: pulled`);
     return "pulled";
   }
-  log.error(`${repo.alias}/${target.branch}: pull failed (exit ${r.exitCode})`);
+  log.error(`${repo.alias}/${branch}: pull failed (exit ${r.exitCode})`);
   return "failed";
 }
 
-function pushRepo(repo: Repo, repoRoot: string): OperationResult {
-  if (!existsSync(bareDir(repoRoot, repo.alias))) {
+function pushRepo(repo: Repo, repoRoot: string, commit: boolean): OperationResult {
+  if (!submoduleInitialized(repoRoot, repo.alias)) {
     log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
     return "failed";
   }
-  const target = resolveTargetWorktree(repo, repoRoot);
-  if (!target) {
+  const branch = currentBranch(aliasDir(repoRoot, repo.alias));
+  if (!branch) {
     log.error(
-      `${repo.alias}: cannot determine which worktree to push. Use "oms worktree list ${repo.alias}".`,
+      `${repo.alias}: detached HEAD. Run "oms checkout ${repo.alias} <branch>" before pushing.`,
     );
     return "failed";
   }
-  const upstream = runGit(target.path, [
-    "rev-parse",
-    "--abbrev-ref",
-    "--symbolic-full-name",
-    "@{u}",
-  ]);
-  if (!upstream.success) {
-    log.error(
-      `${repo.alias}/${target.branch}: git push requires an upstream. Set it manually before pushing.`,
-    );
+  log.step(`${repo.alias}/${branch}: git push -u origin ${branch}`);
+  const r = runSub(repoRoot, repo.alias, ["push", "-u", "origin", branch], true);
+  if (!r.success) {
+    log.error(`${repo.alias}/${branch}: push failed (exit ${r.exitCode})`);
     return "failed";
   }
-  log.step(`${repo.alias}/${target.branch}: git push`);
-  const r = runGit(
-    target.path,
-    ["-c", "push.autoSetupRemote=false", "push"],
-    true,
-  );
-  if (r.success) {
-    log.success(`${repo.alias}/${target.branch}: pushed`);
-    return "pushed";
+  stagePointer(repoRoot, repo.alias);
+  if (commit) {
+    const sha = shortSha(aliasDir(repoRoot, repo.alias));
+    runGit(repoRoot, ["commit", "-m", `oms: bump ${repo.alias} to ${sha}`, "--", submodulePath(repo.alias)]);
   }
-  log.error(`${repo.alias}/${target.branch}: push failed (exit ${r.exitCode})`);
-  return "failed";
+  log.success(`${repo.alias}/${branch}: pushed${commit ? " and recorded pointer" : ""}`);
+  return "pushed";
 }
 
 function printSummary(results: OperationResult[]): void {
@@ -742,6 +641,25 @@ function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repoRoot: s
     log.error(e instanceof Error ? e.message : String(e));
     return null;
   }
+}
+
+/** Shared preamble: load manifest, emit legacy hints, and confirm the workspace is a git repo. */
+function loadForSubmodules(): { repos: Repo[]; repoRoot: string } | null {
+  const loaded = loadRepos();
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return null;
+  }
+  const { repoRoot, repos } = loaded;
+  if (abortOnLegacyRenameAt(repoRoot)) return null;
+  if (!isGitRepo(repoRoot)) {
+    log.error(
+      `${repoRoot} is not a git repository. oh-my-space 0.6.0 manages sources as git submodules; run "git init" at the workspace root first.`,
+    );
+    return null;
+  }
+  if (abortOnLegacyWorktree(repoRoot, repos)) return null;
+  return loaded;
 }
 
 function uniqueAliases(aliases: string[]): string[] {
@@ -791,12 +709,18 @@ async function runSync(aliases: string[], options: SourcesOptions): Promise<numb
     return 0;
   }
 
-  if (abortOnLegacy(repoRoot, repos)) return 1;
+  if (!isGitRepo(repoRoot)) {
+    log.error(
+      `${repoRoot} is not a git repository. oh-my-space 0.6.0 manages sources as git submodules; run "git init" at the workspace root first.`,
+    );
+    return 1;
+  }
+  if (abortOnLegacyWorktree(repoRoot, repos)) return 1;
 
   const picked = await selectRepos(repos, aliases, options, "sync");
   if (!picked || picked.length === 0) return 1;
 
-  ensureGitignore(repoRoot);
+  ensureOmsNotIgnored(repoRoot);
 
   const results = picked.map((repo) => syncRepo(repo, repoRoot));
   if (results.length > 1 || options.all) printSummary(results);
@@ -806,35 +730,28 @@ async function runSync(aliases: string[], options: SourcesOptions): Promise<numb
 async function runManage(
   command: ManageCommand,
   aliases: string[],
-  options: SourcesOptions,
+  options: SourcesOptions & PushOptions,
 ): Promise<number> {
-  const loaded = loadRepos();
-  if (!loaded) {
-    emitLegacyRenameHintWalkUp();
-    return 1;
-  }
+  const loaded = loadForSubmodules();
+  if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
-  if (abortOnLegacyRenameAt(repoRoot)) return 1;
-  if (abortOnLegacy(repoRoot, repos)) return 1;
 
   const picked = await selectRepos(repos, aliases, options, command);
   if (!picked || picked.length === 0) return 1;
 
-  const fn = command === "fetch" ? fetchRepo : command === "pull" ? pullRepo : pushRepo;
-  const results = picked.map((repo) => fn(repo, repoRoot));
+  const results = picked.map((repo) => {
+    if (command === "fetch") return fetchRepo(repo, repoRoot);
+    if (command === "pull") return pullRepo(repo, repoRoot);
+    return pushRepo(repo, repoRoot, options.commit ?? false);
+  });
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results);
 }
 
 async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<number> {
-  const loaded = loadRepos();
-  if (!loaded) {
-    emitLegacyRenameHintWalkUp();
-    return 1;
-  }
+  const loaded = loadForSubmodules();
+  if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
-  if (abortOnLegacyRenameAt(repoRoot)) return 1;
-  if (abortOnLegacy(repoRoot, repos)) return 1;
 
   const picked = await selectRepos(repos, aliases, options, "unsync");
   if (!picked || picked.length === 0) return 1;
@@ -857,121 +774,126 @@ async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<num
   return exitFromResults(results);
 }
 
-async function runWorktreeAdd(alias: string, branch: string): Promise<number> {
-  const loaded = loadRepos();
-  if (!loaded) {
-    emitLegacyRenameHintWalkUp();
-    return 1;
-  }
+async function runCheckout(alias: string, branch: string, options: CheckoutOptions): Promise<number> {
+  const loaded = loadForSubmodules();
+  if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
-  if (abortOnLegacyRenameAt(repoRoot)) return 1;
-  if (abortOnLegacy(repoRoot, repos)) return 1;
 
   const repo = repos.find((r) => r.alias === alias);
   if (!repo) {
     log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
     return 1;
   }
-  if (!existsSync(bareDir(repoRoot, alias))) {
+  if (!submoduleInitialized(repoRoot, alias)) {
     log.error(`${alias}: not synced. Run "oms sync ${alias}" first.`);
     return 1;
   }
-  if (existsSync(worktreePath(repoRoot, alias, branch))) {
-    log.error(`${alias}: worktree for ${branch} already exists at ${DATA_DIRNAME}/${alias}/${branch}.`);
-    return 1;
+
+  const dir = aliasDir(repoRoot, alias);
+  // Best-effort refresh so an existing remote branch is recognized; offline is fine.
+  runSub(repoRoot, alias, ["fetch", "origin", "--quiet"]);
+
+  if (localBranchExists(dir, branch)) {
+    log.step(`${alias}: git switch ${branch}`);
+    const r = runSub(repoRoot, alias, ["switch", branch], true);
+    if (!r.success) return 2;
+    log.success(`${alias}: on ${branch}`);
+    return 0;
   }
-
-  log.step(`${alias}: git fetch origin --prune (refresh before add)`);
-  runBareGit(repoRoot, alias, ["fetch", "origin", "--prune"], true);
-
-  if (!addWorktree(repo, repoRoot, branch)) return 2;
-  log.success(`${alias}: added worktree for ${branch}`);
-  return 0;
-}
-
-async function runWorktreeList(alias: string | undefined): Promise<number> {
-  const loaded = loadRepos();
-  if (!loaded) {
-    emitLegacyRenameHintWalkUp();
-    return 1;
-  }
-  const { repos, repoRoot } = loaded;
-  if (abortOnLegacyRenameAt(repoRoot)) return 1;
-  if (abortOnLegacy(repoRoot, repos)) return 1;
-
-  const targets = alias ? repos.filter((r) => r.alias === alias) : repos;
-  if (alias && targets.length === 0) {
-    log.error(`Unknown alias "${alias}".`);
-    return 1;
-  }
-
-  const rows: Array<{ alias: string; branch: string; path: string }> = [];
-  for (const repo of targets) {
-    if (!existsSync(bareDir(repoRoot, repo.alias))) {
-      rows.push({ alias: repo.alias, branch: "(not synced)", path: "-" });
-      continue;
-    }
-    const wts = listExistingWorktrees(repoRoot, repo.alias);
-    if (wts.length === 0) {
-      rows.push({ alias: repo.alias, branch: "(no worktrees)", path: "-" });
-      continue;
-    }
-    for (const wt of wts) {
-      rows.push({
-        alias: repo.alias,
-        branch: wt.branch,
-        path: `${DATA_DIRNAME}/${repo.alias}/${wt.relativePath}`,
-      });
-    }
-  }
-
-  const aliasW = Math.max("ALIAS".length, ...rows.map((r) => r.alias.length));
-  const branchW = Math.max("BRANCH".length, ...rows.map((r) => r.branch.length));
-  console.log(dim(`${pad("ALIAS", aliasW)}  ${pad("BRANCH", branchW)}  PATH`));
-  for (const r of rows) {
-    console.log(`${pad(r.alias, aliasW)}  ${pad(r.branch, branchW)}  ${r.path}`);
-  }
-  return 0;
-}
-
-async function runWorktreeRemove(
-  alias: string,
-  branch: string,
-  options: WorktreeRemoveOptions,
-): Promise<number> {
-  const loaded = loadRepos();
-  if (!loaded) {
-    emitLegacyRenameHintWalkUp();
-    return 1;
-  }
-  const { repos, repoRoot } = loaded;
-  if (abortOnLegacyRenameAt(repoRoot)) return 1;
-  if (abortOnLegacy(repoRoot, repos)) return 1;
-
-  const repo = repos.find((r) => r.alias === alias);
-  if (!repo) {
-    log.error(`Unknown alias "${alias}".`);
-    return 1;
-  }
-
-  const wtPath = worktreePath(repoRoot, alias, branch);
-  if (!existsSync(wtPath)) {
-    log.info(`${alias}: no worktree for ${branch}`);
+  if (remoteBranchExists(dir, branch)) {
+    log.step(`${alias}: git switch -c ${branch} origin/${branch}`);
+    const r = runSub(repoRoot, alias, ["switch", "-c", branch, `origin/${branch}`], true);
+    if (!r.success) return 2;
+    log.success(`${alias}: on ${branch} (tracking origin/${branch})`);
     return 0;
   }
 
-  if (!options.force) {
-    const status = runGit(wtPath, ["status", "--porcelain"]);
-    if (status.success && status.stdout.trim().length > 0) {
-      log.error(
-        `${alias}/${branch}: has uncommitted changes. Commit, stash, or pass --force.`,
-      );
-      return 2;
+  // Brand-new branch: created locally, no remote precondition. Push later with "oms push".
+  const args = ["switch", "-c", branch, ...(options.from ? [options.from] : [])];
+  log.step(`${alias}: git ${args.join(" ")}`);
+  const r = runSub(repoRoot, alias, args, true);
+  if (!r.success) return 2;
+  log.success(`${alias}: created new local branch ${branch}. Push it with "oms push ${alias}".`);
+  return 0;
+}
+
+type StatusRow = {
+  alias: string;
+  branch: string;
+  pin: string;
+  dirty: string;
+  ahead: string;
+  behind: string;
+};
+
+/** Parse the leading status char from `git submodule status` (' ' ok, '+' moved, '-' uninit, 'U' conflict). */
+function pinState(repoRoot: string, alias: string): string {
+  const r = runGit(repoRoot, ["submodule", "status", "--", submodulePath(alias)]);
+  if (!r.success || r.stdout.length === 0) return "?";
+  const c = r.stdout[0];
+  if (c === " ") return "ok";
+  if (c === "+") return "moved";
+  if (c === "-") return "uninit";
+  if (c === "U") return "conflict";
+  return "?";
+}
+
+function aheadBehind(dir: string): { ahead: string; behind: string } {
+  const r = runGit(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+  if (!r.success) return { ahead: "", behind: "" };
+  const [behind, ahead] = r.stdout.trim().split(/\s+/);
+  return { ahead: ahead && ahead !== "0" ? ahead : "", behind: behind && behind !== "0" ? behind : "" };
+}
+
+async function runStatus(aliases: string[], options: SourcesOptions): Promise<number> {
+  const loaded = loadForSubmodules();
+  if (!loaded) return 1;
+  const { repos, repoRoot } = loaded;
+
+  const targets = aliases.length > 0 || options.all
+    ? await selectRepos(repos, options.all ? [] : aliases, options.all ? options : {}, "inspect")
+    : repos;
+  if (!targets) return 1;
+
+  const rows: StatusRow[] = [];
+  for (const repo of targets) {
+    if (!isRegisteredSubmodule(repoRoot, submodulePath(repo.alias))) {
+      rows.push({ alias: repo.alias, branch: "(not registered)", pin: "-", dirty: "", ahead: "", behind: "" });
+      continue;
     }
+    if (!submoduleInitialized(repoRoot, repo.alias)) {
+      rows.push({ alias: repo.alias, branch: "(not synced)", pin: "uninit", dirty: "", ahead: "", behind: "" });
+      continue;
+    }
+    const dir = aliasDir(repoRoot, repo.alias);
+    const branch = currentBranch(dir) ?? `(detached ${shortSha(dir)})`;
+    const { ahead, behind } = aheadBehind(dir);
+    rows.push({
+      alias: repo.alias,
+      branch,
+      pin: pinState(repoRoot, repo.alias),
+      dirty: isDirty(dir) ? "yes" : "",
+      ahead,
+      behind,
+    });
   }
 
-  if (!removeWorktree(repo, repoRoot, branch, options.force ?? false)) return 2;
-  log.success(`${alias}: removed worktree for ${branch}`);
+  const col = (key: keyof StatusRow, header: string) =>
+    Math.max(header.length, ...rows.map((r) => r[key].length));
+  const aW = col("alias", "ALIAS");
+  const bW = col("branch", "BRANCH");
+  const pW = col("pin", "PIN");
+  const dW = Math.max("DIRTY".length, ...rows.map((r) => r.dirty.length));
+  console.log(
+    dim(
+      `${pad("ALIAS", aW)}  ${pad("BRANCH", bW)}  ${pad("PIN", pW)}  ${pad("DIRTY", dW)}  AHEAD  BEHIND`,
+    ),
+  );
+  for (const r of rows) {
+    console.log(
+      `${pad(r.alias, aW)}  ${pad(r.branch, bW)}  ${pad(r.pin, pW)}  ${pad(r.dirty, dW)}  ${pad(r.ahead, 5)}  ${r.behind}`,
+    );
+  }
   return 0;
 }
 
@@ -991,7 +913,11 @@ async function runInit(options: { force?: boolean }): Promise<number> {
   }
   writeFileSync(target, INIT_TEMPLATE);
   log.success(`created ${MANIFEST_FILENAME} at ${target}`);
-  ensureGitignore(process.cwd());
+  // Sources are tracked submodules, so make sure no stale oms version left oms/ ignored.
+  ensureOmsNotIgnored(process.cwd());
+  if (!isGitRepo(process.cwd())) {
+    log.info(`oms manages sources as git submodules; run "git init" here if this is not a git repo yet.`);
+  }
   log.info(`edit alias/url/branch, then run "oms sync".`);
   return 0;
 }
@@ -1028,48 +954,45 @@ async function runDoctor(): Promise<number> {
     warnings++;
   } else if (!isGitVersionSupported(parsed)) {
     log.warn(
-      `git ${parsed.major}.${parsed.minor} is older than the recommended ${MIN_GIT_MAJOR}.${MIN_GIT_MINOR}. oms uses "git worktree add --track -B" which may fail on older releases — upgrade git.`,
+      `git ${parsed.major}.${parsed.minor} is older than the recommended ${MIN_GIT_MAJOR}.${MIN_GIT_MINOR}. oms uses "git switch" and submodule commands which may behave differently on older releases — upgrade git.`,
     );
     warnings++;
   }
 
-  if (hasLegacySubmoduleLayout(repoRoot, repos)) {
+  if (!isGitRepo(repoRoot)) {
     log.warn(
-      `detected legacy submodule layout (.gitmodules registers an alias path). See ${SUBMODULE_MIGRATION_DOC}.`,
+      `workspace is not a git repository. oms manages sources as submodules; run "git init" at ${repoRoot}.`,
     );
     warnings++;
   }
 
-  const gi = join(repoRoot, ".gitignore");
-  const giHasSources = existsSync(gi)
-    && readFileSync(gi, "utf8")
-      .split("\n")
-      .some((l) => l.trim() === GITIGNORE_ENTRY || l.trim() === `/${GITIGNORE_ENTRY}`);
-  if (!giHasSources) {
-    log.warn(`.gitignore does not exclude ${GITIGNORE_ENTRY}. Run "oms sync" to add it automatically.`);
+  if (abortOnLegacyWorktree(repoRoot, repos)) return 1;
+
+  if (gitignoreIgnoresOms(repoRoot)) {
+    log.warn(`.gitignore excludes ${GITIGNORE_ENTRY}, but submodules must be tracked. Run "oms sync" to remove it.`);
     warnings++;
   }
 
   for (const repo of repos) {
-    const bare = bareDir(repoRoot, repo.alias);
-    if (!existsSync(bare)) {
+    if (!isRegisteredSubmodule(repoRoot, submodulePath(repo.alias))) {
       log.info(`${repo.alias}: not synced`);
       continue;
     }
-    const refspec = runBareGit(repoRoot, repo.alias, ["config", "--get", "remote.origin.fetch"]);
-    if (!refspec.success || refspec.stdout.trim().length === 0) {
-      log.warn(
-        `${repo.alias}: bare clone is missing remote.origin.fetch. Run: git -C ${DATA_DIRNAME}/${repo.alias}/.bare -c safe.bareRepository=all config remote.origin.fetch '${FETCH_REFSPEC}'`,
-      );
+    if (!submoduleInitialized(repoRoot, repo.alias)) {
+      log.warn(`${repo.alias}: registered but not initialized. Run "oms sync ${repo.alias}".`);
+      warnings++;
+      continue;
+    }
+    const dir = aliasDir(repoRoot, repo.alias);
+    const branch = currentBranch(dir);
+    if (!branch) {
+      log.warn(`${repo.alias}: detached HEAD. Run "oms checkout ${repo.alias} <branch>" to get on a branch.`);
       warnings++;
     } else {
-      log.success(`${repo.alias}: bare clone OK (refspec: ${refspec.stdout.trim()})`);
+      log.success(`${repo.alias}: submodule OK (branch=${branch})`);
     }
-    if (!existsSync(gitPlaceholderPath(repoRoot, repo.alias))) {
-      log.warn(
-        `${repo.alias}: missing .git placeholder at ${DATA_DIRNAME}/${repo.alias}/.git. Recreate with: echo 'gitdir: ./.bare' > ${DATA_DIRNAME}/${repo.alias}/.git`,
-      );
-      warnings++;
+    if (pinState(repoRoot, repo.alias) === "moved") {
+      log.info(`${repo.alias}: working commit differs from the recorded pointer. Commit oms/${repo.alias} to record it.`);
     }
   }
 
@@ -1100,11 +1023,12 @@ const commandNames = new Set([
   "init",
   "doctor",
   "sync",
+  "status",
+  "checkout",
   "fetch",
   "pull",
   "push",
   "unsync",
-  "worktree",
   "help",
 ]);
 const program = new Command();
@@ -1112,7 +1036,7 @@ const program = new Command();
 program
   .name("oms")
   .description(
-    `Manage source repositories listed in ${MANIFEST_FILENAME} as bare clones + worktrees under ${DATA_DIRNAME}/<alias>/.`,
+    `Manage source repositories listed in ${MANIFEST_FILENAME} as git submodules under ${DATA_DIRNAME}/<alias>/.`,
   )
   .version(readPackageVersion())
   .addHelpText("after", exitHelp);
@@ -1129,7 +1053,7 @@ program
 program
   .command("doctor")
   .description(
-    `Check ${MANIFEST_FILENAME}, git availability, bare-clone state, and .gitignore for each registered alias.`,
+    `Check ${MANIFEST_FILENAME}, git availability, and the submodule state of each registered alias.`,
   )
   .addHelpText("after", exitHelp)
   .action(async () => {
@@ -1139,7 +1063,7 @@ program
 program
   .command("sync")
   .description(
-    `Bare-clone each registered repo into ${DATA_DIRNAME}/<alias>/.bare and create the baseline worktree at ${DATA_DIRNAME}/<alias>/<branch>/.`,
+    `Register each repo as a submodule at ${DATA_DIRNAME}/<alias>/ (or initialize and refresh an existing one), checked out on its baseline branch.`,
   )
   .argument("[aliases...]", "repo aliases to sync (omit for interactive multi-select)")
   .option("--all", "sync every registered source repo")
@@ -1150,8 +1074,31 @@ program
   });
 
 program
+  .command("status")
+  .description("Show each submodule's branch, pointer state, dirtiness, and ahead/behind counts.")
+  .argument("[aliases...]", "repo aliases to inspect (omit for all)")
+  .option("--all", "inspect every registered source repo")
+  .addHelpText("after", exitHelp)
+  .action(async (aliases: string[], options: SourcesOptions) => {
+    await exitWith(runStatus(aliases, options));
+  });
+
+program
+  .command("checkout")
+  .description(
+    "Switch a submodule to <branch>, creating it locally if it does not exist yet (no remote required).",
+  )
+  .argument("<alias>", "registered source alias")
+  .argument("<branch>", "branch name (may include slashes)")
+  .option("--from <ref>", "start point for a new branch (default: current HEAD)")
+  .addHelpText("after", exitHelp)
+  .action(async (alias: string, branch: string, options: CheckoutOptions) => {
+    await exitWith(runCheckout(alias, branch, options));
+  });
+
+program
   .command("fetch")
-  .description("Run git fetch origin --prune in each bare clone.")
+  .description("Run git fetch origin --prune in each submodule.")
   .argument("[aliases...]", "repo aliases to fetch (omit for interactive multi-select)")
   .option("--all", "fetch every registered source repo")
   .addHelpText("after", exitHelp)
@@ -1162,7 +1109,7 @@ program
 program
   .command("pull")
   .description(
-    "Run git pull --ff-only in the baseline worktree of each selected alias; requires upstream.",
+    "Run git pull --ff-only on each submodule's current branch and stage the moved pointer.",
   )
   .argument("[aliases...]", "repo aliases to pull (omit for interactive multi-select)")
   .option("--all", "pull every registered source repo")
@@ -1174,60 +1121,26 @@ program
 program
   .command("push")
   .description(
-    "Run git push in the baseline worktree of each explicitly listed alias; no --all, force, or upstream setup.",
+    "Run git push -u origin <branch> on each listed submodule (creating the remote branch on first push) and stage the moved pointer.",
   )
   .argument("<aliases...>", "repo aliases to push")
+  .option("--commit", "also commit the pointer update in the parent repo")
   .addHelpText("after", exitHelp)
-  .action(async (aliases: string[]) => {
-    await exitWith(runManage("push", aliases, {}));
+  .action(async (aliases: string[], options: PushOptions) => {
+    await exitWith(runManage("push", aliases, options));
   });
 
 program
   .command("unsync")
   .description(
-    `Remove all worktrees and the bare clone for each alias (keeps ${MANIFEST_FILENAME} entry).`,
+    `Deinitialize and remove the submodule for each alias (keeps ${MANIFEST_FILENAME} entry).`,
   )
   .argument("[aliases...]", "repo aliases to unsync (omit for interactive multi-select)")
   .option("--all", "unsync every registered source repo")
-  .option("--force", "discard uncommitted changes in worktrees")
+  .option("--force", "discard uncommitted changes in the submodule")
   .addHelpText("after", exitHelp)
   .action(async (aliases: string[], options: UnsyncOptions) => {
     await exitWith(runUnsync(aliases, options));
-  });
-
-const worktreeCmd = program
-  .command("worktree")
-  .description("Manage additional worktrees for a synced source repo.")
-  .addHelpText("after", exitHelp);
-
-worktreeCmd
-  .command("add")
-  .description(`Create a worktree for <branch> at ${DATA_DIRNAME}/<alias>/<branch>/.`)
-  .argument("<alias>", "registered source alias")
-  .argument("<branch>", "branch name (may include slashes)")
-  .addHelpText("after", exitHelp)
-  .action(async (alias: string, branch: string) => {
-    await exitWith(runWorktreeAdd(alias, branch));
-  });
-
-worktreeCmd
-  .command("list")
-  .description("List existing worktrees for the given alias (or all aliases).")
-  .argument("[alias]", "registered source alias")
-  .addHelpText("after", exitHelp)
-  .action(async (alias: string | undefined) => {
-    await exitWith(runWorktreeList(alias));
-  });
-
-worktreeCmd
-  .command("remove")
-  .description(`Remove the worktree at ${DATA_DIRNAME}/<alias>/<branch>.`)
-  .argument("<alias>", "registered source alias")
-  .argument("<branch>", "branch name (may include slashes)")
-  .option("--force", "discard uncommitted changes")
-  .addHelpText("after", exitHelp)
-  .action(async (alias: string, branch: string, options: WorktreeRemoveOptions) => {
-    await exitWith(runWorktreeRemove(alias, branch, options));
   });
 
 const requestedCommand = process.argv[2];

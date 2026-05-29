@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json",
   "title": "oh-my-space oms.yaml",
-  "description": "Declarative list of external source repositories for the oms CLI. Each entry becomes a bare clone + worktree under oms/<alias>/.",
+  "description": "Declarative list of external source repositories for the oms CLI. Each entry becomes a git submodule under oms/<alias>/.",
   "type": "object",
   "additionalProperties": false,
   "required": ["repos"],
@@ -28,7 +28,7 @@
           "branch": {
             "type": "string",
             "minLength": 1,
-            "description": "Baseline branch to check out as the default worktree. Omit to use the remote's default branch."
+            "description": "Baseline branch to check out in the submodule. Omit to use the remote's default branch."
           }
         }
       }
