@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.5.0
+
+### Minor Changes
+
+- [#14](https://github.com/divlook/oh-my-space/pull/14) [`1c72894`](https://github.com/divlook/oh-my-space/commit/1c72894bd9a837cd03b1b593903fbbb239cebe12) Thanks [@divlook](https://github.com/divlook)! - Add the `oms init` command to scaffold a starter `oms.yaml` in the current directory. The generated file ships with a placeholder repo entry and a `# yaml-language-server: $schema=…` comment so YAML LSPs provide autocompletion and validation out of the box. `init` also registers `oms/` in `.gitignore` (marked with a `# managed by oms` comment, shared with `oms sync`), refuses to clobber an existing `oms.yaml`, and accepts `--force` to overwrite. The README's `oms.yaml` examples now include the schema comment as well.
+
 ## 0.4.0
 
 ### Minor Changes
