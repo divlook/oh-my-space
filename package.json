@@ -35,7 +35,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/oms.js', 0o755)\"",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/oms.js', 0o755)\" && node scripts/gen-build-info.mjs",
     "test": "npm run build && node --test tests/*.test.js",
     "prepack": "npm test",
     "changeset": "changeset",
