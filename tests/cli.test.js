@@ -15,13 +15,18 @@ const cli = resolve("dist/oms.js");
 
 const testEnv = {
   ...process.env,
-  // Allow file-protocol clones and keep test commits unsigned regardless of the host's
-  // global git config. These are process-scoped (GIT_CONFIG_*), never written to disk.
-  GIT_CONFIG_COUNT: "2",
+  // Allow file-protocol clones, keep test commits unsigned, and provide a commit
+  // identity so commits succeed even on hosts (CI) without a global git identity.
+  // These are process-scoped (GIT_CONFIG_*), never written to disk.
+  GIT_CONFIG_COUNT: "4",
   GIT_CONFIG_KEY_0: "protocol.file.allow",
   GIT_CONFIG_VALUE_0: "always",
   GIT_CONFIG_KEY_1: "commit.gpgsign",
   GIT_CONFIG_VALUE_1: "false",
+  GIT_CONFIG_KEY_2: "user.email",
+  GIT_CONFIG_VALUE_2: "test@example.com",
+  GIT_CONFIG_KEY_3: "user.name",
+  GIT_CONFIG_VALUE_3: "Test",
 };
 
 function run(args, options = {}) {
