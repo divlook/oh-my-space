@@ -45,7 +45,7 @@ function writeSources(cwd, content) {
   writeFileSync(
     join(cwd, "oms.yaml"),
     content
-      ?? "repos:\n  - alias: sample\n    url: git@example.com:org/repo.git\n    branch: main\n",
+      ?? "repos:\n  - alias: sample\n    remotes:\n      origin: git@example.com:org/repo.git\n    branch: main\n",
   );
 }
 
@@ -92,8 +92,19 @@ function gitOut(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", env: testEnv }).trim();
 }
 
-function sourceFor(alias, bare, branch = "main") {
-  return `repos:\n  - alias: ${alias}\n    url: file://${bare}\n    branch: ${branch}\n`;
+/** An empty bare repo — a valid push target that shares no history with the seeded origin. */
+function initEmptyBare() {
+  const bare = mkdtempSync(join(tmpdir(), "oms-source-"));
+  execFileSync("git", ["init", "--bare", "-b", "main", bare], { stdio: "ignore", env: testEnv });
+  return bare;
+}
+
+function sourceFor(alias, bare, branch = "main", extraRemotes = {}) {
+  const remoteLines = [`      origin: file://${bare}`];
+  for (const [name, url] of Object.entries(extraRemotes)) {
+    remoteLines.push(`      ${name}: file://${url}`);
+  }
+  return `repos:\n  - alias: ${alias}\n    remotes:\n${remoteLines.join("\n")}\n    branch: ${branch}\n`;
 }
 
 // --- help / scaffolding / validation (no git operations) ---
@@ -193,7 +204,7 @@ test("invalid oms.yaml fails before any disk side effects", () => {
   const cwd = tempWorkspace();
   writeSources(
     cwd,
-    "repos:\n  - alias: Invalid_Alias\n    url: git@example.com:org/repo.git\n",
+    "repos:\n  - alias: Invalid_Alias\n    remotes:\n      origin: git@example.com:org/repo.git\n",
   );
 
   const result = run(["sync", "sample"], { cwd });
@@ -579,4 +590,155 @@ test("doctor warns when git is older than the recommended 2.40", () => {
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
   assert.match(output, /git 2\.30 is older than the recommended 2\.40/);
+});
+
+// --- multiple remotes ---
+
+test("sync configures every declared remote on the submodule", () => {
+  const origin = initBareUpstream();
+  const upstream = initEmptyBare();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", origin, "main", { upstream }));
+
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const remotes = gitOut(join(cwd, "oms", "api"), "remote").split("\n");
+  assert.ok(remotes.includes("origin"), `origin missing: ${remotes}`);
+  assert.ok(remotes.includes("upstream"), `upstream missing: ${remotes}`);
+  assert.equal(
+    gitOut(join(cwd, "oms", "api"), "remote", "get-url", "upstream"),
+    `file://${upstream}`,
+  );
+});
+
+test("re-syncing adds a remote declared after the initial sync", () => {
+  const origin = initBareUpstream();
+  const upstream = initEmptyBare();
+  const cwd = initGitWorkspace();
+
+  writeSources(cwd, sourceFor("api", origin));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.ok(!gitOut(join(cwd, "oms", "api"), "remote").split("\n").includes("upstream"));
+
+  writeSources(cwd, sourceFor("api", origin, "main", { upstream }));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.ok(gitOut(join(cwd, "oms", "api"), "remote").split("\n").includes("upstream"));
+});
+
+test("push --remote targets the chosen remote and keeps origin as upstream", () => {
+  const origin = initBareUpstream();
+  const upstream = initEmptyBare();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", origin, "main", { upstream }));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  // Advance the submodule so the push has something to deliver.
+  writeFileSync(join(cwd, "oms", "api", "feature.txt"), "x");
+  git(join(cwd, "oms", "api"), "add", "-A");
+  git(join(cwd, "oms", "api"), "commit", "-m", "feature");
+  const head = gitOut(join(cwd, "oms", "api"), "rev-parse", "HEAD");
+
+  const result = run(["push", "api", "--remote", "upstream"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+
+  // upstream received main; origin did not, and main still tracks origin/main.
+  assert.equal(gitOut(upstream, "rev-parse", "main"), head);
+  assert.equal(
+    gitOut(join(cwd, "oms", "api"), "rev-parse", "--abbrev-ref", "main@{u}"),
+    "origin/main",
+  );
+});
+
+test("fetch --remote accepts multiple remotes", () => {
+  const origin = initBareUpstream();
+  const upstream = initEmptyBare();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", origin, "main", { upstream }));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const result = run(["fetch", "api", "--remote", "origin", "--remote", "upstream"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /fetched \(origin, upstream\)/);
+});
+
+test("push --remote with an unknown remote fails for that repo", () => {
+  const origin = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", origin));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const result = run(["push", "api", "--remote", "nope"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /unknown remote\(s\): nope/);
+});
+
+test("pull rejects more than one --remote", () => {
+  const origin = initBareUpstream();
+  const upstream = initEmptyBare();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", origin, "main", { upstream }));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const result = run(["pull", "api", "--remote", "origin", "--remote", "upstream"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /pull targets a single remote/);
+});
+
+test("an unknown remote fails only its repo and others still push", () => {
+  const originA = initBareUpstream();
+  const originB = initBareUpstream();
+  const upstreamB = initEmptyBare();
+  const cwd = initGitWorkspace();
+  writeSources(
+    cwd,
+    `${sourceFor("a", originA).trimEnd()}\n  - alias: b\n    remotes:\n      origin: file://${originB}\n      upstream: file://${upstreamB}\n    branch: main\n`,
+  );
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+
+  // Give b a commit so its upstream push delivers something.
+  writeFileSync(join(cwd, "oms", "b", "f.txt"), "x");
+  git(join(cwd, "oms", "b"), "add", "-A");
+  git(join(cwd, "oms", "b"), "commit", "-m", "b feature");
+  const headB = gitOut(join(cwd, "oms", "b"), "rev-parse", "HEAD");
+
+  // a lacks "upstream" → a fails; b has it → b pushes.
+  const result = run(["push", "a", "b", "--remote", "upstream"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /a: unknown remote\(s\): upstream/);
+  assert.equal(gitOut(upstreamB, "rev-parse", "main"), headB);
+});
+
+test("oms.yaml without an origin remote is rejected", () => {
+  const cwd = initGitWorkspace();
+  writeSources(
+    cwd,
+    "repos:\n  - alias: api\n    remotes:\n      upstream: git@example.com:org/repo.git\n",
+  );
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /must include an "origin" entry/);
+});
+
+test("legacy url key points to the 0.7.0 migration doc", () => {
+  const cwd = initGitWorkspace();
+  writeSources(
+    cwd,
+    "repos:\n  - alias: api\n    url: git@example.com:org/repo.git\n",
+  );
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /url is no longer supported/);
+  assert.match(
+    output,
+    /https:\/\/github\.com\/divlook\/oh-my-space\/blob\/[^/\s]+\/docs\/migrations\/0\.6\.x-to-0\.7\.0\.md/,
+  );
 });

@@ -49,10 +49,13 @@ Run `oms init` to scaffold a starter `oms.yaml`, or create one by hand in your p
 # yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
 repos:
   - alias: api
-    url: git@github.com:example/api.git
+    remotes:
+      origin: git@github.com:example/api.git
     branch: main
   - alias: web
-    url: git@github.com:example/web.git
+    remotes:
+      origin: git@github.com:example/web.git
+      upstream: git@github.com:upstream/web.git
 ```
 
 Sync and work:
@@ -66,6 +69,7 @@ oms sync --all                    # sync every registered source repo
 oms status                        # branch / pointer / dirty / ahead-behind per submodule
 oms checkout <alias> <branch>     # switch (or create a brand-new local branch)
 oms push <alias>...               # push the branch (lazy remote) + stage the pointer
+oms push <alias> --remote upstream  # target a specific remote (repeatable; defaults to origin)
 oms unsync <alias>...             # deinitialize and remove a submodule
 ```
 
@@ -83,7 +87,7 @@ git add oms/api && git commit     # record the pointer in your project history
 For an alias `api` checked out on `main`:
 
 ```
-.gitmodules            # registers oms/api -> url, branch
+.gitmodules            # registers oms/api -> origin url, branch
 oms/
 └── api/               # git submodule (a normal working tree, on a branch)
 ```
@@ -92,7 +96,7 @@ oms/
 
 ## Managing source repositories
 
-`oms.yaml` declares each source repo with `alias`, `url`, and optional `branch` (the baseline).
+`oms.yaml` declares each source repo with `alias`, a `remotes` mapping (which must include `origin`), and optional `branch` (the baseline).
 
 | Command | Runs in | Does | Notes |
 | --- | --- | --- | --- |
@@ -101,9 +105,9 @@ oms/
 | `oms sync <alias>` / `--all` | workspace root | Registers missing repos with `git submodule add`, initializes registered-but-uninitialized ones, fetches, and attaches the baseline branch. | Reproduces the recorded pointer on a fresh clone. |
 | `oms status [alias...]` / `--all` | anywhere under root | Prints branch, pointer state (`ok`/`moved`/`uninit`), dirtiness, and ahead/behind for each submodule. | `moved` means the working commit differs from the recorded pointer — stage/commit it. |
 | `oms checkout <alias> <branch>` | workspace root | `git switch` to the branch; creates it locally if it exists nowhere yet (no remote required). | `--from <ref>` sets the start point for a new branch. |
-| `oms fetch ...` | workspace root | `git fetch origin --prune` in each submodule. | |
-| `oms pull ...` | workspace root | `git pull --ff-only` on each submodule's current branch, then stages the moved pointer. | Requires the submodule to be on a branch with upstream. |
-| `oms push <alias>...` | workspace root | `git push -u origin <branch>` (creating the remote branch on first push), then stages the moved pointer. | `--commit` also commits the pointer update in the parent. |
+| `oms fetch ...` | workspace root | `git fetch <remote> --prune` in each submodule. | `--remote <name>` (repeatable) picks the remote(s); omit to choose interactively, defaults to `origin`. |
+| `oms pull ...` | workspace root | `git pull --ff-only <remote>` on each submodule's current branch, then stages the moved pointer. | Requires the submodule to be on a branch. `--remote <name>` selects a single remote (defaults to `origin`). |
+| `oms push <alias>...` | workspace root | `git push <remote> <branch>` (creating the remote branch on first push), then stages the moved pointer. | `--remote <name>` (repeatable) picks the remote(s), defaults to `origin`; upstream is set only for `origin`. `--commit` also commits the pointer update in the parent. |
 | `oms unsync <alias>` / `--all` | workspace root | `git submodule deinit` + `git rm` for the alias; drops an empty `.gitmodules`. | Keeps the `oms.yaml` entry. Use `--force` to discard uncommitted changes. |
 
 ## `oms.yaml` format
@@ -112,17 +116,20 @@ oms/
 # yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
 repos:
   - alias: service-a
-    url: git@github.com:example/service-a.git
+    remotes:
+      origin: git@github.com:example/service-a.git
     branch: main
   - alias: docs
-    url: https://github.com/example/docs.git
+    remotes:
+      origin: https://github.com/example/docs.git
+      upstream: https://github.com/upstream/docs.git
 ```
 
 Rules:
 
 - `repos` must be a non-empty array.
 - `alias` must be unique and match `/^[a-z0-9][a-z0-9-]*$/`.
-- `url` is required.
+- `remotes` is required and must include an `origin` entry; each value is a clonable git URL. `origin` becomes the submodule's primary remote, and additional remotes are configured on `oms sync`.
 - `branch` is optional; when omitted the remote's default branch is used as the baseline.
 
 JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json` for YAML LSPs).
