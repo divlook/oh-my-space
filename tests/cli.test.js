@@ -116,6 +116,7 @@ test("help is exposed as oms with the submodule commands", () => {
   assert.match(result.stdout, /\binit\b/);
   assert.match(result.stdout, /\bsync\b/);
   assert.match(result.stdout, /\bstatus\b/);
+  assert.match(result.stdout, /\bswitch\b/);
   assert.match(result.stdout, /\bcheckout\b/);
   assert.match(result.stdout, /\bunsync\b/);
   assert.doesNotMatch(result.stdout, /\bworktree\b/);
@@ -284,16 +285,16 @@ test("sync rejects a missing branch via preflight and leaves no debris", () => {
   assert.equal(existsSync(join(cwd, ".gitmodules")), false);
 });
 
-test("checkout creates a brand-new local branch without any remote precondition", () => {
+test("switch creates a brand-new local branch without any remote precondition", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
 
-  // feature/new exists neither locally nor on origin — checkout must still succeed locally.
-  const co = run(["checkout", "api", "feature/new"], { cwd });
-  const output = co.stdout + co.stderr;
-  assert.equal(co.status, 0, output);
+  // feature/new exists neither locally nor on origin — switch must still succeed locally.
+  const sw = run(["switch", "api", "feature/new"], { cwd });
+  const output = sw.stdout + sw.stderr;
+  assert.equal(sw.status, 0, output);
   assert.match(output, /created new local branch/);
   assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "feature/new");
 
@@ -304,6 +305,21 @@ test("checkout creates a brand-new local branch without any remote precondition"
     { encoding: "utf8", env: testEnv },
   );
   assert.notEqual(upstreamCheck.status, 0);
+});
+
+test("switch onto an existing local branch just switches", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  // Bring dev down as a local branch via checkout, switch back to main, then switch to dev.
+  assert.equal(run(["checkout", "api", "dev"], { cwd }).status, 0);
+  assert.equal(run(["switch", "api", "main"], { cwd }).status, 0);
+
+  const sw = run(["switch", "api", "dev"], { cwd });
+  assert.equal(sw.status, 0, sw.stdout + sw.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "dev");
 });
 
 test("checkout switches onto an existing remote branch with tracking", () => {
@@ -321,6 +337,41 @@ test("checkout switches onto an existing remote branch with tracking", () => {
   );
 });
 
+test("checkout refuses a branch absent on origin and points at switch", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  // feature/new exists neither locally nor on origin — checkout is remote-only, so it must refuse.
+  const co = run(["checkout", "api", "feature/new"], { cwd });
+  const output = co.stdout + co.stderr;
+  assert.equal(co.status, 1, output);
+  assert.match(output, /not found on origin/);
+  assert.match(output, /oms switch api feature\/new/);
+});
+
+test("switch and checkout error without hanging when args are omitted in a non-TTY", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  // spawnSync gives a non-TTY stdin, so an omitted alias must fail fast rather than prompt.
+  const noAlias = run(["switch"], { cwd });
+  assert.equal(noAlias.status, 1, noAlias.stdout + noAlias.stderr);
+  assert.match(noAlias.stdout + noAlias.stderr, /not a TTY/);
+
+  // Alias given but branch omitted must also fail fast for both commands.
+  const noBranchSwitch = run(["switch", "api"], { cwd });
+  assert.equal(noBranchSwitch.status, 1, noBranchSwitch.stdout + noBranchSwitch.stderr);
+  assert.match(noBranchSwitch.stdout + noBranchSwitch.stderr, /not a TTY/);
+
+  const noBranchCheckout = run(["checkout", "api"], { cwd });
+  assert.equal(noBranchCheckout.status, 1, noBranchCheckout.stdout + noBranchCheckout.stderr);
+  assert.match(noBranchCheckout.stdout + noBranchCheckout.stderr, /not a TTY/);
+});
+
 test("push lazily creates the remote branch and stages the moved pointer", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
@@ -331,7 +382,7 @@ test("push lazily creates the remote branch and stages the moved pointer", () =>
   git(cwd, "commit", "-m", "add api");
 
   // New local branch + a commit, then push (the remote branch does not exist yet).
-  assert.equal(run(["checkout", "api", "feature/x"], { cwd }).status, 0);
+  assert.equal(run(["switch", "api", "feature/x"], { cwd }).status, 0);
   const wt = join(cwd, "oms", "api");
   writeFileSync(join(wt, "new.txt"), "hi");
   git(wt, "add", "new.txt");
