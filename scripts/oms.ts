@@ -72,6 +72,8 @@ const LEGACY_MANIFEST = "sources.yaml";
 const LEGACY_DATA_DIRNAME = "sources";
 const RENAME_MIGRATION_DOC = "docs/migrations/0.3.x-to-0.4.0.md";
 const WORKTREE_MIGRATION_DOC = "docs/migrations/0.5.x-to-0.6.0.md";
+/** GitHub blob base for the clickable doc permalinks shown in CLI messages. */
+const DOCS_REPO_BLOB_BASE = "https://github.com/divlook/oh-my-space/blob";
 const MIN_GIT_MAJOR = 2;
 const MIN_GIT_MINOR = 40;
 
@@ -323,7 +325,7 @@ function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: 
   log.error(
     `detected legacy ${artifacts} at ${dir}.\n` +
       `  oh-my-space 0.4.0 renamed the manifest to ${MANIFEST_FILENAME} and the data directory to ${DATA_DIRNAME}/.\n` +
-      `  See ${RENAME_MIGRATION_DOC} for the manual steps. Aborting to avoid destructive change.`,
+      `  See ${docUrl(RENAME_MIGRATION_DOC)} for the manual steps. Aborting to avoid destructive change.`,
   );
 }
 
@@ -363,7 +365,7 @@ function abortOnLegacyWorktree(repoRoot: string, repos: Repo[]): boolean {
   if (!stale) return false;
   log.error(
     `detected a legacy bare clone at ${DATA_DIRNAME}/${stale.alias}/.bare. oh-my-space 0.6.0 manages sources as git submodules.\n` +
-      `  See ${WORKTREE_MIGRATION_DOC} for the manual steps. Aborting to avoid destructive change.`,
+      `  See ${docUrl(WORKTREE_MIGRATION_DOC)} for the manual steps. Aborting to avoid destructive change.`,
   );
   return true;
 }
@@ -1007,6 +1009,20 @@ function readJson<T>(path: string): T | null {
 function readPackageVersion(): string {
   const pkg = readJson<{ version?: string }>(join(packageRoot, "package.json"));
   return pkg?.version ?? "0.0.0";
+}
+
+/** The commit baked in at build time, or null when unavailable (dev/no-git build). */
+function readBuildCommit(): string | null {
+  const info = readJson<{ commit?: string | null }>(
+    join(dirname(fileURLToPath(import.meta.url)), "build-info.json"),
+  );
+  return info?.commit ?? null;
+}
+
+/** Clickable GitHub permalink for a repo doc, pinned to the build commit; falls back to the version tag. */
+function docUrl(relPath: string): string {
+  const ref = readBuildCommit() ?? `v${readPackageVersion()}`;
+  return `${DOCS_REPO_BLOB_BASE}/${ref}/${relPath}`;
 }
 
 async function exitWith(action: Promise<number>): Promise<void> {

@@ -471,7 +471,10 @@ test("legacy bare clone (oms/<alias>/.bare) blocks sync with the 0.6.0 migration
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
   assert.match(output, /legacy bare clone/);
-  assert.match(output, /docs\/migrations\/0\.5\.x-to-0\.6\.0\.md/);
+  assert.match(
+    output,
+    /https:\/\/github\.com\/divlook\/oh-my-space\/blob\/[^/\s]+\/docs\/migrations\/0\.5\.x-to-0\.6\.0\.md/,
+  );
 });
 
 test("legacy sources.yaml without oms.yaml is blocked with migration hint", () => {
@@ -485,7 +488,10 @@ test("legacy sources.yaml without oms.yaml is blocked with migration hint", () =
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
   assert.match(output, /detected legacy 'sources\.yaml'/);
-  assert.match(output, /docs\/migrations\/0\.3\.x-to-0\.4\.0\.md/);
+  assert.match(
+    output,
+    /https:\/\/github\.com\/divlook\/oh-my-space\/blob\/[^/\s]+\/docs\/migrations\/0\.3\.x-to-0\.4\.0\.md/,
+  );
 });
 
 test("legacy sources/ directory inside an oms.yaml workspace is blocked", () => {
@@ -497,7 +503,10 @@ test("legacy sources/ directory inside an oms.yaml workspace is blocked", () => 
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
   assert.match(output, /detected legacy 'sources\/'/);
-  assert.match(output, /docs\/migrations\/0\.3\.x-to-0\.4\.0\.md/);
+  assert.match(
+    output,
+    /https:\/\/github\.com\/divlook\/oh-my-space\/blob\/[^/\s]+\/docs\/migrations\/0\.3\.x-to-0\.4\.0\.md/,
+  );
 });
 
 test("unrelated sources/ directory above the workspace does not block oms", () => {
