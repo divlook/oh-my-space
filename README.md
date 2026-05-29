@@ -117,10 +117,10 @@ JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://
 
 ## Migrating between versions
 
-자세한 마이그레이션 절차는 [`docs/migrations/`](./docs/migrations/) 에 버전별로 정리되어 있습니다.
+Detailed migration steps are organized per version under [`docs/migrations/`](./docs/migrations/).
 
-- [0.3.x → 0.4.0](./docs/migrations/0.3.x-to-0.4.0.md) — `sources.yaml`/`sources/` 가 `oms.yaml`/`oms/` 로 rename
-- [0.2.x → 0.3.0](./docs/migrations/0.2.x-to-0.3.0.md) — submodule 에서 bare clone + worktree 로 데이터 모델 전환
+- [0.3.x → 0.4.0](./docs/migrations/0.3.x-to-0.4.0.md) — renames `sources.yaml`/`sources/` to `oms.yaml`/`oms/`
+- [0.2.x → 0.3.0](./docs/migrations/0.2.x-to-0.3.0.md) — switches the data model from submodules to bare clone + worktrees
 
 ## License
 
