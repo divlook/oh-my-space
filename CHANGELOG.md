@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.7.1
+
+### Patch Changes
+
+- [#22](https://github.com/divlook/oh-my-space/pull/22) [`7f720bb`](https://github.com/divlook/oh-my-space/commit/7f720bb386a7af100835eb9e71bd8d9d7ea62f30) Thanks [@divlook](https://github.com/divlook)! - Fix `oms unsync` leaving orphaned state behind when several aliases are unsynced at once. The `.gitmodules` section and `.git/config` entry are now stripped explicitly instead of relying on `git rm`'s implicit edit, `.gitmodules` is removed once no submodule remains registered (rather than only when the file is byte-empty), and the empty `.git/modules/oms/` container is cleaned up. Failed aliases (for example a submodule with uncommitted or untracked changes) are now named at the end of the run so a buried failure isn't mistaken for success.
+
 ## 0.7.0
 
 ### Minor Changes
