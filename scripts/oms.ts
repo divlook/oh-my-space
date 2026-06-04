@@ -67,7 +67,7 @@ type GitResult = {
 
 type ManageCommand = "fetch" | "pull" | "push";
 
-const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_@-]*$/;
 const REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const ALLOWED_TOP_KEYS = new Set(["repos"]);
 const ALLOWED_ITEM_KEYS = new Set(["alias", "remotes", "branch"]);

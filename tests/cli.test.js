@@ -205,7 +205,7 @@ test("invalid oms.yaml fails before any disk side effects", () => {
   const cwd = tempWorkspace();
   writeSources(
     cwd,
-    "repos:\n  - alias: Invalid_Alias\n    remotes:\n      origin: git@example.com:org/repo.git\n",
+    "repos:\n  - alias: invalid.alias\n    remotes:\n      origin: git@example.com:org/repo.git\n",
   );
 
   const result = run(["sync", "sample"], { cwd });
@@ -270,6 +270,22 @@ test("sync registers a submodule on its baseline branch and tracks it in the par
   if (existsSync(join(cwd, ".gitignore"))) {
     assert.doesNotMatch(readFileSync(join(cwd, ".gitignore"), "utf8"), /^oms\/$/m);
   }
+});
+
+test("sync accepts aliases with underscore, dash, and at-sign", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const alias = "alfred_af-101@prod";
+  writeSources(cwd, sourceFor(alias, bare));
+
+  const result = run(["sync", alias], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+
+  assert.equal(existsSync(join(cwd, "oms", alias, ".git")), true);
+
+  const modules = readFileSync(join(cwd, ".gitmodules"), "utf8");
+  assert.match(modules, new RegExp(`path = oms/${alias.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}`));
 });
 
 test("sync rejects a missing branch via preflight and leaves no debris", () => {

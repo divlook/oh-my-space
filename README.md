@@ -132,7 +132,12 @@ repos:
 Rules:
 
 - `repos` must be a non-empty array.
-- `alias` must be unique and match `/^[a-z0-9][a-z0-9-]*$/`.
+- `alias` must be unique.
+  - Used as the directory name under `oms/<alias>/`.
+  - First character: ASCII lowercase letter or digit.
+  - Remaining characters: ASCII lowercase letters, digits, `-`, `_`, `@`.
+  - Not allowed: uppercase letters, `/`, `\`, `.`, whitespace.
+  - Pattern: `/^[a-z0-9][a-z0-9_@-]*$/`.
 - `remotes` is required and must include an `origin` entry; each value is a clonable git URL. `origin` becomes the submodule's primary remote, and additional remotes are configured on `oms sync`.
 - `branch` is optional; when omitted the remote's default branch is used as the baseline.
 
