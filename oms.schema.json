@@ -17,8 +17,8 @@
         "properties": {
           "alias": {
             "type": "string",
-            "pattern": "^[a-z0-9][a-z0-9-]*$",
-            "description": "Unique identifier; becomes the directory name under oms/."
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_@-]*$",
+            "description": "Unique identifier; becomes the directory name under oms/. First character must be a letter or digit; remaining characters may use letters, digits, -, _, and @."
           },
           "remotes": {
             "type": "object",
