@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.9.0
+
+### Minor Changes
+
+- [#26](https://github.com/divlook/oh-my-space/pull/26) [`e988022`](https://github.com/divlook/oh-my-space/commit/e988022000579f79cb76d08e04255f72eb4c2a65) Thanks [@divlook](https://github.com/divlook)! - Allow `oms.yaml` aliases to include underscores and `@`, while keeping aliases lowercase and still requiring the first character to be an ASCII lowercase letter or digit.
+
 ## 0.8.0
 
 ### Minor Changes
