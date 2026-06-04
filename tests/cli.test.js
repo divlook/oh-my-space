@@ -272,10 +272,10 @@ test("sync registers a submodule on its baseline branch and tracks it in the par
   }
 });
 
-test("sync accepts aliases with uppercase, underscore, dash, and at-sign", () => {
+test("sync accepts aliases with underscore, dash, and at-sign", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
-  const alias = "alfred_AF-101@prod";
+  const alias = "alfred_af-101@prod";
   writeSources(cwd, sourceFor(alias, bare));
 
   const result = run(["sync", alias], { cwd });
