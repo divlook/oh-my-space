@@ -297,39 +297,70 @@ function normalizePath(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
-function includesPathPart(path: string, parts: string[]): boolean {
-  const actual = pathParts(path);
-  return parts.every((part) => actual.includes(part));
-}
-
 function isPackageRootNamed(packageRootPath: string): boolean {
   return pathParts(packageRootPath).at(-1) === PACKAGE_NAME;
 }
 
-function isNpmGlobalLayout(packageRootPath: string, binPath: string): boolean {
+function hasBinPath(binPaths: string[], expectedPaths: string[]): boolean {
+  return expectedPaths.some((expected) => binPaths.includes(normalizePath(expected)));
+}
+
+function commandShimPaths(prefix: string, name: string): string[] {
+  return [`${prefix}/${name}`, `${prefix}/${name}.cmd`, `${prefix}/${name}.ps1`];
+}
+
+function isNpmGlobalLayout(packageRootPath: string, binPaths: string[]): boolean {
   const root = normalizePath(packageRootPath);
-  const bin = normalizePath(binPath);
   if (root.endsWith(`/lib/node_modules/${PACKAGE_NAME}`)) {
     const prefix = root.slice(0, -`/lib/node_modules/${PACKAGE_NAME}`.length);
-    return bin === `${prefix}/bin/oms` || bin === `${prefix}/bin/oms.cmd` || bin === `${prefix}/bin/oms.ps1`;
+    return hasBinPath(binPaths, commandShimPaths(`${prefix}/bin`, "oms"));
   }
   if (root.endsWith(`/node_modules/${PACKAGE_NAME}`)) {
     const prefix = root.slice(0, -`/node_modules/${PACKAGE_NAME}`.length);
-    return bin === `${prefix}/oms` || bin === `${prefix}/oms.cmd` || bin === `${prefix}/oms.ps1`;
+    return hasBinPath(binPaths, commandShimPaths(prefix, "oms"));
   }
   return false;
 }
 
+function isPnpmGlobalLayout(packageRootPath: string, binPaths: string[]): boolean {
+  const root = normalizePath(packageRootPath);
+  const suffix = `/node_modules/${PACKAGE_NAME}`;
+  const marker = "/global/";
+  const markerIndex = root.lastIndexOf(marker);
+  if (markerIndex === -1 || !root.endsWith(suffix)) return false;
+  const storeVersion = root.slice(markerIndex + marker.length, -suffix.length);
+  if (!/^\d+$/.test(storeVersion)) return false;
+  const prefix = root.slice(0, markerIndex);
+  return hasBinPath(binPaths, [...commandShimPaths(prefix, "oms"), ...commandShimPaths(`${prefix}/bin`, "oms")]);
+}
+
+function isYarnGlobalLayout(packageRootPath: string, binPaths: string[]): boolean {
+  const root = normalizePath(packageRootPath);
+  const suffix = `/.config/yarn/global/node_modules/${PACKAGE_NAME}`;
+  if (!root.endsWith(suffix)) return false;
+  const home = root.slice(0, -suffix.length);
+  return hasBinPath(binPaths, commandShimPaths(`${home}/.yarn/bin`, "oms"));
+}
+
+function isBunGlobalLayout(packageRootPath: string, binPaths: string[]): boolean {
+  const root = normalizePath(packageRootPath);
+  const suffix = `/.bun/install/global/node_modules/${PACKAGE_NAME}`;
+  if (!root.endsWith(suffix)) return false;
+  const home = root.slice(0, -suffix.length);
+  return hasBinPath(binPaths, commandShimPaths(`${home}/.bun/bin`, "oms"));
+}
+
 function globalManagerFromPaths(evidence: RuntimeEvidence): PackageManager | null {
   const root = normalizePath(evidence.realPackageRoot);
-  const bin = evidence.realPathBin ?? evidence.realRunningBin;
-  const normalizedBin = normalizePath(bin);
+  const binPaths = [evidence.pathBin, evidence.runningBin, evidence.realPathBin, evidence.realRunningBin]
+    .filter((path): path is string => Boolean(path))
+    .map(normalizePath);
   const managers = new Set<PackageManager>();
 
-  if (isNpmGlobalLayout(root, normalizedBin)) managers.add("npm");
-  if (includesPathPart(root, ["pnpm", "global"]) || root.includes("/pnpm-global/")) managers.add("pnpm");
-  if (includesPathPart(root, ["yarn", "global"]) || root.includes("/.config/yarn/global/")) managers.add("yarn");
-  if (includesPathPart(root, [".bun", "install", "global"]) || root.includes("/bun/install/global/")) managers.add("bun");
+  if (isNpmGlobalLayout(root, binPaths)) managers.add("npm");
+  if (isPnpmGlobalLayout(root, binPaths)) managers.add("pnpm");
+  if (isYarnGlobalLayout(root, binPaths)) managers.add("yarn");
+  if (isBunGlobalLayout(root, binPaths)) managers.add("bun");
 
   return managers.size === 1 ? [...managers][0] : null;
 }
@@ -1671,6 +1702,7 @@ function commandAvailability(command: UpdateCommand): boolean {
   const result = spawnSync(command.executable, ["--version"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    shell: process.platform === "win32",
   });
   return result.status === 0;
 }
@@ -1682,7 +1714,7 @@ function runUpdateCommand(command: UpdateCommand): number {
     return Number.parseInt(mocked, 10);
   }
   log.step(formatCommand(command));
-  const result = spawnSync(command.executable, command.args, { stdio: "inherit", shell: false });
+  const result = spawnSync(command.executable, command.args, { stdio: "inherit", shell: process.platform === "win32" });
   if (result.status !== null) return result.status;
   log.error(`Package manager exited from signal ${result.signal ?? "unknown"}.`);
   return 1;

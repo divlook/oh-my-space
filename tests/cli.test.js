@@ -982,6 +982,30 @@ test("update detects global npm context from runtime evidence", () => {
   assert.match(output, /npm install -g oh-my-space@latest/);
 });
 
+test("update detects global npm context when PATH shim realpath points into package", () => {
+  const prefix = tempWorkspace();
+  const packageRoot = join(prefix, "lib", "node_modules", "oh-my-space");
+  const runningBin = join(packageRoot, "dist", "oms.js");
+  const pathBin = join(prefix, "bin", "oms");
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
+        packageRoot,
+        realPackageRoot: packageRoot,
+        runningBin,
+        realRunningBin: runningBin,
+        pathBin,
+        realPathBin: runningBin,
+        packageName: "oh-my-space",
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Detected context: global npm install/);
+  assert.match(output, /npm install -g oh-my-space@latest/);
+});
+
 test("update detects Windows npm global context from runtime evidence", () => {
   const result = run(["update", "--check"], {
     env: updateEnv({
@@ -1030,6 +1054,60 @@ test("update does not treat project lib node_modules as global npm", () => {
   assert.match(output, /Detected context: project-local install/);
   assert.match(output, /Automatic update is only supported/);
   assert.doesNotMatch(output, /Update command completed/);
+});
+
+test("update does not treat project paths containing pnpm global tokens as global", () => {
+  const project = join(tempWorkspace(), "pnpm", "global", "app");
+  const packageRoot = join(project, "node_modules", "oh-my-space");
+  const runningBin = join(packageRoot, "dist", "oms.js");
+  const pathBin = join(project, "node_modules", ".bin", "oms");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(project, "package.json"), JSON.stringify({ devDependencies: { "oh-my-space": "0.9.0" } }));
+
+  const result = run(["update", "--yes"], {
+    env: updateEnv({
+      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
+        packageRoot,
+        realPackageRoot: packageRoot,
+        runningBin,
+        realRunningBin: runningBin,
+        pathBin,
+        realPathBin: runningBin,
+        packageName: "oh-my-space",
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "1",
+      OMS_TEST_UPDATE_EXIT: "0",
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Detected context: project-local install/);
+  assert.match(output, /Automatic update is only supported/);
+  assert.doesNotMatch(output, /Update command completed/);
+});
+
+test("update detects pnpm global context only with matching global shim", () => {
+  const prefix = tempWorkspace();
+  const packageRoot = join(prefix, "global", "5", "node_modules", "oh-my-space");
+  const runningBin = join(packageRoot, "dist", "oms.js");
+  const pathBin = join(prefix, "oms");
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
+        packageRoot,
+        realPackageRoot: packageRoot,
+        runningBin,
+        realRunningBin: runningBin,
+        pathBin,
+        realPathBin: runningBin,
+        packageName: "oh-my-space",
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Detected context: global pnpm install/);
+  assert.match(output, /pnpm add -g oh-my-space@latest/);
 });
 
 test("update reports non-mutating contexts with guidance", () => {
