@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
+import semver from "semver";
 
 const cli = resolve("dist/oms.js");
 
@@ -37,11 +38,21 @@ function run(args, options = {}) {
   });
 }
 
+// Read the version under test so release bumps do not invalidate these fixtures.
+const currentVersion = JSON.parse(readFileSync(resolve("package.json"), "utf8")).version;
+// A registry latest strictly newer than the installed version.
+const newerVersion = semver.inc(currentVersion, "patch");
+
+// Escapes dots so embedded version strings match literally.
+function versionPattern(text) {
+  return new RegExp(text.replaceAll(".", "\\."));
+}
+
 function updateEnv(overrides = {}) {
   return {
     ...testEnv,
     OMS_TEST_MODE: "1",
-    OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "0.9.1" } }),
+    OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: newerVersion } }),
     ...overrides,
   };
 }
@@ -899,7 +910,7 @@ test("legacy url key points to the 0.7.0 migration doc", () => {
 test("update --check reports up to date without detecting install context", () => {
   const result = run(["update", "--check"], {
     env: updateEnv({
-      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "0.9.0" } }),
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: currentVersion } }),
       OMS_TEST_INSTALL_CONTEXT: installContext("global", {
         updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
       }),
@@ -922,8 +933,8 @@ test("update --check reports update availability and global command", () => {
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.match(output, /Current version: 0\.9\.0/);
-  assert.match(output, /Latest version: 0\.9\.1/);
+  assert.match(output, versionPattern(`Current version: ${currentVersion}`));
+  assert.match(output, versionPattern(`Latest version: ${newerVersion}`));
   assert.match(output, /Update available/);
   assert.match(output, /Detected context: global npm install/);
   assert.match(output, /Selected command: npm install -g oh-my-space@latest/);
@@ -950,7 +961,7 @@ test("update treats invalid registry semver as a failure", () => {
 
 test("update treats current newer than registry latest as non-mutating success", () => {
   const result = run(["update"], {
-    env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "0.8.0" } }) }),
+    env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "0.0.0" } }) }),
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
@@ -1183,13 +1194,13 @@ test("update --yes runs a confident global command and warns on verification mis
       }),
       OMS_TEST_MANAGER_AVAILABLE: "1",
       OMS_TEST_UPDATE_EXIT: "0",
-      OMS_TEST_VERIFY_VERSION: "0.9.0",
+      OMS_TEST_VERIFY_VERSION: currentVersion,
     }),
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /Selected command: pnpm add -g oh-my-space@latest/);
-  assert.match(output, /Post-update verification saw 0\.9\.0, expected 0\.9\.1/);
+  assert.match(output, versionPattern(`Post-update verification saw ${currentVersion}, expected ${newerVersion}`));
   assert.match(output, /Update command completed/);
 });
 
