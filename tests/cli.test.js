@@ -982,6 +982,56 @@ test("update detects global npm context from runtime evidence", () => {
   assert.match(output, /npm install -g oh-my-space@latest/);
 });
 
+test("update detects Windows npm global context from runtime evidence", () => {
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
+        packageRoot: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\oh-my-space",
+        realPackageRoot: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\oh-my-space",
+        runningBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\oh-my-space\\dist\\oms.js",
+        realRunningBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\oh-my-space\\dist\\oms.js",
+        pathBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\oms.cmd",
+        realPathBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\oms.cmd",
+        packageName: "oh-my-space",
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Detected context: global npm install/);
+  assert.match(output, /npm install -g oh-my-space@latest/);
+});
+
+test("update does not treat project lib node_modules as global npm", () => {
+  const project = tempWorkspace();
+  const packageRoot = join(project, "lib", "node_modules", "oh-my-space");
+  const runningBin = join(packageRoot, "dist", "oms.js");
+  const pathBin = join(project, "node_modules", ".bin", "oms");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(project, "package.json"), JSON.stringify({ devDependencies: { "oh-my-space": "0.9.0" } }));
+
+  const result = run(["update", "--yes"], {
+    env: updateEnv({
+      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
+        packageRoot,
+        realPackageRoot: packageRoot,
+        runningBin,
+        realRunningBin: runningBin,
+        pathBin,
+        realPathBin: pathBin,
+        packageName: "oh-my-space",
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "1",
+      OMS_TEST_UPDATE_EXIT: "0",
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Detected context: project-local install/);
+  assert.match(output, /Automatic update is only supported/);
+  assert.doesNotMatch(output, /Update command completed/);
+});
+
 test("update reports non-mutating contexts with guidance", () => {
   for (const kind of ["project", "ephemeral", "development", "unknown"]) {
     const result = run(["update", "--yes"], {
@@ -1028,6 +1078,22 @@ test("update without --yes in non-interactive mode does not mutate", () => {
   assert.equal(result.status, 0, output);
   assert.match(output, /Re-run with --yes/);
   assert.doesNotMatch(output, /Update command completed/);
+});
+
+test("update without --yes in non-interactive mode does not require manager availability", () => {
+  const result = run(["update"], {
+    env: updateEnv({
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "0",
+      OMS_TEST_UPDATE_EXIT: "0",
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Re-run with --yes/);
+  assert.doesNotMatch(output, /not executable from PATH/);
 });
 
 test("update normalizes package-manager failure to exit 1", () => {

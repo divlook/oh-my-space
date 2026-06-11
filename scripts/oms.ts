@@ -10,7 +10,7 @@ import {
   rmdirSync,
   writeFileSync,
 } from "node:fs";
-import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { cancel, isCancel, log, multiselect, select, text } from "@clack/prompts";
@@ -290,7 +290,11 @@ function projectGuidance(packageRootPath: string): string[] {
 }
 
 function pathParts(path: string): string[] {
-  return safeRealpath(path).split(sep).filter(Boolean);
+  return normalizePath(safeRealpath(path)).split("/").filter(Boolean);
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/");
 }
 
 function includesPathPart(path: string, parts: string[]): boolean {
@@ -299,22 +303,34 @@ function includesPathPart(path: string, parts: string[]): boolean {
 }
 
 function isPackageRootNamed(packageRootPath: string): boolean {
-  return basename(packageRootPath) === PACKAGE_NAME || basename(safeRealpath(packageRootPath)) === PACKAGE_NAME;
+  return pathParts(packageRootPath).at(-1) === PACKAGE_NAME;
+}
+
+function isNpmGlobalLayout(packageRootPath: string, binPath: string): boolean {
+  const root = normalizePath(packageRootPath);
+  const bin = normalizePath(binPath);
+  if (root.endsWith(`/lib/node_modules/${PACKAGE_NAME}`)) {
+    const prefix = root.slice(0, -`/lib/node_modules/${PACKAGE_NAME}`.length);
+    return bin === `${prefix}/bin/oms` || bin === `${prefix}/bin/oms.cmd` || bin === `${prefix}/bin/oms.ps1`;
+  }
+  if (root.endsWith(`/node_modules/${PACKAGE_NAME}`)) {
+    const prefix = root.slice(0, -`/node_modules/${PACKAGE_NAME}`.length);
+    return bin === `${prefix}/oms` || bin === `${prefix}/oms.cmd` || bin === `${prefix}/oms.ps1`;
+  }
+  return false;
 }
 
 function globalManagerFromPaths(evidence: RuntimeEvidence): PackageManager | null {
-  const root = evidence.realPackageRoot;
+  const root = normalizePath(evidence.realPackageRoot);
   const bin = evidence.realPathBin ?? evidence.realRunningBin;
+  const normalizedBin = normalizePath(bin);
   const managers = new Set<PackageManager>();
 
-  if (root.includes(`${sep}lib${sep}node_modules${sep}${PACKAGE_NAME}`)) managers.add("npm");
-  if (includesPathPart(root, ["pnpm", "global"]) || root.includes(`${sep}pnpm-global${sep}`)) managers.add("pnpm");
-  if (includesPathPart(root, ["yarn", "global"]) || root.includes(`${sep}.config${sep}yarn${sep}global${sep}`)) managers.add("yarn");
-  if (includesPathPart(root, [".bun", "install", "global"]) || root.includes(`${sep}bun${sep}install${sep}global${sep}`)) managers.add("bun");
+  if (isNpmGlobalLayout(root, normalizedBin)) managers.add("npm");
+  if (includesPathPart(root, ["pnpm", "global"]) || root.includes("/pnpm-global/")) managers.add("pnpm");
+  if (includesPathPart(root, ["yarn", "global"]) || root.includes("/.config/yarn/global/")) managers.add("yarn");
+  if (includesPathPart(root, [".bun", "install", "global"]) || root.includes("/bun/install/global/")) managers.add("bun");
 
-  if (bin.endsWith(`${sep}bin${sep}oms`) && root.includes(`${sep}lib${sep}node_modules${sep}${PACKAGE_NAME}`)) {
-    managers.add("npm");
-  }
   return managers.size === 1 ? [...managers][0] : null;
 }
 
@@ -356,7 +372,7 @@ function detectInstallContext(): InstallContext {
     };
   }
 
-  if (evidence.realPackageRoot.includes(`${sep}node_modules${sep}${PACKAGE_NAME}`)) {
+  if (normalizePath(evidence.realPackageRoot).includes(`/node_modules/${PACKAGE_NAME}`)) {
     const manager = globalManagerFromPaths(evidence);
     if (manager && isPackageRootNamed(evidence.realPackageRoot)) {
       const updateCommand = globalUpdateCommand(manager);
@@ -1738,11 +1754,6 @@ async function runUpdate(options: UpdateOptions): Promise<number> {
   }
 
   const command = context.updateCommand;
-  if (!commandAvailability(command)) {
-    log.error(`${command.executable} is not executable from PATH. Would have run: ${formatCommand(command)}`);
-    return 1;
-  }
-
   if (!options.yes) {
     if (!process.stdin.isTTY) {
       log.info(`Non-interactive shell detected. Re-run with --yes to execute: ${formatCommand(command)}`);
@@ -1753,6 +1764,11 @@ async function runUpdate(options: UpdateOptions): Promise<number> {
       log.info("Update cancelled; no changes made.");
       return 0;
     }
+  }
+
+  if (!commandAvailability(command)) {
+    log.error(`${command.executable} is not executable from PATH. Would have run: ${formatCommand(command)}`);
+    return 1;
   }
 
   const updateExit = runUpdateCommand(command);
