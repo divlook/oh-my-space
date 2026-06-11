@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.9.1
+
+### Patch Changes
+
+- [#28](https://github.com/divlook/oh-my-space/pull/28) [`4ebe217`](https://github.com/divlook/oh-my-space/commit/4ebe21768252e913315f66d5b4ebf5f3cedcd9f9) Thanks [@divlook](https://github.com/divlook)! - Add the `oms update` command for safe CLI self-update checks and global updates.
+
 ## 0.9.0
 
 ### Minor Changes
