@@ -23,7 +23,7 @@
 - [x] 3.3 Make `--check` non-mutating even when combined with `--yes`, and show context only when an update is available.
 - [x] 3.4 Prompt for explicit confirmation before running a confident global update unless `--yes` is provided.
 - [x] 3.5 In non-interactive mode without `--yes`, print the selected command and rerun guidance without mutating.
-- [x] 3.6 Run reinstall-style `@latest` global package-manager commands with `shell: false` and inherited stdio.
+- [x] 3.6 Run reinstall-style `@latest` global package-manager commands with inherited stdio, using `shell: false` on POSIX and shell execution on Windows for `.cmd`/`.bat` shims.
 - [x] 3.7 Refuse automatic mutation for project, ephemeral, development, and unknown contexts while printing safe guidance.
 - [x] 3.8 Keep update outcomes within existing `0`/`1`/`2` exit-code conventions and normalize package-manager failures to `1`.
 - [x] 3.9 Run best-effort post-update `oms --version` verification and report mismatches as warnings without failing successful updates.

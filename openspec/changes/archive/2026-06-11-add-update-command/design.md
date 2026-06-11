@@ -78,7 +78,7 @@ Interactive confirmation requires an explicit yes/no choice with no default sele
 
 ### Keep command execution local and transparent
 
-The update process will spawn the detected package manager command directly with `shell: false` and inherited stdio so users see native package-manager output without shell quoting risk. Displayed commands are human-readable strings derived from the same executable and argument model.
+The update process will spawn the detected package manager command with inherited stdio so users see native package-manager output. POSIX execution uses `shell: false`; Windows uses shell execution so `.cmd` and `.bat` package-manager shims resolve through `cmd.exe`. Displayed commands are human-readable strings derived from the same executable and argument model.
 
 Global update commands use reinstall-style `@latest` commands:
 
