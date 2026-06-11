@@ -5,14 +5,16 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   rmdirSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { cancel, isCancel, log, multiselect, select, text } from "@clack/prompts";
+import semver from "semver";
 import { parse as parseYaml } from "yaml";
 
 type Repo = {
@@ -48,6 +50,11 @@ type WorkspaceOptions = {
   cwd?: string;
 };
 
+type UpdateOptions = {
+  check?: boolean;
+  yes?: boolean;
+};
+
 type OperationResult =
   | "added"
   | "updated"
@@ -67,6 +74,34 @@ type GitResult = {
 
 type ManageCommand = "fetch" | "pull" | "push";
 
+type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
+
+type InstallContextKind = "global" | "project" | "ephemeral" | "development" | "unknown";
+
+type UpdateCommand = {
+  executable: PackageManager;
+  args: string[];
+};
+
+type InstallContext = {
+  kind: InstallContextKind;
+  label: string;
+  manager?: PackageManager;
+  updateCommand?: UpdateCommand;
+  guidance: string[];
+  warnings: string[];
+};
+
+type RuntimeEvidence = {
+  packageRoot: string;
+  realPackageRoot: string;
+  runningBin: string;
+  realRunningBin: string;
+  pathBin: string | null;
+  realPathBin: string | null;
+  packageName: string | null;
+};
+
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_@-]*$/;
 const REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const ALLOWED_TOP_KEYS = new Set(["repos"]);
@@ -84,10 +119,271 @@ const REMOTES_MIGRATION_DOC = "docs/migrations/0.6.x-to-0.7.0.md";
 const DOCS_REPO_BLOB_BASE = "https://github.com/divlook/oh-my-space/blob";
 const MIN_GIT_MAJOR = 2;
 const MIN_GIT_MINOR = 40;
+const PACKAGE_NAME = "oh-my-space";
+const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
+const REGISTRY_TIMEOUT_MS = 10_000;
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const useColor = process.stdout.isTTY;
 const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[0m` : s);
+
+function isTestMode(): boolean {
+  return process.env.OMS_TEST_MODE === "1";
+}
+
+function testEnv(name: string): string | undefined {
+  return isTestMode() ? process.env[name] : undefined;
+}
+
+function formatCommand(command: UpdateCommand): string {
+  return [command.executable, ...command.args].join(" ");
+}
+
+function globalUpdateCommand(manager: PackageManager): UpdateCommand {
+  if (manager === "npm") return { executable: "npm", args: ["install", "-g", `${PACKAGE_NAME}@latest`] };
+  if (manager === "pnpm") return { executable: "pnpm", args: ["add", "-g", `${PACKAGE_NAME}@latest`] };
+  if (manager === "yarn") return { executable: "yarn", args: ["global", "add", `${PACKAGE_NAME}@latest`] };
+  return { executable: "bun", args: ["add", "-g", `${PACKAGE_NAME}@latest`] };
+}
+
+async function fetchLatestPackageVersion(): Promise<string> {
+  const mocked = testEnv("OMS_TEST_REGISTRY_RESPONSE");
+  if (mocked !== undefined) return latestFromRegistryJson(JSON.parse(mocked));
+  const failure = testEnv("OMS_TEST_REGISTRY_FAILURE");
+  if (failure) throw new Error(failure);
+
+  let response: Response;
+  try {
+    response = await fetch(REGISTRY_URL, { signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) });
+  } catch (e) {
+    throw new Error(`Could not reach npm registry: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!response.ok) {
+    throw new Error(`npm registry request failed with HTTP ${response.status}`);
+  }
+  try {
+    return latestFromRegistryJson(await response.json());
+  } catch (e) {
+    if (e instanceof Error) throw e;
+    throw new Error(`Could not parse npm registry response: ${String(e)}`);
+  }
+}
+
+function latestFromRegistryJson(data: unknown): string {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("npm registry response was not a JSON object");
+  }
+  const distTags = (data as { "dist-tags"?: unknown })["dist-tags"];
+  if (!distTags || typeof distTags !== "object" || Array.isArray(distTags)) {
+    throw new Error("npm registry response is missing dist-tags.latest");
+  }
+  const latest = (distTags as { latest?: unknown }).latest;
+  if (typeof latest !== "string" || latest.length === 0) {
+    throw new Error("npm registry response is missing dist-tags.latest");
+  }
+  return latest;
+}
+
+function compareVersions(currentVersion: string, latestVersion: string): number {
+  const current = semver.valid(currentVersion);
+  if (!current) throw new Error(`Installed version is not valid semver: ${currentVersion}`);
+  const latest = semver.valid(latestVersion);
+  if (!latest) throw new Error(`Registry latest version is not valid semver: ${latestVersion}`);
+  return semver.compare(current, latest);
+}
+
+function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+function resolvePathBinary(name: string): string | null {
+  const mocked = testEnv("OMS_TEST_PATH_BIN");
+  if (mocked !== undefined) return mocked.length > 0 ? mocked : null;
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function findPackageRoot(start: string): string | null {
+  let current = resolve(start);
+  while (true) {
+    const pkgPath = join(current, "package.json");
+    if (existsSync(pkgPath)) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function readPackageName(root: string): string | null {
+  try {
+    return readJson<{ name?: string }>(join(root, "package.json"))?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function collectRuntimeEvidence(): RuntimeEvidence {
+  const mocked = testEnv("OMS_TEST_RUNTIME_EVIDENCE");
+  if (mocked !== undefined) return JSON.parse(mocked) as RuntimeEvidence;
+
+  const modulePath = fileURLToPath(import.meta.url);
+  const detectedPackageRoot = findPackageRoot(dirname(modulePath)) ?? packageRoot;
+  const runningBin = process.argv[1] ? resolve(process.argv[1]) : modulePath;
+  const pathBin = resolvePathBinary("oms");
+  return {
+    packageRoot: detectedPackageRoot,
+    realPackageRoot: safeRealpath(detectedPackageRoot),
+    runningBin,
+    realRunningBin: safeRealpath(runningBin),
+    pathBin,
+    realPathBin: pathBin ? safeRealpath(pathBin) : null,
+    packageName: readPackageName(detectedPackageRoot),
+  };
+}
+
+function commandForProject(manager: PackageManager, dev: boolean): string {
+  if (manager === "npm") return `npm install ${dev ? "--save-dev " : ""}${PACKAGE_NAME}@latest`;
+  if (manager === "pnpm") return `pnpm add ${dev ? "-D " : ""}${PACKAGE_NAME}@latest`;
+  if (manager === "yarn") return `yarn add ${dev ? "--dev " : ""}${PACKAGE_NAME}@latest`;
+  return `bun add ${dev ? "-d " : ""}${PACKAGE_NAME}@latest`;
+}
+
+function nearestProjectRoot(start: string): string | null {
+  let current = resolve(start);
+  while (true) {
+    if (existsSync(join(current, "package.json"))) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function inferProjectManager(projectRoot: string, pkg: { packageManager?: string }): PackageManager {
+  const declared = pkg.packageManager?.split("@")[0];
+  if (declared === "pnpm" || declared === "yarn" || declared === "bun" || declared === "npm") return declared;
+  if (existsSync(join(projectRoot, "pnpm-lock.yaml"))) return "pnpm";
+  if (existsSync(join(projectRoot, "yarn.lock"))) return "yarn";
+  if (existsSync(join(projectRoot, "bun.lockb")) || existsSync(join(projectRoot, "bun.lock"))) return "bun";
+  return "npm";
+}
+
+function projectGuidance(packageRootPath: string): string[] {
+  const projectRoot = nearestProjectRoot(dirname(packageRootPath));
+  if (!projectRoot) return [`npm install --save-dev ${PACKAGE_NAME}@latest`];
+  const pkg = readJson<{
+    packageManager?: string;
+    dependencies?: Record<string, unknown>;
+    devDependencies?: Record<string, unknown>;
+  }>(join(projectRoot, "package.json"));
+  if (!pkg) return [`npm install --save-dev ${PACKAGE_NAME}@latest`];
+  const manager = inferProjectManager(projectRoot, pkg);
+  const dev = !(pkg.dependencies && PACKAGE_NAME in pkg.dependencies);
+  return [commandForProject(manager, dev)];
+}
+
+function pathParts(path: string): string[] {
+  return safeRealpath(path).split(sep).filter(Boolean);
+}
+
+function includesPathPart(path: string, parts: string[]): boolean {
+  const actual = pathParts(path);
+  return parts.every((part) => actual.includes(part));
+}
+
+function isPackageRootNamed(packageRootPath: string): boolean {
+  return basename(packageRootPath) === PACKAGE_NAME || basename(safeRealpath(packageRootPath)) === PACKAGE_NAME;
+}
+
+function globalManagerFromPaths(evidence: RuntimeEvidence): PackageManager | null {
+  const root = evidence.realPackageRoot;
+  const bin = evidence.realPathBin ?? evidence.realRunningBin;
+  const managers = new Set<PackageManager>();
+
+  if (root.includes(`${sep}lib${sep}node_modules${sep}${PACKAGE_NAME}`)) managers.add("npm");
+  if (includesPathPart(root, ["pnpm", "global"]) || root.includes(`${sep}pnpm-global${sep}`)) managers.add("pnpm");
+  if (includesPathPart(root, ["yarn", "global"]) || root.includes(`${sep}.config${sep}yarn${sep}global${sep}`)) managers.add("yarn");
+  if (includesPathPart(root, [".bun", "install", "global"]) || root.includes(`${sep}bun${sep}install${sep}global${sep}`)) managers.add("bun");
+
+  if (bin.endsWith(`${sep}bin${sep}oms`) && root.includes(`${sep}lib${sep}node_modules${sep}${PACKAGE_NAME}`)) {
+    managers.add("npm");
+  }
+  return managers.size === 1 ? [...managers][0] : null;
+}
+
+function detectInstallContext(): InstallContext {
+  const mocked = testEnv("OMS_TEST_INSTALL_CONTEXT");
+  if (mocked !== undefined) return JSON.parse(mocked) as InstallContext;
+
+  const evidence = collectRuntimeEvidence();
+  const warnings: string[] = [];
+  if (evidence.packageName !== PACKAGE_NAME) {
+    return {
+      kind: "unknown",
+      label: `unknown install (package root is not ${PACKAGE_NAME})`,
+      guidance: [`npm install -g ${PACKAGE_NAME}@latest`, `pnpm add -g ${PACKAGE_NAME}@latest`],
+      warnings,
+    };
+  }
+
+  if (evidence.realPathBin && evidence.realPathBin !== evidence.realRunningBin) {
+    warnings.push(`PATH-resolved oms differs from the running executable: ${evidence.pathBin}`);
+  }
+
+  const rootParts = pathParts(evidence.realPackageRoot);
+  if (rootParts.includes("_npx") || rootParts.includes("dlx") || rootParts.includes("bunx")) {
+    return {
+      kind: "ephemeral",
+      label: "temporary runner install",
+      guidance: [`Run ${PACKAGE_NAME} with @latest, or install it globally with npm install -g ${PACKAGE_NAME}@latest.`],
+      warnings,
+    };
+  }
+
+  if (existsSync(join(evidence.packageRoot, "scripts", "oms.ts")) || existsSync(join(evidence.packageRoot, "tsconfig.json"))) {
+    return {
+      kind: "development",
+      label: "development checkout",
+      guidance: ["Update the source checkout with git, then rebuild."],
+      warnings,
+    };
+  }
+
+  if (evidence.realPackageRoot.includes(`${sep}node_modules${sep}${PACKAGE_NAME}`)) {
+    const manager = globalManagerFromPaths(evidence);
+    if (manager && isPackageRootNamed(evidence.realPackageRoot)) {
+      const updateCommand = globalUpdateCommand(manager);
+      return {
+        kind: "global",
+        label: `global ${manager} install`,
+        manager,
+        updateCommand,
+        guidance: [formatCommand(updateCommand)],
+        warnings,
+      };
+    }
+    return {
+      kind: "project",
+      label: "project-local install",
+      guidance: projectGuidance(evidence.realPackageRoot),
+      warnings,
+    };
+  }
+
+  return {
+    kind: "unknown",
+    label: "unknown install context",
+    guidance: [`npm install -g ${PACKAGE_NAME}@latest`, `pnpm add -g ${PACKAGE_NAME}@latest`],
+    warnings,
+  };
+}
 
 function validateSources(data: unknown): Repo[] {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
@@ -1336,6 +1632,139 @@ function readPackageVersion(): string {
   return pkg?.version ?? "0.0.0";
 }
 
+function printUpdateHeader(currentVersion: string, latestVersion: string): void {
+  log.info(`Current version: ${currentVersion}`);
+  log.info(`Latest version: ${latestVersion}`);
+}
+
+function printInstallContext(context: InstallContext): void {
+  log.info(`Detected context: ${context.label}`);
+  for (const warning of context.warnings) log.warn(warning);
+  if (context.updateCommand) log.info(`Selected command: ${formatCommand(context.updateCommand)}`);
+}
+
+function printGuidance(context: InstallContext): void {
+  if (context.guidance.length === 0) return;
+  log.info("Manual update guidance:");
+  for (const command of context.guidance) log.message(`  ${command}`);
+}
+
+function commandAvailability(command: UpdateCommand): boolean {
+  const mocked = testEnv("OMS_TEST_MANAGER_AVAILABLE");
+  if (mocked !== undefined) return mocked === "1" || mocked === "true";
+  const result = spawnSync(command.executable, ["--version"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return result.status === 0;
+}
+
+function runUpdateCommand(command: UpdateCommand): number {
+  const mocked = testEnv("OMS_TEST_UPDATE_EXIT");
+  if (mocked !== undefined) {
+    log.step(formatCommand(command));
+    return Number.parseInt(mocked, 10);
+  }
+  log.step(formatCommand(command));
+  const result = spawnSync(command.executable, command.args, { stdio: "inherit", shell: false });
+  if (result.status !== null) return result.status;
+  log.error(`Package manager exited from signal ${result.signal ?? "unknown"}.`);
+  return 1;
+}
+
+function verifyPostUpdate(latestVersion: string): void {
+  const mocked = testEnv("OMS_TEST_VERIFY_VERSION");
+  const result = mocked !== undefined
+    ? { status: 0, stdout: mocked, stderr: "" }
+    : spawnSync("oms", ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: false });
+  if (result.status !== 0) {
+    log.warn("Post-update verification could not run oms --version from PATH.");
+    return;
+  }
+  const observed = result.stdout.trim().replace(/^oms\s+/, "");
+  if (observed !== latestVersion) {
+    log.warn(`Post-update verification saw ${observed || "empty output"}, expected ${latestVersion}.`);
+  }
+}
+
+async function confirmUpdate(command: UpdateCommand): Promise<boolean | null> {
+  const choice = await select({
+    message: `Run ${formatCommand(command)}?`,
+    options: [
+      { value: "yes", label: "Yes, update oms" },
+      { value: "no", label: "No, do not update" },
+    ],
+  });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return null;
+  }
+  return choice === "yes";
+}
+
+async function runUpdate(options: UpdateOptions): Promise<number> {
+  let latestVersion: string;
+  const currentVersion = readPackageVersion();
+  try {
+    latestVersion = await fetchLatestPackageVersion();
+    const comparison = compareVersions(currentVersion, latestVersion);
+    printUpdateHeader(currentVersion, latestVersion);
+    if (comparison === 0) {
+      log.success("oms is up to date.");
+      return 0;
+    }
+    if (comparison > 0) {
+      log.info("Installed version is newer than the npm registry latest; no downgrade will be performed.");
+      return 0;
+    }
+  } catch (e) {
+    log.error(e instanceof Error ? e.message : String(e));
+    return 1;
+  }
+
+  log.warn("Update available.");
+  const context = detectInstallContext();
+  printInstallContext(context);
+
+  if (options.check) {
+    if (!context.updateCommand) printGuidance(context);
+    return 0;
+  }
+
+  if (context.kind !== "global" || !context.updateCommand) {
+    log.info("Automatic update is only supported for confident global installs.");
+    printGuidance(context);
+    return 0;
+  }
+
+  const command = context.updateCommand;
+  if (!commandAvailability(command)) {
+    log.error(`${command.executable} is not executable from PATH. Would have run: ${formatCommand(command)}`);
+    return 1;
+  }
+
+  if (!options.yes) {
+    if (!process.stdin.isTTY) {
+      log.info(`Non-interactive shell detected. Re-run with --yes to execute: ${formatCommand(command)}`);
+      return 0;
+    }
+    const confirmed = await confirmUpdate(command);
+    if (!confirmed) {
+      log.info("Update cancelled; no changes made.");
+      return 0;
+    }
+  }
+
+  const updateExit = runUpdateCommand(command);
+  if (updateExit !== 0) {
+    log.error(`Package manager update failed (exit ${updateExit}).`);
+    return 1;
+  }
+  verifyPostUpdate(latestVersion);
+  log.success("Update command completed.");
+  return 0;
+}
+
 /** The commit baked in at build time, or null when unavailable (dev/no-git build). */
 function readBuildCommit(): string | null {
   const info = readJson<{ commit?: string | null }>(
@@ -1371,6 +1800,7 @@ const commandNames = new Set([
   "pull",
   "push",
   "unsync",
+  "update",
   "help",
 ]);
 const program = new Command();
@@ -1500,6 +1930,16 @@ program
   .addHelpText("after", exitHelp)
   .action(async (aliases: string[], options: UnsyncOptions) => {
     await exitWith(runUnsync(aliases, options));
+  });
+
+program
+  .command("update")
+  .description("Check for and safely update the oms CLI. Only confident global installs are updated automatically.")
+  .option("--check", "check for an available update without mutating the installation")
+  .option("--yes", "run a confirmed global update without prompting")
+  .addHelpText("after", exitHelp)
+  .action(async (options: UpdateOptions) => {
+    await exitWith(runUpdate(options));
   });
 
 const requestedCommand = process.argv[2];

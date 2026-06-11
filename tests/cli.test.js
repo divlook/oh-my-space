@@ -37,6 +37,25 @@ function run(args, options = {}) {
   });
 }
 
+function updateEnv(overrides = {}) {
+  return {
+    ...testEnv,
+    OMS_TEST_MODE: "1",
+    OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "0.9.1" } }),
+    ...overrides,
+  };
+}
+
+function installContext(kind, extra = {}) {
+  return JSON.stringify({
+    kind,
+    label: `${kind} test install`,
+    guidance: [`guidance for ${kind}`],
+    warnings: [],
+    ...extra,
+  });
+}
+
 function tempWorkspace() {
   return mkdtempSync(join(tmpdir(), "oms-test-"));
 }
@@ -119,6 +138,7 @@ test("help is exposed as oms with the submodule commands", () => {
   assert.match(result.stdout, /\bswitch\b/);
   assert.match(result.stdout, /\bcheckout\b/);
   assert.match(result.stdout, /\bunsync\b/);
+  assert.match(result.stdout, /\bupdate\b/);
   assert.doesNotMatch(result.stdout, /\bworktree\b/);
   assert.doesNotMatch(result.stdout, /\bmigrate\b/);
 });
@@ -872,4 +892,171 @@ test("legacy url key points to the 0.7.0 migration doc", () => {
     output,
     /https:\/\/github\.com\/divlook\/oh-my-space\/blob\/[^/\s]+\/docs\/migrations\/0\.6\.x-to-0\.7\.0\.md/,
   );
+});
+
+// --- self update ---
+
+test("update --check reports up to date without detecting install context", () => {
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "0.9.0" } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /up to date/i);
+  assert.doesNotMatch(output, /Detected context/);
+});
+
+test("update --check reports update availability and global command", () => {
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        label: "global npm install",
+        updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Current version: 0\.9\.0/);
+  assert.match(output, /Latest version: 0\.9\.1/);
+  assert.match(output, /Update available/);
+  assert.match(output, /Detected context: global npm install/);
+  assert.match(output, /Selected command: npm install -g oh-my-space@latest/);
+});
+
+test("update fails cleanly when registry latest is unavailable", () => {
+  const result = run(["update", "--check"], {
+    env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": {} }) }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /missing dist-tags\.latest/);
+  assert.doesNotMatch(output, /Selected command/);
+});
+
+test("update treats invalid registry semver as a failure", () => {
+  const result = run(["update", "--check"], {
+    env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "not-semver" } }) }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /not valid semver/);
+});
+
+test("update treats current newer than registry latest as non-mutating success", () => {
+  const result = run(["update"], {
+    env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "0.8.0" } }) }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /newer than the npm registry latest/);
+  assert.doesNotMatch(output, /Detected context/);
+});
+
+test("update detects global npm context from runtime evidence", () => {
+  const prefix = tempWorkspace();
+  const packageRoot = join(prefix, "lib", "node_modules", "oh-my-space");
+  const runningBin = join(packageRoot, "dist", "oms.js");
+  const pathBin = join(prefix, "bin", "oms");
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
+        packageRoot,
+        realPackageRoot: packageRoot,
+        runningBin,
+        realRunningBin: runningBin,
+        pathBin,
+        realPathBin: pathBin,
+        packageName: "oh-my-space",
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Detected context: global npm install/);
+  assert.match(output, /npm install -g oh-my-space@latest/);
+});
+
+test("update reports non-mutating contexts with guidance", () => {
+  for (const kind of ["project", "ephemeral", "development", "unknown"]) {
+    const result = run(["update", "--yes"], {
+      env: updateEnv({ OMS_TEST_INSTALL_CONTEXT: installContext(kind) }),
+    });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 0, output);
+    assert.match(output, new RegExp(`${kind} test install`));
+    assert.match(output, /Automatic update is only supported/);
+    assert.match(output, new RegExp(`guidance for ${kind}`));
+  }
+});
+
+test("update --yes runs a confident global command and warns on verification mismatch", () => {
+  const result = run(["update", "--yes"], {
+    env: updateEnv({
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        label: "global pnpm install",
+        updateCommand: { executable: "pnpm", args: ["add", "-g", "oh-my-space@latest"] },
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "1",
+      OMS_TEST_UPDATE_EXIT: "0",
+      OMS_TEST_VERIFY_VERSION: "0.9.0",
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Selected command: pnpm add -g oh-my-space@latest/);
+  assert.match(output, /Post-update verification saw 0\.9\.0, expected 0\.9\.1/);
+  assert.match(output, /Update command completed/);
+});
+
+test("update without --yes in non-interactive mode does not mutate", () => {
+  const result = run(["update"], {
+    env: updateEnv({
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        updateCommand: { executable: "bun", args: ["add", "-g", "oh-my-space@latest"] },
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "1",
+      OMS_TEST_UPDATE_EXIT: "0",
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Re-run with --yes/);
+  assert.doesNotMatch(output, /Update command completed/);
+});
+
+test("update normalizes package-manager failure to exit 1", () => {
+  const result = run(["update", "--yes"], {
+    env: updateEnv({
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        updateCommand: { executable: "yarn", args: ["global", "add", "oh-my-space@latest"] },
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "1",
+      OMS_TEST_UPDATE_EXIT: "7",
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /Package manager update failed \(exit 7\)/);
+});
+
+test("update fails before mutation when detected manager is unavailable", () => {
+  const result = run(["update", "--yes"], {
+    env: updateEnv({
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "0",
+      OMS_TEST_UPDATE_EXIT: "0",
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /not executable from PATH/);
+  assert.doesNotMatch(output, /Update command completed/);
 });

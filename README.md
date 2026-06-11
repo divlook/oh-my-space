@@ -72,6 +72,7 @@ oms checkout <alias> <branch>     # fetch origin, then check out a remote branch
 oms push <alias>...               # push the branch (lazy remote) + stage the pointer
 oms push <alias> --remote upstream  # target a specific remote (repeatable; defaults to origin)
 oms unsync <alias>...             # deinitialize and remove a submodule
+oms update --check                # check whether a newer oms CLI is available
 ```
 
 For `oms switch` and `oms checkout`, omitting the alias and/or branch prompts you to pick one interactively (synced submodules, and local or `origin/*` branches respectively).
@@ -113,6 +114,29 @@ oms/
 | `oms pull ...` | workspace root | `git pull --ff-only <remote>` on each submodule's current branch, then stages the moved pointer. | Requires the submodule to be on a branch. `--remote <name>` selects a single remote (defaults to `origin`). |
 | `oms push <alias>...` | workspace root | `git push <remote> <branch>` (creating the remote branch on first push), then stages the moved pointer. | `--remote <name>` (repeatable) picks the remote(s), defaults to `origin`; upstream is set only for `origin`. `--commit` also commits the pointer update in the parent. |
 | `oms unsync <alias>` / `--all` | workspace root | `git submodule deinit` + `git rm` for the alias; drops an empty `.gitmodules`. | Keeps the `oms.yaml` entry. Use `--force` to discard uncommitted changes. |
+| `oms update` | anywhere | Checks the npm registry and safely updates the installed `oms` CLI only when it detects a confident global install. | Use `--check` for a non-mutating check. Use `--yes` to skip the confirmation prompt for confident global updates. Project-local, temporary runner, development, and unknown installs print guidance only. |
+
+## Updating the CLI
+
+Check whether the installed CLI is current:
+
+```bash
+oms update --check
+```
+
+Run an update when `oms` can confidently identify a global npm, pnpm, Yarn classic, or Bun installation:
+
+```bash
+oms update
+```
+
+For automation, `--yes` skips the confirmation prompt after `oms` has printed the detected context and selected command:
+
+```bash
+oms update --yes
+```
+
+`oms update` does not edit project manifests or temporary runner caches. If the install is project-local, temporary, development, or unknown, it prints safe manual guidance instead of mutating the environment.
 
 ## `oms.yaml` format
 
