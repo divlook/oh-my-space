@@ -379,6 +379,18 @@ function isBunGlobalLayout(packageRootPath: string, binPaths: string[]): boolean
   return hasBinPath(binPaths, commandShimPaths(`${home}/.bun/bin`, "oms"));
 }
 
+function isProjectLocalLayout(evidence: RuntimeEvidence): boolean {
+  const projectRoot = nearestProjectRoot(dirname(evidence.realPackageRoot));
+  if (!projectRoot) return false;
+  const root = normalizePath(evidence.realPackageRoot);
+  const project = normalizePath(projectRoot);
+  if (!root.startsWith(`${project}/`)) return false;
+  const binPaths = [evidence.pathBin, evidence.runningBin, evidence.realPathBin, evidence.realRunningBin]
+    .filter((path): path is string => Boolean(path))
+    .map(normalizePath);
+  return hasBinPath(binPaths, commandShimPaths(`${project}/node_modules/.bin`, "oms"));
+}
+
 function globalManagerFromPaths(evidence: RuntimeEvidence): PackageManager | null {
   const root = normalizePath(evidence.realPackageRoot);
   const binPaths = [evidence.pathBin, evidence.runningBin, evidence.realPathBin, evidence.realRunningBin]
@@ -442,6 +454,14 @@ function detectInstallContext(): InstallContext {
         manager,
         updateCommand,
         guidance: [formatCommand(updateCommand)],
+        warnings,
+      };
+    }
+    if (!isProjectLocalLayout(evidence)) {
+      return {
+        kind: "unknown",
+        label: "unknown install context",
+        guidance: [`npm install -g ${PACKAGE_NAME}@latest`, `pnpm add -g ${PACKAGE_NAME}@latest`],
         warnings,
       };
     }
