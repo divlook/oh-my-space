@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -1018,6 +1018,30 @@ test("update detects Windows npm global context from runtime evidence", () => {
         realPathBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\oms.cmd",
         packageName: "oh-my-space",
       }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Detected context: global npm install/);
+  assert.match(output, /npm install -g oh-my-space@latest/);
+});
+
+test("update resolves Windows npm global shim extensions from PATH", () => {
+  const prefix = tempWorkspace();
+  const packageRoot = join(prefix, "node_modules", "oh-my-space");
+  const modulePath = join(packageRoot, "dist", "oms.js");
+  mkdirSync(join(packageRoot, "dist"), { recursive: true });
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "oh-my-space" }));
+  writeFileSync(modulePath, "");
+  writeFileSync(join(prefix, "oms.cmd"), "");
+
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_PLATFORM: "win32",
+      OMS_TEST_MODULE_PATH: modulePath,
+      OMS_TEST_ARGV1: modulePath,
+      PATH: `${prefix}${process.env.PATH ? `${delimiter}${process.env.PATH}` : ""}`,
+      PATHEXT: ".CMD;.PS1;.EXE",
     }),
   });
   const output = result.stdout + result.stderr;

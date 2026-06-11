@@ -200,13 +200,32 @@ function safeRealpath(path: string): string {
   }
 }
 
+function runtimePlatform(): NodeJS.Platform {
+  const mocked = testEnv("OMS_TEST_PLATFORM");
+  return mocked === "win32" ? "win32" : process.platform;
+}
+
+function binaryPathNames(name: string): string[] {
+  if (runtimePlatform() !== "win32") return [name];
+  const extensions = new Set([...(process.env.PATHEXT ?? "").split(";"), ".cmd", ".ps1", ".exe", ".bat"]);
+  const names = [name];
+  for (const ext of extensions) {
+    if (!ext) continue;
+    const normalizedExt = ext.startsWith(".") ? ext : `.${ext}`;
+    names.push(`${name}${normalizedExt.toLowerCase()}`, `${name}${normalizedExt}`);
+  }
+  return [...new Set(names)];
+}
+
 function resolvePathBinary(name: string): string | null {
   const mocked = testEnv("OMS_TEST_PATH_BIN");
   if (mocked !== undefined) return mocked.length > 0 ? mocked : null;
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, name);
-    if (existsSync(candidate)) return candidate;
+    for (const candidateName of binaryPathNames(name)) {
+      const candidate = join(dir, candidateName);
+      if (existsSync(candidate)) return candidate;
+    }
   }
   return null;
 }
@@ -234,9 +253,14 @@ function collectRuntimeEvidence(): RuntimeEvidence {
   const mocked = testEnv("OMS_TEST_RUNTIME_EVIDENCE");
   if (mocked !== undefined) return JSON.parse(mocked) as RuntimeEvidence;
 
-  const modulePath = fileURLToPath(import.meta.url);
+  const modulePath = testEnv("OMS_TEST_MODULE_PATH") ?? fileURLToPath(import.meta.url);
   const detectedPackageRoot = findPackageRoot(dirname(modulePath)) ?? packageRoot;
-  const runningBin = process.argv[1] ? resolve(process.argv[1]) : modulePath;
+  const mockedArgv1 = testEnv("OMS_TEST_ARGV1");
+  const runningBin = mockedArgv1 !== undefined
+    ? resolve(mockedArgv1)
+    : process.argv[1]
+      ? resolve(process.argv[1])
+      : modulePath;
   const pathBin = resolvePathBinary("oms");
   return {
     packageRoot: detectedPackageRoot,
@@ -302,7 +326,12 @@ function isPackageRootNamed(packageRootPath: string): boolean {
 }
 
 function hasBinPath(binPaths: string[], expectedPaths: string[]): boolean {
-  return expectedPaths.some((expected) => binPaths.includes(normalizePath(expected)));
+  const normalizeForComparison = (path: string) => {
+    const normalized = normalizePath(path);
+    return runtimePlatform() === "win32" ? normalized.toLowerCase() : normalized;
+  };
+  const actual = binPaths.map(normalizeForComparison);
+  return expectedPaths.some((expected) => actual.includes(normalizeForComparison(expected)));
 }
 
 function commandShimPaths(prefix: string, name: string): string[] {
@@ -1702,7 +1731,7 @@ function commandAvailability(command: UpdateCommand): boolean {
   const result = spawnSync(command.executable, ["--version"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: runtimePlatform() === "win32",
   });
   return result.status === 0;
 }
@@ -1714,7 +1743,7 @@ function runUpdateCommand(command: UpdateCommand): number {
     return Number.parseInt(mocked, 10);
   }
   log.step(formatCommand(command));
-  const result = spawnSync(command.executable, command.args, { stdio: "inherit", shell: process.platform === "win32" });
+  const result = spawnSync(command.executable, command.args, { stdio: "inherit", shell: runtimePlatform() === "win32" });
   if (result.status !== null) return result.status;
   log.error(`Package manager exited from signal ${result.signal ?? "unknown"}.`);
   return 1;
