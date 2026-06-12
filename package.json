@@ -1,7 +1,7 @@
 {
   "name": "oh-my-space",
   "version": "0.9.1",
-  "description": "CLI for managing external source repositories declared in oms.yaml.",
+  "description": "Manage multi-repo workspaces with Git submodules.",
   "license": "MIT",
   "homepage": "https://github.com/divlook/oh-my-space",
   "repository": {

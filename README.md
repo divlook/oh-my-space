@@ -1,38 +1,27 @@
 # oh-my-space
 
-`oh-my-space` provides the `oms` CLI for managing external source repositories declared in `oms.yaml`. Each registered repo is checked out as a **git submodule** at `oms/<alias>/`, so its pinned commit, branch, and history are tracked natively by your project — and `oms` wraps the submodule foot-guns (detached HEAD, remote-first branch creation, easy-to-miss pointer moves) behind a small, friendly command set.
+[![npm version](https://img.shields.io/npm/v/oh-my-space.svg)](https://www.npmjs.com/package/oh-my-space)
 
-Package name: `oh-my-space`
+`oh-my-space` is a small CLI for managing multi-repo workspaces with Git submodules.
 
-Command name: `oms`
+Declare external repositories in `oms.yaml` and sync them into `oms/<alias>/`. Your parent project records each repo's exact commit while you work with normal branch, pull, and push flows.
 
-## Why submodules + a wrapper
+## When to use it
 
-Git submodules give you three things for free: a **reproducible pin** (the parent records each source's exact commit), **visibility** (`git status` shows when a pointer moved), and **history** (the pointer travels with your commits). What they make awkward is day-to-day branch work. `oms` keeps the native benefits and removes the friction:
-
-- **Create a new branch locally, with no remote precondition.** `oms switch <alias> <branch>` makes the branch right away even if it does not exist on the remote yet; `oms checkout <alias> <branch>` fetches origin and checks out an existing remote branch as a tracking branch. The remote branch is created lazily on your first `oms push`.
-- **Always on a branch, never detached.** `oms sync` attaches the baseline branch at the pinned commit instead of leaving a detached HEAD.
-- **Pointer moves stay visible.** `oms pull` / `oms push` stage the updated gitlink in the parent so you can see and commit it; `oms status` surfaces drift.
-
-> Sharing a pin with your team still requires pushing the commit — that is inherent to any pinning model. `oms` removes the *local* friction; it cannot make an unpushed commit reproducible for others.
+- You work across several repositories from one project workspace and want them checked out side by side.
+- You want each source repo pinned to an exact commit so your workspace stays reproducible.
+- You want to stay on a real branch during everyday submodule work instead of landing in a detached HEAD.
+- You want pointer changes to show up in `git status` so you can review them before committing.
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) `>=20.19.0` for running `oms`; development uses the version in `.nvmrc` (`24`)
-- git `>=2.40` (`git switch` + submodule commands)
-- The workspace must be a git repository (`git init`), since sources are submodules of it.
-
-For local development:
-
-```bash
-nvm use
-npm ci
-npm test
-```
+- [Node.js](https://nodejs.org) `>=20.19.0` to run `oms`.
+- git `>=2.40` for `git switch` and the submodule commands `oms` relies on.
+- Run `oms` from a Git repository. For a new workspace, run `git init` first, since sources are tracked as submodules of it.
 
 ## Install
 
-Install globally with your package manager of choice:
+Install `oh-my-space` to use the `oms` command. Install it globally with your package manager of choice:
 
 ```bash
 npm install -g oh-my-space
@@ -43,7 +32,7 @@ bun install -g oh-my-space
 
 ## Quick start
 
-Run `oms init` to scaffold a starter `oms.yaml`, or create one by hand in your project root:
+Run `oms init` to scaffold a starter `oms.yaml` in your project root, then edit it down to the repositories you need. A minimal one-repo config looks like this:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
@@ -51,54 +40,57 @@ repos:
   - alias: api
     remotes:
       origin: git@github.com:example/api.git
-    branch: main
-  - alias: web
-    remotes:
-      origin: git@github.com:example/web.git
-      upstream: git@github.com:upstream/web.git
+    branch: main # optional; defaults to the remote's default branch
 ```
 
-Sync and work:
+Sync the declared repositories and check their state:
 
 ```bash
-oms init                          # scaffold a starter oms.yaml
-oms doctor                        # validate oms.yaml + submodule state
-oms sync --list                   # list registered source repos
-oms sync <alias>...               # add/initialize submodules on their baseline branch
-oms sync --all                    # sync every registered source repo
-oms status                        # branch / pointer / dirty / ahead-behind per submodule
-oms switch <alias> <branch>       # switch to a local branch, or create a brand-new one
-oms checkout <alias> <branch>     # fetch origin, then check out a remote branch (tracking)
-oms push <alias>...               # push the branch (lazy remote) + stage the pointer
-oms push <alias> --remote upstream  # target a specific remote (repeatable; defaults to origin)
-oms unsync <alias>...             # deinitialize and remove a submodule
-oms update --check                # check whether a newer oms CLI is available
-```
-
-For `oms switch` and `oms checkout`, omitting the alias and/or branch prompts you to pick one interactively (synced submodules, and local or `origin/*` branches respectively).
-
-A typical new-branch flow:
-
-```bash
-oms switch api feature/login      # local branch, no remote needed
-# ... edit, commit inside oms/api ...
-oms push api                      # creates origin/feature/login and stages the pointer
-git add oms/api && git commit     # record the pointer in your project history
+oms sync --all   # add/initialize every declared repo on its baseline branch
+oms status       # branch / pointer / dirty / ahead-behind per submodule
 ```
 
 ## Layout
 
-For an alias `api` checked out on `main`:
+A workspace with two declared repositories, `api` and `web`, looks like this:
 
 ```
-.gitmodules            # registers oms/api -> origin url, branch
+oms.yaml               # declares each source repo (alias, remotes, branch)
+.gitmodules            # registers each oms/<alias> -> origin url, branch
 oms/
-└── api/               # git submodule (a normal working tree, on a branch)
+├── api/               # git submodule (a normal working tree, on a branch)
+└── web/               # git submodule (a normal working tree, on a branch)
 ```
 
-`.gitmodules` and the `oms/<alias>` gitlink are part of your project history. Submodules must **not** be gitignored; `oms sync` removes a stale `oms/` entry from `.gitignore` if a previous version added one.
+`oms.yaml` is your declaration, `.gitmodules` and each `oms/<alias>` gitlink are tracked in your project history, and every directory under `oms/` is a normal checked-out repository you can branch, edit, and commit in.
 
-## Managing source repositories
+## Typical branch flow
+
+Start a branch, do the work inside the submodule, push it, then record the pointer move in your project history:
+
+```bash
+oms switch api feature/login      # local branch, no remote needed
+# ... edit and commit inside oms/api ...
+oms push api                      # creates origin/feature/login and stages the pointer
+git status                        # shows the staged oms/api pointer update
+git commit                        # record the pointer in your project history
+```
+
+Omit the alias or branch on `oms switch` and `oms checkout` to pick one interactively — synced submodules, and local or `origin/*` branches respectively.
+
+## How `oms` uses Git submodules
+
+`oms` does not replace Git submodules. It adds a small command layer for the workflow details that make submodules awkward. Submodules already give you a reproducible pin (the parent records each source's exact commit), visibility (`git status` shows when a pointer moved), and history (the pointer travels with your commits). The friction is in everyday branch work, and that is what `oms` smooths over:
+
+- **Start branches locally.** `oms switch <alias> <branch>` starts a local branch right away, even before it exists on the remote. `oms checkout <alias> <branch>` fetches origin and checks out an existing remote branch as a tracking branch. The remote branch is created lazily on your first `oms push`.
+- **Stay on a branch.** `oms sync` attaches the baseline branch at the pinned commit instead of leaving a detached HEAD, so everyday submodule work never strands you off a branch.
+- **Keep pointer moves visible.** `oms pull` and `oms push` stage the updated gitlink in the parent repo so you can review and commit it, and `oms status` shows when a submodule has drifted from the recorded pointer.
+
+Submodules must **not** be gitignored, since the `oms/<alias>` gitlink is what records each pinned commit. `oms sync` removes a stale `oms/` entry from `.gitignore` if a previous version added one.
+
+> `oms` makes local submodule work easier, but reproducible sharing still requires pushing the source commit and committing the parent pointer.
+
+## Command reference
 
 `oms.yaml` declares each source repo with `alias`, a `remotes` mapping (which must include `origin`), and optional `branch` (the baseline).
 
@@ -162,12 +154,12 @@ Rules:
   - Remaining characters: ASCII lowercase letters, digits, `-`, `_`, `@`.
   - Not allowed: uppercase letters, `/`, `\`, `.`, whitespace.
   - Pattern: `/^[a-z0-9][a-z0-9_@-]*$/`.
-- `remotes` is required and must include an `origin` entry; each value is a clonable git URL. `origin` becomes the submodule's primary remote, and additional remotes are configured on `oms sync`.
-- `branch` is optional; when omitted the remote's default branch is used as the baseline.
+- `remotes` is required and must include an `origin` entry. Each value is a clonable git URL. `origin` becomes the submodule's primary remote, and additional remotes are configured on `oms sync`.
+- `branch` is optional. When omitted, the remote's default branch is used as the baseline.
 
 JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json` for YAML LSPs).
 
-## Migrating between versions
+## Migration guides
 
 Detailed migration steps are organized per version under [`docs/migrations/`](./docs/migrations/).
 
@@ -175,6 +167,16 @@ Detailed migration steps are organized per version under [`docs/migrations/`](./
 - [0.5.x → 0.6.0](./docs/migrations/0.5.x-to-0.6.0.md) — switches the data model from bare clone + worktrees back to git submodules
 - [0.3.x → 0.4.0](./docs/migrations/0.3.x-to-0.4.0.md) — renames `sources.yaml`/`sources/` to `oms.yaml`/`oms/`
 - [0.2.x → 0.3.0](./docs/migrations/0.2.x-to-0.3.0.md) — (historical) switched submodules to bare clone + worktrees
+
+## Local development
+
+This repository targets the Node.js version in [`.nvmrc`](./.nvmrc) (`24`). After cloning:
+
+```bash
+nvm use
+npm ci
+npm test
+```
 
 ## License
 
