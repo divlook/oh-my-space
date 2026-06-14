@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,6 +14,7 @@ import { delimiter, isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import semver from "semver";
+import { parse as parseYaml } from "yaml";
 
 const cli = resolve("dist/oms.js");
 
@@ -154,6 +156,7 @@ test("help is exposed as oms with the submodule commands", () => {
   assert.match(result.stdout, /\bcheckout\b/);
   assert.match(result.stdout, /\bunsync\b/);
   assert.match(result.stdout, /\bagent\b/);
+  assert.match(result.stdout, /\bskills\b/);
   assert.match(result.stdout, /\bupdate\b/);
   assert.doesNotMatch(result.stdout, /\bworktree\b/);
   assert.doesNotMatch(result.stdout, /\bmigrate\b/);
@@ -1519,6 +1522,29 @@ test("status help documents the machine-readable --json mode", () => {
   assert.match(result.stdout, /JSON object/);
 });
 
+test("status help documents the schemaVersion 1 field contract", () => {
+  const result = run(["status", "--help"]);
+  assert.equal(result.status, 0);
+  // Names every schemaVersion 1 top-level key.
+  for (const key of [
+    "schemaVersion",
+    "toolVersion",
+    "workspaceRoot",
+    "currentAlias",
+    "root",
+    "repos",
+    "errors",
+  ]) {
+    assert.ok(result.stdout.includes(key), `status --help should name top-level key ${key}`);
+  }
+  // Pointer arrays live under root.submodulePointers, never a top-level "pointers" key.
+  assert.match(result.stdout, /root\.submodulePointers/);
+  for (const arr of ["moved", "staged", "split", "conflict"]) {
+    assert.ok(result.stdout.includes(arr), `status --help should name pointer array ${arr}`);
+  }
+  assert.doesNotMatch(result.stdout, /repos,\s*pointers/i);
+});
+
 test("sync and unsync help document the default-unstage and --commit topology behavior", () => {
   const sync = run(["sync", "--help"]);
   assert.match(sync.stdout, /left unstaged by default/);
@@ -2285,4 +2311,186 @@ test("update fails before mutation when detected manager is unavailable", () => 
   assert.equal(result.status, 1, output);
   assert.match(output, /not executable from PATH/);
   assert.doesNotMatch(output, /Update command completed/);
+});
+
+// --- oms skills (install command + published skill sources) ---
+
+/** A stand-in for npx that records the args and cwd it was invoked with, then exits with `exit`. */
+function makeFakeNpx(dir, { exit = 0 } = {}) {
+  const captureFile = join(dir, "npx-capture.json");
+  const bin = join(dir, "fake-npx.mjs");
+  writeFileSync(
+    bin,
+    [
+      "#!/usr/bin/env node",
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(captureFile)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }));`,
+      `process.exit(${exit});`,
+      "",
+    ].join("\n"),
+  );
+  chmodSync(bin, 0o755);
+  return { bin, captureFile };
+}
+
+function skillsEnv(npxBin, overrides = {}) {
+  return { ...testEnv, OMS_TEST_MODE: "1", OMS_NPX_BIN: npxBin, ...overrides };
+}
+
+test("skills prints the project and global install commands", () => {
+  const result = run(["skills"]);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /npx skills add divlook\/oh-my-space\b/); // project scope
+  assert.match(output, /npx skills add divlook\/oh-my-space -g\b/); // global scope
+});
+
+test("skills --install delegates to npx skills add from the workspace root, forwarding extra args", () => {
+  const ws = tempWorkspace();
+  writeSources(ws);
+  const sub = join(ws, "oms", "api", "sub");
+  mkdirSync(sub, { recursive: true });
+  const { bin, captureFile } = makeFakeNpx(ws);
+
+  const result = run(["skills", "--install", "--skill", "oms-branch"], { cwd: sub, env: skillsEnv(bin) });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  const captured = JSON.parse(readFileSync(captureFile, "utf8"));
+  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space", "--skill", "oms-branch"]);
+  // Resolved to the workspace root, not the oms/<alias>/ subdir the command ran from.
+  assert.equal(realpathSync(captured.cwd), realpathSync(ws));
+});
+
+test("skills --install returns the delegated process exit code", () => {
+  const ws = tempWorkspace();
+  writeSources(ws);
+  const { bin } = makeFakeNpx(ws, { exit: 7 });
+  const result = run(["skills", "--install"], { cwd: ws, env: skillsEnv(bin) });
+  assert.equal(result.status, 7, result.stdout + result.stderr);
+});
+
+test("skills --install delegates the overridden executable the same args npx would receive", () => {
+  const ws = tempWorkspace();
+  writeSources(ws);
+  const { bin, captureFile } = makeFakeNpx(ws);
+  const result = run(["skills", "--install"], { cwd: ws, env: skillsEnv(bin) });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const captured = JSON.parse(readFileSync(captureFile, "utf8"));
+  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space"]);
+});
+
+test("skills --install outside a workspace without -g errors and points to the global install", () => {
+  const dir = tempWorkspace(); // no oms.yaml
+  const { bin, captureFile } = makeFakeNpx(dir);
+  const result = run(["skills", "--install"], { cwd: dir, env: skillsEnv(bin) });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /npx skills add divlook\/oh-my-space -g/);
+  assert.ok(!existsSync(captureFile), "delegation must not run outside a workspace without -g");
+});
+
+test("skills --install -g delegates even outside a workspace", () => {
+  const dir = tempWorkspace(); // no oms.yaml
+  const { bin, captureFile } = makeFakeNpx(dir);
+  const result = run(["skills", "--install", "-g"], { cwd: dir, env: skillsEnv(bin) });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const captured = JSON.parse(readFileSync(captureFile, "utf8"));
+  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space", "-g"]);
+});
+
+test("skills --install prints the manual command when delegation cannot execute", () => {
+  const ws = tempWorkspace();
+  writeSources(ws);
+  const missing = join(ws, "no-such-npx-binary");
+  const result = run(["skills", "--install"], { cwd: ws, env: skillsEnv(missing) });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /npx skills add divlook\/oh-my-space/);
+});
+
+test("skills help documents purpose, scope, and an example", () => {
+  const result = run(["skills", "--help"]);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /install the oms workspace skills/i);
+  assert.match(output, /project scope/i);
+  assert.match(output, /global/i);
+  assert.match(output, /\$ oms skills/);
+});
+
+// The canonical scope-guardrail kernel, identical to OMS_SCOPE_GUARDRAIL in scripts/oms.ts.
+// Pinned to the source constant below via the marker-block assertion, so it cannot silently drift.
+const SKILL_KERNEL = [
+  "- Run `oms status --json` before Git work involving `oms/` to read root versus submodule state.",
+  "- Treat each `oms/<alias>/` directory as a separate Git repository.",
+  "- Use `oms` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.",
+  "- Do not create root commits for existing submodule pointer updates unless the user explicitly runs `oms record <alias>`.",
+].join("\n");
+
+const SKILL_NAMES = ["oms-workspace", "oms-pointer", "oms-branch"];
+
+function readSkill(name) {
+  return readFileSync(resolve("skills", name, "SKILL.md"), "utf8");
+}
+
+function splitSkillFrontmatter(content) {
+  const m = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  assert.ok(m, "SKILL.md must open with a --- frontmatter --- block");
+  return { frontmatter: m[1], body: m[2] };
+}
+
+test("each oms skill is published with name/description frontmatter", () => {
+  for (const name of SKILL_NAMES) {
+    const { frontmatter } = splitSkillFrontmatter(readSkill(name));
+    const data = parseYaml(frontmatter);
+    assert.equal(typeof data.name, "string", `${name}: name must be a string`);
+    assert.ok(data.name.length > 0, `${name}: name must be non-empty`);
+    assert.equal(data.name, name, `${name}: frontmatter name must match its directory`);
+    assert.equal(typeof data.description, "string", `${name}: description must be a string`);
+    assert.ok(data.description.length > 0, `${name}: description must be non-empty`);
+  }
+});
+
+test("the guardrail kernel is single-sourced into the marker block and every SKILL.md", () => {
+  // The marker block is built from OMS_SCOPE_GUARDRAIL, so asserting the kernel against the live
+  // marker output pins SKILL_KERNEL to the source constant; the skill checks then catch any drift.
+  const ws = tempWorkspace();
+  writeSources(ws);
+  const result = run(["agent", "install", "--target", "agents"], { cwd: ws });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const marker = readFileSync(join(ws, "oms", "AGENTS.md"), "utf8");
+  assert.ok(marker.includes(SKILL_KERNEL), "kernel must be a literal substring of the marker block");
+
+  for (const name of SKILL_NAMES) {
+    assert.ok(readSkill(name).includes(SKILL_KERNEL), `${name} must carry the kernel verbatim`);
+  }
+});
+
+test("each SKILL.md is schema-stable and portable", () => {
+  // Agent-specific slash command, e.g. " /foo" or "(/foo)" — not a path like oms/<alias>/.
+  const SLASH_COMMAND = /(^|[\s(])\/[A-Za-z]/m;
+  for (const name of SKILL_NAMES) {
+    const { frontmatter, body } = splitSkillFrontmatter(readSkill(name));
+
+    // schemaVersion is declared in the body (which the agent reads), not the frontmatter.
+    assert.doesNotMatch(frontmatter, /schemaVersion/, `${name}: schemaVersion must not live in frontmatter`);
+    assert.match(body, /schemaVersion/, `${name}: body must declare the schemaVersion it was written against`);
+
+    // Field semantics defer to the version-matched authoritative source.
+    assert.ok(body.includes("oms status --help"), `${name}: body must point to oms status --help`);
+
+    // Portable: no agent-specific slash-command syntax.
+    assert.doesNotMatch(body, SLASH_COMMAND, `${name}: body must not contain slash-command syntax`);
+
+    // Any normal-path flag a body names must cite the matching --help.
+    if (body.includes("--commit")) {
+      assert.ok(
+        body.includes("oms sync --help") && body.includes("oms unsync --help"),
+        `${name}: a body naming --commit must also cite oms sync --help and oms unsync --help`,
+      );
+    }
+    if (/(^|[\s(`])-m\b/.test(body)) {
+      assert.ok(body.includes("oms commit --help"), `${name}: a body naming -m must also cite oms commit --help`);
+    }
+  }
 });
