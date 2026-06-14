@@ -10,7 +10,7 @@ import {
   rmdirSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { cancel, isCancel, log, multiselect, select, text } from "@clack/prompts";
@@ -31,10 +31,32 @@ type SourcesOptions = {
 
 type UnsyncOptions = SourcesOptions & {
   force?: boolean;
+  commit?: boolean;
 };
 
 type PushOptions = {
   commit?: boolean;
+  record?: boolean;
+};
+
+type StatusOptions = SourcesOptions & {
+  json?: boolean;
+};
+
+type CommitOptions = {
+  /** Repeated -m values, passed through to the submodule's git commit. */
+  message?: string[];
+};
+
+type SyncCommitOptions = SourcesOptions & {
+  commit?: boolean;
+};
+
+type AgentTarget = "agents" | "claude" | "both";
+
+type AgentOptions = {
+  /** Raw --target value from the CLI; validated to AgentTarget at runtime. */
+  target?: string;
 };
 
 type RemoteOptions = {
@@ -948,11 +970,6 @@ function ensureRemotes(repoRoot: string, alias: string, remotes: Record<string, 
   }
 }
 
-/** Stage the submodule gitlink in the parent so a moved pointer shows up and is ready to commit. */
-function stagePointer(repoRoot: string, alias: string): void {
-  runGit(repoRoot, ["add", "--", submodulePath(alias)]);
-}
-
 function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: boolean }): void {
   const artifacts = [
     found.manifest ? `'${LEGACY_MANIFEST}'` : null,
@@ -1220,18 +1237,25 @@ function pullRepo(repo: Repo, repoRoot: string, remote: string): OperationResult
     );
     return "failed";
   }
+  if (isDirty(aliasDir(repoRoot, repo.alias))) {
+    log.error(
+      `${repo.alias}: submodule has uncommitted changes. Commit, stash, or clean them inside oms/${repo.alias} before pulling.`,
+    );
+    return "failed";
+  }
   log.step(`${repo.alias}/${branch}: git pull --ff-only ${remote} ${branch}`);
   const r = runSub(repoRoot, repo.alias, ["pull", "--ff-only", remote, branch], true);
-  if (r.success) {
-    stagePointer(repoRoot, repo.alias);
-    log.success(`${repo.alias}/${branch}: pulled from ${remote}`);
-    return "pulled";
+  if (!r.success) {
+    log.error(`${repo.alias}/${branch}: pull from ${remote} failed (exit ${r.exitCode})`);
+    return "failed";
   }
-  log.error(`${repo.alias}/${branch}: pull from ${remote} failed (exit ${r.exitCode})`);
-  return "failed";
+  // Pull synchronizes only the submodule branch; the root gitlink is never staged or committed.
+  log.success(`${repo.alias}/${branch}: pulled from ${remote}`);
+  printRootFollowup(repoRoot, repo.alias);
+  return "pulled";
 }
 
-function pushRepo(repo: Repo, repoRoot: string, remotes: string[], commit: boolean): OperationResult {
+function pushRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
   if (!submoduleInitialized(repoRoot, repo.alias)) {
     log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
     return "failed";
@@ -1243,6 +1267,9 @@ function pushRepo(repo: Repo, repoRoot: string, remotes: string[], commit: boole
     );
     return "failed";
   }
+  if (isDirty(aliasDir(repoRoot, repo.alias))) {
+    log.warn(`${repo.alias}: submodule has uncommitted changes; only the current HEAD will be pushed.`);
+  }
   for (const remote of remotes) {
     // Only origin sets upstream — repointing @{u} to a fork would skew "oms status" ahead/behind.
     const args = remote === "origin" ? ["push", "-u", "origin", branch] : ["push", remote, branch];
@@ -1253,12 +1280,9 @@ function pushRepo(repo: Repo, repoRoot: string, remotes: string[], commit: boole
       return "failed";
     }
   }
-  stagePointer(repoRoot, repo.alias);
-  if (commit) {
-    const sha = shortSha(aliasDir(repoRoot, repo.alias));
-    runGit(repoRoot, ["commit", "-m", `oms: bump ${repo.alias} to ${sha}`, "--", submodulePath(repo.alias)]);
-  }
-  log.success(`${repo.alias}/${branch}: pushed to ${remotes.join(", ")}${commit ? " and recorded pointer" : ""}`);
+  // Push synchronizes only the submodule branch; the root gitlink is never staged or committed.
+  log.success(`${repo.alias}/${branch}: pushed to ${remotes.join(", ")}`);
+  printRootFollowup(repoRoot, repo.alias);
   return "pushed";
 }
 
@@ -1354,7 +1378,7 @@ async function selectRepos(
   return uniqueAliases(aliases).map((alias) => byAlias.get(alias)!);
 }
 
-async function runSync(aliases: string[], options: SourcesOptions): Promise<number> {
+async function runSync(aliases: string[], options: SyncCommitOptions): Promise<number> {
   const loaded = loadRepos();
   if (!loaded) {
     emitLegacyRenameHintWalkUp();
@@ -1382,8 +1406,15 @@ async function runSync(aliases: string[], options: SourcesOptions): Promise<numb
   ensureOmsNotIgnored(repoRoot);
 
   const results = picked.map((repo) => syncRepo(repo, repoRoot));
+  const topoExit = await finalizeTopology(
+    repoRoot,
+    picked.map((r) => r.alias),
+    "add",
+    options.commit ?? false,
+    !results.includes("failed"),
+  );
   if (results.length > 1 || options.all) printSummary(results);
-  return exitFromResults(results);
+  return exitFromResults(results) || topoExit;
 }
 
 async function runManage(
@@ -1395,9 +1426,21 @@ async function runManage(
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
 
+  // Reject the removed push pointer shortcuts before any push runs, with migration guidance.
+  if (command === "push" && (options.commit || options.record)) {
+    const flag = options.record ? "--record" : "--commit";
+    const pushExample = aliases.length > 0 ? `oms push ${aliases.join(" ")}` : "oms push <alias>";
+    const recordExample = aliases.length > 0 ? `oms record ${aliases[0]}` : "oms record <alias>";
+    log.error(
+      `"oms push ${flag}" is not supported. Push the submodule branch with "${pushExample}", then commit the existing root pointer update with "${recordExample}".`,
+    );
+    return 1;
+  }
+
   const picked = await selectRepos(repos, aliases, options, command);
   if (!picked || picked.length === 0) return 1;
 
+  // Each alias is processed independently; a per-alias failure does not stop later aliases.
   const results: OperationResult[] = [];
   for (const repo of picked) {
     const remotes = await resolveRemotes(repo, options.remote, command);
@@ -1407,7 +1450,7 @@ async function runManage(
     }
     if (command === "fetch") results.push(fetchRepo(repo, repoRoot, remotes));
     else if (command === "pull") results.push(pullRepo(repo, repoRoot, remotes[0]));
-    else results.push(pushRepo(repo, repoRoot, remotes, options.commit ?? false));
+    else results.push(pushRepo(repo, repoRoot, remotes));
   }
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results);
@@ -1435,6 +1478,14 @@ async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<num
     return "failed";
   });
 
+  const topoExit = await finalizeTopology(
+    repoRoot,
+    picked.map((r) => r.alias),
+    "remove",
+    options.commit ?? false,
+    !results.includes("failed"),
+  );
+
   if (results.length > 1 || options.all) printSummary(results);
   // Name the failed aliases so a buried failure among several isn't read as "all unsynced".
   const failed = picked.filter((_, i) => results[i] === "failed").map((r) => r.alias);
@@ -1443,7 +1494,7 @@ async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<num
       `Not unsynced: ${failed.join(", ")}. The submodule had uncommitted or untracked changes — commit/stash/remove them, or re-run with --force.`,
     );
   }
-  return exitFromResults(results);
+  return exitFromResults(results) || topoExit;
 }
 
 /**
@@ -1562,24 +1613,463 @@ function aheadBehind(dir: string): { ahead: string; behind: string } {
   return { ahead: ahead && ahead !== "0" ? ahead : "", behind: behind && behind !== "0" ? behind : "" };
 }
 
-async function runStatus(aliases: string[], options: SourcesOptions): Promise<number> {
+// ─── Git state inspection: the shared spine for status JSON, commit, record, sync/unsync, pull/push ───
+
+/** Short HEAD SHA, or null when it cannot be read (unlike shortSha, which returns a sentinel). */
+function headShortSha(dir: string): string | null {
+  const r = runGit(dir, ["rev-parse", "--short", "HEAD"]);
+  return r.success ? r.stdout.trim() || null : null;
+}
+
+type HeadState = { branch: string | null; head: string | null; detached: boolean };
+
+/** Branch/head/detached snapshot. branch is null when detached or unborn; detached implies a real HEAD commit. */
+function headState(dir: string): HeadState {
+  const branch = currentBranch(dir);
+  const head = headShortSha(dir);
+  return { branch, head, detached: branch === null && head !== null };
+}
+
+type TrackingState = { trackingBranch: string | null; ahead: number | null; behind: number | null };
+
+/** Upstream divergence as numbers; all null when there is no tracking branch or it cannot be compared. */
+function trackingState(dir: string): TrackingState {
+  const up = runGit(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  const trackingBranch = up.success ? up.stdout.trim() || null : null;
+  if (!trackingBranch) return { trackingBranch: null, ahead: null, behind: null };
+  const r = runGit(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+  if (!r.success) return { trackingBranch, ahead: null, behind: null };
+  const [behind, ahead] = r.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
+  return {
+    trackingBranch,
+    ahead: Number.isNaN(ahead) ? null : ahead,
+    behind: Number.isNaN(behind) ? null : behind,
+  };
+}
+
+type ChangeCounts = { staged: number; unstaged: number; untracked: number };
+
+/**
+ * Count changed paths from `git status --porcelain=v1 -z`. A staged rename/copy entry consumes the
+ * following NUL token (its source path) and counts once. Paths in excludePaths (submodule gitlinks)
+ * are skipped so root counts exclude submodule pointers. Returns zero counts on failure.
+ */
+function changeCounts(dir: string, excludePaths: Set<string>): ChangeCounts {
+  const counts: ChangeCounts = { staged: 0, unstaged: 0, untracked: 0 };
+  const r = runGit(dir, ["status", "--porcelain=v1", "-z"]);
+  if (!r.success) return counts;
+  const tokens = r.stdout.split("\0");
+  for (let i = 0; i < tokens.length; i++) {
+    const entry = tokens[i];
+    if (!entry || entry.length < 3) continue;
+    const x = entry[0];
+    const y = entry[1];
+    const path = entry.slice(3);
+    // A staged rename/copy emits "<XY> <dest>\0<src>\0"; consume the trailing source token.
+    if (x === "R" || x === "C") i++;
+    if (excludePaths.has(path)) continue;
+    if (x === "?" && y === "?") {
+      counts.untracked++;
+      continue;
+    }
+    if (x !== " " && x !== "?") counts.staged++;
+    if (y !== " " && y !== "?") counts.unstaged++;
+  }
+  return counts;
+}
+
+function isDirtyCounts(c: ChangeCounts): boolean {
+  return c.staged > 0 || c.unstaged > 0 || c.untracked > 0;
+}
+
+/** Name of an in-progress Git operation (merge/rebase/cherry-pick/revert/bisect) in dir, or null when idle. */
+function gitOperationInProgress(dir: string): string | null {
+  const markers: Array<[string, string]> = [
+    ["MERGE_HEAD", "merge"],
+    ["rebase-merge", "rebase"],
+    ["rebase-apply", "rebase"],
+    ["CHERRY_PICK_HEAD", "cherry-pick"],
+    ["REVERT_HEAD", "revert"],
+    ["BISECT_LOG", "bisect"],
+  ];
+  for (const [name, label] of markers) {
+    const p = runGit(dir, ["rev-parse", "--git-path", name]);
+    if (!p.success) continue;
+    if (existsSync(resolve(dir, p.stdout.trim()))) return label;
+  }
+  return null;
+}
+
+type PinValue = "ok" | "moved" | "uninit" | "missing" | "conflict";
+
+type GitlinkState = {
+  alias: string;
+  /** Root HEAD recorded gitlink OID, or null when HEAD records no gitlink for the path. */
+  headOid: string | null;
+  /** Root index gitlink OID at stage 0, or null when absent or conflicted. */
+  indexOid: string | null;
+  /** Submodule working tree HEAD OID, or null when uninitialized or the path was removed. */
+  worktreeOid: string | null;
+  /** Root index has unmerged stages for the path. */
+  conflict: boolean;
+  /** Submodule working tree is initialized (has a .git gitlink). */
+  initialized: boolean;
+  /** The oms/<alias> working tree path exists. */
+  pathExists: boolean;
+  /** .gitmodules registers oms/<alias>. */
+  gitmodulesEntry: boolean;
+  moved: boolean;
+  staged: boolean;
+  split: boolean;
+  pin: PinValue;
+};
+
+/** Root HEAD gitlink OID for oms/<alias>, or null when HEAD records no gitlink there. */
+function headGitlinkOid(repoRoot: string, alias: string): string | null {
+  const r = runGit(repoRoot, ["ls-tree", "HEAD", "--", submodulePath(alias)]);
+  if (!r.success) return null;
+  const m = r.stdout.match(/^160000 commit ([0-9a-f]+)\t/m);
+  return m ? m[1] : null;
+}
+
+/** Root index gitlink OID at stage 0 for oms/<alias>, or null when absent or conflicted. */
+function indexGitlinkOid(repoRoot: string, alias: string): string | null {
+  const r = runGit(repoRoot, ["ls-files", "--stage", "--", submodulePath(alias)]);
+  if (!r.success) return null;
+  const m = r.stdout.match(/^160000 ([0-9a-f]+) 0\t/m);
+  return m ? m[1] : null;
+}
+
+/** True when the root index has unmerged (conflicted) entries for oms/<alias>. */
+function gitlinkConflicted(repoRoot: string, alias: string): boolean {
+  const r = runGit(repoRoot, ["ls-files", "-u", "--", submodulePath(alias)]);
+  return r.success && r.stdout.trim().length > 0;
+}
+
+/**
+ * Classify a submodule's root pointer state from HEAD/index/worktree OIDs — the shared spine reused by
+ * status JSON, commit/record preconditions, sync/unsync topology, and pull/push follow-up hints.
+ */
+function gitlinkState(repoRoot: string, alias: string): GitlinkState {
+  const headOid = headGitlinkOid(repoRoot, alias);
+  const indexOid = indexGitlinkOid(repoRoot, alias);
+  const conflict = gitlinkConflicted(repoRoot, alias);
+  const initialized = submoduleInitialized(repoRoot, alias);
+  const pathExists = existsSync(aliasDir(repoRoot, alias));
+  const gitmodulesEntry = isRegisteredSubmodule(repoRoot, submodulePath(alias));
+  const worktreeOid = initialized
+    ? runGit(aliasDir(repoRoot, alias), ["rev-parse", "HEAD"]).stdout.trim() || null
+    : null;
+
+  const moved =
+    headOid !== null
+    && (!pathExists
+      || (indexOid !== null && indexOid !== headOid)
+      || (worktreeOid !== null && worktreeOid !== headOid));
+  const staged = headOid !== null && indexOid !== null && indexOid !== headOid;
+  const split = staged && worktreeOid !== null && indexOid !== worktreeOid;
+
+  let pin: PinValue;
+  if (conflict) pin = "conflict";
+  else if (headOid === null) pin = "missing";
+  else if (!initialized) pin = "uninit";
+  else if (moved) pin = "moved";
+  else pin = "ok";
+
+  return {
+    alias,
+    headOid,
+    indexOid,
+    worktreeOid,
+    conflict,
+    initialized,
+    pathExists,
+    gitmodulesEntry,
+    moved,
+    staged,
+    split,
+    pin,
+  };
+}
+
+/** Root HEAD has no gitlink, the working tree has an initialized submodule, and .gitmodules registers it. */
+function pendingAddTopology(s: GitlinkState): boolean {
+  return s.headOid === null && s.initialized && s.gitmodulesEntry;
+}
+
+/** Root HEAD has a gitlink but both the working tree path and the .gitmodules entry are gone. */
+function pendingRemovalTopology(s: GitlinkState): boolean {
+  return s.headOid !== null && !s.pathExists && !s.gitmodulesEntry;
+}
+
+/** Root HEAD has a gitlink and exactly one of the working tree path or .gitmodules entry is gone. */
+function partialRemovalTopology(s: GitlinkState): boolean {
+  return s.headOid !== null && !s.pathExists !== !s.gitmodulesEntry;
+}
+
+/**
+ * The consistent root follow-up hint after a successful commit/pull/push: record an existing moved
+ * pointer, create the topology commit for a pending add, or nothing. Never points at `oms record`
+ * when record would reject the state (missing recorded gitlink, conflict, or pending removal).
+ */
+function rootFollowupHint(alias: string, s: GitlinkState): string | null {
+  if (s.headOid !== null && s.pathExists && !s.conflict && s.moved) {
+    return `Run "oms record ${alias}" to record the root pointer update.`;
+  }
+  if (pendingAddTopology(s)) {
+    return `Run "oms sync ${alias} --commit" to create the topology commit.`;
+  }
+  return null;
+}
+
+/**
+ * Infer the alias when the current directory is inside a configured oms/<alias>/ subtree. Matching is
+ * path-segment based, so oms/api-extra never resolves to alias api. Inference succeeds even when the
+ * submodule is uninitialized; the calling command enforces its own preconditions afterward.
+ */
+function inferAliasFromCwd(repoRoot: string, repos: Repo[], cwd: string = process.cwd()): string | null {
+  const rel = relative(repoRoot, resolve(cwd));
+  if (rel.startsWith("..")) return null;
+  const parts = normalizePath(rel).split("/").filter(Boolean);
+  if (parts.length >= 2 && parts[0] === DATA_DIRNAME) {
+    const candidate = parts[1];
+    if (repos.some((r) => r.alias === candidate)) return candidate;
+  }
+  return null;
+}
+
+type AliasResolution =
+  | { kind: "alias"; alias: string }
+  | { kind: "noop" }
+  | { kind: "error" };
+
+/**
+ * Resolve a single alias for commit/record: explicit argument, then current-path inference, then an
+ * interactive command-specific candidate list, then a non-interactive alias-required failure. Candidate
+ * filters are command-specific (commit: dirty submodules; record: moved pointers). Interactive zero
+ * candidates is a no-op exit 0; one candidate auto-selects; several show a picker.
+ */
+async function resolveCommandAlias(
+  repos: Repo[],
+  repoRoot: string,
+  alias: string | undefined,
+  command: "commit" | "record",
+): Promise<AliasResolution> {
+  if (alias) {
+    if (!repos.some((r) => r.alias === alias)) {
+      log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
+      return { kind: "error" };
+    }
+    return { kind: "alias", alias };
+  }
+
+  const inferred = inferAliasFromCwd(repoRoot, repos);
+  if (inferred) return { kind: "alias", alias: inferred };
+
+  if (!process.stdin.isTTY) {
+    log.error(`No alias given and stdin is not a TTY. Pass an alias: "oms ${command} <alias>".`);
+    return { kind: "error" };
+  }
+
+  const candidates = repos
+    .filter((r) =>
+      command === "commit"
+        ? submoduleInitialized(repoRoot, r.alias) && isDirty(aliasDir(repoRoot, r.alias))
+        : gitlinkState(repoRoot, r.alias).pin === "moved",
+    )
+    .map((r) => r.alias);
+
+  if (candidates.length === 0) {
+    log.info(
+      command === "commit"
+        ? "Nothing to commit in any submodule."
+        : "Nothing to record for any submodule.",
+    );
+    return { kind: "noop" };
+  }
+  if (candidates.length === 1) {
+    log.info(
+      `Selected "${candidates[0]}" (the only ${command === "commit" ? "dirty submodule" : "moved pointer"}).`,
+    );
+    return { kind: "alias", alias: candidates[0] };
+  }
+
+  const choice = await select({
+    message: `Select a submodule to ${command}`,
+    options: candidates.map((a) => ({ value: a, label: a })),
+  });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return { kind: "error" };
+  }
+  return { kind: "alias", alias: choice as string };
+}
+
+/** Machine-readable per-repo status entry. See design.md for the stable schemaVersion 1 contract. */
+type JsonRepoStatus = {
+  alias: string;
+  path: string;
+  absolutePath: string;
+  configured: boolean;
+  initialized: boolean;
+  branch: string | null;
+  head: string | null;
+  detached: boolean;
+  trackingBranch: string | null;
+  pin: PinValue;
+  dirty: boolean;
+  changes: ChangeCounts;
+  ahead: number | null;
+  behind: number | null;
+  error: string | null;
+};
+
+type JsonRootStatus = {
+  branch: string | null;
+  head: string | null;
+  detached: boolean;
+  dirty: boolean;
+  changes: ChangeCounts;
+  submodulePointers: {
+    moved: string[];
+    staged: string[];
+    split: string[];
+    conflict: string[];
+  };
+};
+
+type JsonStatus = {
+  schemaVersion: 1;
+  toolVersion: string;
+  workspaceRoot: string;
+  currentAlias: string | null;
+  root: JsonRootStatus;
+  repos: JsonRepoStatus[];
+  errors: string[];
+};
+
+/**
+ * Build one repo's JSON status. Never throws: an initialized repo whose HEAD cannot be read keeps the
+ * normal entry shape with null scalars, safe-default structured fields, and a concise `error` message.
+ */
+function buildRepoStatus(repoRoot: string, repo: Repo): JsonRepoStatus {
+  const state = gitlinkState(repoRoot, repo.alias);
+  const common = {
+    alias: repo.alias,
+    path: submodulePath(repo.alias),
+    absolutePath: aliasDir(repoRoot, repo.alias),
+    configured: true,
+    pin: state.pin,
+  };
+  const safeDefaults = {
+    branch: null,
+    head: null,
+    detached: false,
+    trackingBranch: null,
+    dirty: false,
+    changes: { staged: 0, unstaged: 0, untracked: 0 },
+    ahead: null,
+    behind: null,
+  };
+  if (!state.initialized) {
+    return { ...common, initialized: false, ...safeDefaults, error: null };
+  }
+  const dir = aliasDir(repoRoot, repo.alias);
+  const head = headShortSha(dir);
+  if (head === null) {
+    return {
+      ...common,
+      initialized: true,
+      ...safeDefaults,
+      error: `${repo.alias}: could not read submodule HEAD`,
+    };
+  }
+  const branch = currentBranch(dir);
+  const { trackingBranch, ahead, behind } = trackingState(dir);
+  const changes = changeCounts(dir, new Set());
+  return {
+    ...common,
+    initialized: true,
+    branch,
+    head,
+    detached: branch === null,
+    trackingBranch,
+    dirty: isDirtyCounts(changes),
+    changes,
+    ahead,
+    behind,
+    error: null,
+  };
+}
+
+/**
+ * Build the root JSON status. root.changes always excludes every configured submodule gitlink path so
+ * pointer movement is reported only through submodulePointers, whose arrays cover the selected repos.
+ */
+function buildRootStatus(repoRoot: string, configuredRepos: Repo[], selectedRepos: Repo[]): JsonRootStatus {
+  const { branch, head, detached } = headState(repoRoot);
+  const excludePaths = new Set<string>([
+    ...registeredSubmodulePaths(repoRoot),
+    ...configuredRepos.map((r) => submodulePath(r.alias)),
+  ]);
+  const changes = changeCounts(repoRoot, excludePaths);
+  const pointers = { moved: [] as string[], staged: [] as string[], split: [] as string[], conflict: [] as string[] };
+  for (const repo of selectedRepos) {
+    const s = gitlinkState(repoRoot, repo.alias);
+    if (s.conflict) pointers.conflict.push(repo.alias);
+    if (s.moved) pointers.moved.push(repo.alias);
+    if (s.staged) pointers.staged.push(repo.alias);
+    if (s.split) pointers.split.push(repo.alias);
+  }
+  return { branch, head, detached, dirty: isDirtyCounts(changes), changes, submodulePointers: pointers };
+}
+
+/** Emit exactly one two-space pretty JSON object on stdout. Exits non-zero if any repo read failed. */
+function printStatusJson(repoRoot: string, configuredRepos: Repo[], selectedRepos: Repo[]): number {
+  const repos = selectedRepos.map((repo) => buildRepoStatus(repoRoot, repo));
+  const errors = repos.filter((r) => r.error !== null).map((r) => r.error as string);
+  const payload: JsonStatus = {
+    schemaVersion: 1,
+    toolVersion: readPackageVersion(),
+    workspaceRoot: repoRoot,
+    currentAlias: inferAliasFromCwd(repoRoot, configuredRepos),
+    root: buildRootStatus(repoRoot, configuredRepos, selectedRepos),
+    repos,
+    errors,
+  };
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  return errors.length > 0 ? 2 : 0;
+}
+
+async function runStatus(aliases: string[], options: StatusOptions): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
 
-  const targets = aliases.length > 0 || options.all
-    ? await selectRepos(repos, options.all ? [] : aliases, options.all ? options : {}, "inspect")
-    : repos;
-  if (!targets) return 1;
+  let selected: Repo[];
+  if (options.all || aliases.length === 0) {
+    selected = repos;
+  } else {
+    const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
+    if (unknown.length > 0) {
+      const msg = `Unknown alias(es): ${unknown.join(", ")}. Use "oms sync --list" to see available aliases.`;
+      if (options.json) process.stderr.write(`${msg}\n`);
+      else log.error(msg);
+      return 1;
+    }
+    const byAlias = new Map(repos.map((r) => [r.alias, r]));
+    selected = uniqueAliases(aliases).map((a) => byAlias.get(a)!);
+  }
+
+  if (options.json) {
+    return printStatusJson(repoRoot, repos, selected);
+  }
 
   const rows: StatusRow[] = [];
-  for (const repo of targets) {
-    if (!isRegisteredSubmodule(repoRoot, submodulePath(repo.alias))) {
-      rows.push({ alias: repo.alias, branch: "(not registered)", pin: "-", dirty: "", ahead: "", behind: "" });
-      continue;
-    }
-    if (!submoduleInitialized(repoRoot, repo.alias)) {
-      rows.push({ alias: repo.alias, branch: "(not synced)", pin: "uninit", dirty: "", ahead: "", behind: "" });
+  for (const repo of selected) {
+    const state = gitlinkState(repoRoot, repo.alias);
+    if (!state.initialized) {
+      rows.push({ alias: repo.alias, branch: "(not synced)", pin: state.pin, dirty: "", ahead: "", behind: "" });
       continue;
     }
     const dir = aliasDir(repoRoot, repo.alias);
@@ -1588,7 +2078,7 @@ async function runStatus(aliases: string[], options: SourcesOptions): Promise<nu
     rows.push({
       alias: repo.alias,
       branch,
-      pin: pinState(repoRoot, repo.alias),
+      pin: state.pin,
       dirty: isDirty(dir) ? "yes" : "",
       ahead,
       behind,
@@ -1610,6 +2100,468 @@ async function runStatus(aliases: string[], options: SourcesOptions): Promise<nu
     console.log(
       `${pad(r.alias, aW)}  ${pad(r.branch, bW)}  ${pad(r.pin, pW)}  ${pad(r.dirty, dW)}  ${pad(r.ahead, 5)}  ${r.behind}`,
     );
+  }
+  return 0;
+}
+
+/** Print the consistent root follow-up hint (record / topology commit) for the current pointer state. */
+function printRootFollowup(repoRoot: string, alias: string): void {
+  const hint = rootFollowupHint(alias, gitlinkState(repoRoot, alias));
+  if (hint) log.info(hint);
+}
+
+/**
+ * Commit only inside the selected submodule. Respects an existing submodule index (staged-first): when
+ * something is already staged it commits just that and warns about leftovers; otherwise it stages all
+ * changes with `git add -A`. Never stages or commits the root gitlink.
+ */
+async function runCommit(alias: string | undefined, options: CommitOptions): Promise<number> {
+  const loaded = loadForSubmodules();
+  if (!loaded) return 1;
+  const { repos, repoRoot } = loaded;
+
+  const resolution = await resolveCommandAlias(repos, repoRoot, alias, "commit");
+  if (resolution.kind === "error") return 1;
+  if (resolution.kind === "noop") return 0;
+  const selected = resolution.alias;
+  const dir = aliasDir(repoRoot, selected);
+
+  if (!submoduleInitialized(repoRoot, selected)) {
+    log.error(`${selected}: not initialized. Run "oms sync ${selected}" to initialize it first.`);
+    return 1;
+  }
+  // Check for an in-progress operation before detached HEAD, since a rebase detaches HEAD and should
+  // report "rebase in progress" rather than a generic detached-HEAD message.
+  const op = gitOperationInProgress(dir);
+  if (op) {
+    log.error(
+      `${selected}: a ${op} is in progress inside oms/${selected}. Resolve, continue, or abort it first.`,
+    );
+    return 1;
+  }
+  if (currentBranch(dir) === null) {
+    log.error(`${selected}: detached HEAD. Run "oms switch ${selected} <branch>" before committing.`);
+    return 1;
+  }
+
+  const messages = options.message ?? [];
+  const counts = changeCounts(dir, new Set());
+  if (!isDirtyCounts(counts)) {
+    log.info(`Nothing to commit for ${selected}.`);
+    printRootFollowup(repoRoot, selected);
+    return 0;
+  }
+  if (messages.length === 0) {
+    log.error(`${selected}: -m is required to create a submodule commit. Re-run with -m "<message>".`);
+    return 1;
+  }
+
+  const commitArgs = ["commit", ...messages.flatMap((m) => ["-m", m])];
+  if (counts.staged > 0) {
+    log.step(`${selected}: git commit (staged changes only)`);
+    if (!runSub(repoRoot, selected, commitArgs, true).success) return 2;
+    if (counts.unstaged > 0 || counts.untracked > 0) {
+      log.warn(
+        `${selected}: committed staged changes only; unstaged or untracked changes remain uncommitted.`,
+      );
+    }
+  } else {
+    log.step(`${selected}: git add -A && git commit`);
+    if (!runSub(repoRoot, selected, ["add", "-A"], true).success) return 2;
+    if (!runSub(repoRoot, selected, commitArgs, true).success) return 2;
+  }
+
+  log.success(`${selected}: committed ${shortSha(dir)}`);
+  printRootFollowup(repoRoot, selected);
+  return 0;
+}
+
+/** Root index paths staged relative to HEAD, read NUL-delimited so unusual path names stay intact. */
+function stagedRootPaths(repoRoot: string): string[] {
+  const r = runGit(repoRoot, ["diff", "--cached", "--name-only", "-z"]);
+  if (!r.success) return [];
+  return r.stdout.split("\0").filter((p) => p.length > 0);
+}
+
+/**
+ * Record an existing root gitlink pointer update for the selected submodule with a path-limited root
+ * commit. Strict index safety keeps the commit scoped to exactly oms/<alias>; it never adds or removes
+ * a submodule registration (that is sync/unsync topology) and never includes unrelated staged paths.
+ */
+async function runRecord(alias: string | undefined): Promise<number> {
+  const loaded = loadForSubmodules();
+  if (!loaded) return 1;
+  const { repos, repoRoot } = loaded;
+
+  const resolution = await resolveCommandAlias(repos, repoRoot, alias, "record");
+  if (resolution.kind === "error") return 1;
+  if (resolution.kind === "noop") return 0;
+  const selected = resolution.alias;
+  const path = submodulePath(selected);
+
+  const state = gitlinkState(repoRoot, selected);
+
+  // A conflicted gitlink is the specific blocker, so report it ahead of the generic in-progress merge
+  // it implies; an in-progress operation that does not conflict this gitlink is reported next.
+  if (state.conflict) {
+    log.error(`${selected}: the root gitlink is conflicted. Resolve the root repository conflict first.`);
+    return 1;
+  }
+  const rootOp = gitOperationInProgress(repoRoot);
+  if (rootOp) {
+    log.error(`Root repository has a ${rootOp} in progress. Resolve, continue, or abort it before recording.`);
+    return 1;
+  }
+  if (currentBranch(repoRoot) === null) {
+    log.error(`Root repository is in detached HEAD. Switch the root repository to a branch before recording.`);
+    return 1;
+  }
+
+  if (state.headOid === null) {
+    const topology = pendingAddTopology(state)
+      ? ` Create the initial topology commit with "oms sync ${selected} --commit".`
+      : "";
+    log.error(
+      `${selected}: the root HEAD has no recorded gitlink. "oms record" only updates existing root gitlinks.${topology}`,
+    );
+    return 1;
+  }
+  if (!state.pathExists) {
+    log.error(`${selected}: pending submodule removal. Record the removal with "oms unsync ${selected} --commit".`);
+    return 1;
+  }
+  if (state.split) {
+    log.error(
+      `${selected}: the staged oms/${selected} pointer differs from the working tree. Unstage or restage oms/${selected}, then retry.`,
+    );
+    return 1;
+  }
+
+  // Index safety: only the selected gitlink may be staged (NUL-delimited, child paths count as unrelated).
+  const unrelated = stagedRootPaths(repoRoot).filter((p) => p !== path);
+  if (unrelated.length > 0) {
+    log.error(
+      `Root repository has unrelated staged changes (${unrelated.join(", ")}). Commit or unstage them before recording.`,
+    );
+    return 1;
+  }
+
+  // Record the current working tree HEAD pointer; no movement is a clean no-op.
+  if (state.worktreeOid === null || state.worktreeOid === state.headOid) {
+    log.info(`Nothing to record for ${selected}.`);
+    return 0;
+  }
+
+  if (isDirty(aliasDir(repoRoot, selected))) {
+    log.warn(`${selected}: submodule has uncommitted source changes; only the current HEAD pointer will be recorded.`);
+  }
+
+  const message = `chore(oms): update ${selected} submodule to ${shortSha(aliasDir(repoRoot, selected))}`;
+  if (!runGit(repoRoot, ["add", "--", path]).success) {
+    log.error(`${selected}: failed to stage oms/${selected}.`);
+    return 2;
+  }
+  const commit = runGit(repoRoot, ["commit", "-m", message, "--", path], true);
+  if (!commit.success) {
+    log.error(`${selected}: root commit failed; the staged oms/${selected} pointer was left in place.`);
+    return 2;
+  }
+  log.success(`${selected}: recorded ${shortSha(repoRoot)}  ${message}`);
+  return 0;
+}
+
+type TopologyKind = "add" | "remove";
+
+/** Unstage only the topology paths (.gitmodules + selected gitlinks), preserving unrelated staged paths. */
+function unstageTopologyPaths(repoRoot: string, aliases: string[]): void {
+  runGit(repoRoot, ["reset", "-q", "HEAD", "--", ".gitmodules", ...aliases.map(submodulePath)]);
+}
+
+function topologyCommitMessage(kind: TopologyKind, aliases: string[]): string {
+  if (kind === "add") {
+    return aliases.length === 1 ? `chore(oms): add ${aliases[0]} submodule` : "chore(oms): add submodules";
+  }
+  return aliases.length === 1 ? `chore(oms): remove ${aliases[0]} submodule` : "chore(oms): remove submodules";
+}
+
+/** Root index paths staged outside the given topology path set (.gitmodules + selected gitlinks). */
+function unrelatedStagedTopologyPaths(repoRoot: string, aliases: string[]): string[] {
+  const topo = new Set([".gitmodules", ...aliases.map(submodulePath)]);
+  return stagedRootPaths(repoRoot).filter((p) => !topo.has(p));
+}
+
+/** Stage the topology paths (adds and removals) and create a path-limited root commit for them. */
+function commitTopologyPaths(repoRoot: string, aliases: string[], message: string): GitResult {
+  const paths = [".gitmodules", ...aliases.map(submodulePath)];
+  runGit(repoRoot, ["add", "-A", "--", ...paths]);
+  return runGit(repoRoot, ["commit", "-m", message, "--", ...paths], true);
+}
+
+/** Ask whether to create a root topology commit; defaults to Yes. Returns null on cancellation. */
+async function confirmTopologyCommit(message: string): Promise<boolean | null> {
+  const choice = await select({
+    message: "Create a root topology commit?",
+    options: [
+      { value: "yes", label: `Yes, commit "${message}"` },
+      { value: "no", label: "No, leave the topology changes unstaged" },
+    ],
+    initialValue: "yes",
+  });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return null;
+  }
+  return choice === "yes";
+}
+
+/**
+ * Decide what happens to root topology changes after a successful sync/unsync: create a path-limited
+ * topology commit (explicit `--commit`, or an interactive accept) or leave the changes unstaged by
+ * default. A multi-alias commit happens only when every requested alias succeeded; partial removal
+ * topology is rejected rather than committed. Returns a non-zero contribution on topology failure.
+ */
+async function finalizeTopology(
+  repoRoot: string,
+  requested: string[],
+  kind: TopologyKind,
+  commit: boolean,
+  allSucceeded: boolean,
+): Promise<number> {
+  const pending: string[] = [];
+  const partial: string[] = [];
+  for (const alias of requested) {
+    const s = gitlinkState(repoRoot, alias);
+    if (kind === "add") {
+      if (pendingAddTopology(s)) pending.push(alias);
+    } else if (partialRemovalTopology(s)) {
+      partial.push(alias);
+    } else if (pendingRemovalTopology(s)) {
+      pending.push(alias);
+    }
+  }
+  if (pending.length === 0 && partial.length === 0) return 0;
+  const involved = [...pending, ...partial];
+
+  // Decide whether a commit is created: explicit --commit, or an interactive accept (default Yes).
+  let createCommit = commit;
+  let declined = false;
+  if (!commit && process.stdin.isTTY && allSucceeded && partial.length === 0) {
+    const confirmed = await confirmTopologyCommit(topologyCommitMessage(kind, pending));
+    if (confirmed === null) {
+      unstageTopologyPaths(repoRoot, involved);
+      return 1;
+    }
+    createCommit = confirmed;
+    declined = !confirmed;
+  }
+
+  if (!createCommit) {
+    unstageTopologyPaths(repoRoot, involved);
+    if (!declined) {
+      log.info("Root topology changes left unstaged. Review them, or re-run with --commit to record the topology change.");
+    }
+    return 0;
+  }
+
+  // A commit was requested or accepted; reject states that must not be committed.
+  if (partial.length > 0) {
+    log.error(
+      `Partial removal topology for ${partial.join(", ")} must be cleaned up before committing. Complete the removal (or restore the submodule), then retry.`,
+    );
+    unstageTopologyPaths(repoRoot, involved);
+    return 2;
+  }
+  if (!allSucceeded) {
+    unstageTopologyPaths(repoRoot, involved);
+    log.info(`Not all aliases succeeded; topology changes for ${pending.join(", ")} were left unstaged for manual review.`);
+    return 0;
+  }
+  const unrelated = unrelatedStagedTopologyPaths(repoRoot, pending);
+  if (unrelated.length > 0) {
+    log.error(
+      `Root repository has unrelated staged changes (${unrelated.join(", ")}). Commit or unstage them before the topology commit.`,
+    );
+    unstageTopologyPaths(repoRoot, pending);
+    return 2;
+  }
+  const message = topologyCommitMessage(kind, pending);
+  if (!commitTopologyPaths(repoRoot, pending, message).success) {
+    log.error("Root topology commit failed; staged topology paths were left in place.");
+    return 2;
+  }
+  log.success(`Recorded topology commit ${shortSha(repoRoot)}  ${message}`);
+  return 0;
+}
+
+const OMS_MARKER_START = "<!-- OMS START -->";
+const OMS_MARKER_END = "<!-- OMS END -->";
+
+/** Concise, durable agent rules; detailed usage is deferred to CLI help. */
+const OMS_INSTRUCTION_BLOCK = `${OMS_MARKER_START}
+## OMS Workspace Rules
+
+- Run \`oms status --json\` before Git work involving \`oms/\` to read root versus submodule state.
+- Treat each \`oms/<alias>/\` directory as a separate Git repository.
+- Use \`oms\` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
+- Do not create root commits for existing submodule pointer updates unless the user explicitly runs \`oms record <alias>\`.
+- Check \`oms --help\` and \`oms <command> --help\` for exact command usage.
+${OMS_MARKER_END}`;
+
+type ManagedBlockState =
+  | { kind: "missing" }
+  | { kind: "valid"; before: string; after: string }
+  | { kind: "malformed"; reason: string };
+
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let idx = haystack.indexOf(needle);
+  while (idx !== -1) {
+    count++;
+    idx = haystack.indexOf(needle, idx + needle.length);
+  }
+  return count;
+}
+
+/** Classify the OMS marker state of a file: missing, exactly one valid block, or malformed. */
+function analyzeManagedBlock(content: string): ManagedBlockState {
+  const starts = countOccurrences(content, OMS_MARKER_START);
+  const ends = countOccurrences(content, OMS_MARKER_END);
+  if (starts === 0 && ends === 0) return { kind: "missing" };
+  if (starts !== 1 || ends !== 1) {
+    return { kind: "malformed", reason: "expected exactly one matched OMS START/END marker pair" };
+  }
+  const startIdx = content.indexOf(OMS_MARKER_START);
+  const endIdx = content.indexOf(OMS_MARKER_END);
+  if (endIdx < startIdx) {
+    return { kind: "malformed", reason: "OMS END marker appears before OMS START" };
+  }
+  return {
+    kind: "valid",
+    before: content.slice(0, startIdx),
+    after: content.slice(endIdx + OMS_MARKER_END.length),
+  };
+}
+
+/** Collapse trailing newlines to exactly one. */
+function normalizeTrailingNewline(content: string): string {
+  return `${content.replace(/\n+$/, "")}\n`;
+}
+
+/** Compute the post-install content for a target file: create, append after two blank lines, or replace. */
+function installManagedBlock(existing: string | null): string {
+  if (existing === null || existing.trim() === "") return `${OMS_INSTRUCTION_BLOCK}\n`;
+  const state = analyzeManagedBlock(existing);
+  if (state.kind === "valid") {
+    return normalizeTrailingNewline(`${state.before}${OMS_INSTRUCTION_BLOCK}${state.after}`);
+  }
+  // Non-empty file with no block: append after two blank lines, preserving existing content.
+  return `${existing.replace(/\n+$/, "")}\n\n\n${OMS_INSTRUCTION_BLOCK}\n`;
+}
+
+type AgentFile = { path: string; rel: string };
+
+function agentTargetFiles(repoRoot: string, target: AgentTarget): AgentFile[] {
+  const names = target === "agents" ? ["AGENTS.md"] : target === "claude" ? ["CLAUDE.md"] : ["AGENTS.md", "CLAUDE.md"];
+  return names.map((name) => ({
+    path: join(repoRoot, DATA_DIRNAME, name),
+    rel: `${DATA_DIRNAME}/${name}`,
+  }));
+}
+
+/** Resolve the install/uninstall target: explicit --target, interactive prompt, or non-interactive failure. */
+async function resolveAgentTarget(target: string | undefined): Promise<AgentTarget | null> {
+  if (target !== undefined) {
+    if (target !== "agents" && target !== "claude" && target !== "both") {
+      log.error(`Invalid --target "${target}". Use --target agents|claude|both.`);
+      return null;
+    }
+    return target;
+  }
+  if (!process.stdin.isTTY) {
+    log.error(`--target is required in a non-interactive shell. Pass --target agents|claude|both.`);
+    return null;
+  }
+  const choice = await select({
+    message: "Which instruction file(s) should OMS manage?",
+    options: [
+      { value: "agents", label: `${DATA_DIRNAME}/AGENTS.md` },
+      { value: "claude", label: `${DATA_DIRNAME}/CLAUDE.md` },
+      { value: "both", label: `${DATA_DIRNAME}/AGENTS.md + ${DATA_DIRNAME}/CLAUDE.md` },
+    ],
+  });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return null;
+  }
+  return choice as AgentTarget;
+}
+
+/** Validate that no selected file has malformed markers before any write (atomic pre-write check). */
+function validateAgentFiles(files: AgentFile[], action: string): boolean {
+  for (const file of files) {
+    if (!existsSync(file.path)) continue;
+    const state = analyzeManagedBlock(readFileSync(file.path, "utf8"));
+    if (state.kind === "malformed") {
+      log.error(`${file.rel}: ${state.reason}. Fix the OMS markers, then retry. No files were ${action}.`);
+      return false;
+    }
+  }
+  return true;
+}
+
+async function runAgentInstall(options: AgentOptions): Promise<number> {
+  const repoRoot = findWorkspaceRoot();
+  if (!repoRoot) {
+    log.error(`Could not find ${MANIFEST_FILENAME} in the current directory or its parents.`);
+    return 1;
+  }
+  const target = await resolveAgentTarget(options.target);
+  if (!target) return 1;
+  const files = agentTargetFiles(repoRoot, target);
+
+  if (!validateAgentFiles(files, "modified")) return 1;
+
+  mkdirSync(join(repoRoot, DATA_DIRNAME), { recursive: true });
+  for (const file of files) {
+    const existing = existsSync(file.path) ? readFileSync(file.path, "utf8") : null;
+    writeFileSync(file.path, installManagedBlock(existing));
+    log.success(`${file.rel}: OMS instructions installed.`);
+  }
+  log.info("OMS instruction files are not staged; review and commit them yourself.");
+  return 0;
+}
+
+async function runAgentUninstall(options: AgentOptions): Promise<number> {
+  const repoRoot = findWorkspaceRoot();
+  if (!repoRoot) {
+    log.error(`Could not find ${MANIFEST_FILENAME} in the current directory or its parents.`);
+    return 1;
+  }
+  const target = await resolveAgentTarget(options.target);
+  if (!target) return 1;
+  const files = agentTargetFiles(repoRoot, target);
+
+  if (!validateAgentFiles(files, "modified")) return 1;
+
+  for (const file of files) {
+    if (!existsSync(file.path)) {
+      log.info(`${file.rel}: no OMS block found.`);
+      continue;
+    }
+    const state = analyzeManagedBlock(readFileSync(file.path, "utf8"));
+    if (state.kind !== "valid") {
+      // missing here; malformed was already rejected by the pre-write validation above.
+      log.info(`${file.rel}: no OMS block found.`);
+      continue;
+    }
+    const remaining = state.before + state.after;
+    if (remaining.trim() === "") {
+      rmSync(file.path);
+      log.success(`${file.rel}: removed OMS block and deleted the now-empty file.`);
+    } else {
+      writeFileSync(file.path, normalizeTrailingNewline(remaining));
+      log.success(`${file.rel}: removed OMS block.`);
+    }
   }
   return 0;
 }
@@ -1886,20 +2838,85 @@ async function exitWith(action: Promise<number>): Promise<void> {
 }
 
 const exitHelp = "\nExit codes: 0 ok | 1 usage/config error | 2 one or more git operations failed.";
+
+// Per-command help: each new or changed command states its purpose, scope boundary, and an example.
+const statusHelp = `
+Machine-readable mode prints exactly one JSON object on stdout (schemaVersion, root, repos, pointers).
+Examples:
+  $ oms status --json          # full workspace state for tools and agents
+  $ oms status api --json      # narrow the JSON to one alias
+`;
+const commitHelp = `
+Scope: commits inside the selected oms/<alias>/ submodule only — never the root gitlink. Existing staged
+changes are committed as-is (staged-first); otherwise all changes are staged with git add -A.
+Examples:
+  $ oms commit api -m "feat: add login"   # commit submodule source changes
+  $ oms commit -m "fix: typo"             # infer the alias from the current oms/<alias>/ directory
+`;
+const recordHelp = `
+Scope: commits an existing root gitlink pointer update for one alias in the ROOT repository only
+(chore(oms): update <alias> submodule to <sha>). It never adds or removes a submodule registration.
+Example:
+  $ oms record api
+`;
+const syncHelp = `
+Root topology changes (.gitmodules, oms/<alias>) are left unstaged by default; create the topology
+commit through the interactive prompt or with --commit.
+Examples:
+  $ oms sync api               # add/initialize/refresh oms/api (topology left unstaged)
+  $ oms sync api --commit      # also create chore(oms): add api submodule
+`;
+const unsyncHelp = `
+Root topology changes are left unstaged by default; create the removal topology commit through the
+interactive prompt or with --commit.
+Examples:
+  $ oms unsync api             # remove oms/api (topology left unstaged)
+  $ oms unsync api --commit    # also create chore(oms): remove api submodule
+`;
+const pullHelp = `
+Scope: pulls the submodule branch only — it never stages or commits the root gitlink. Record a moved
+root pointer afterward with "oms record <alias>".
+Example:
+  $ oms pull api
+`;
+const pushHelp = `
+Scope: pushes the submodule branch only — it never stages or commits the root gitlink. Staging a pointer
+for review is not the same as recording a pointer commit: "--commit" is unsupported, so push the branch
+with "oms push <alias>", then record the existing root pointer update with "oms record <alias>".
+Examples:
+  $ oms push api
+  $ oms record api             # record the moved root pointer
+`;
+const agentInstallHelp = `
+Manages a marker-delimited block (<!-- OMS START --> ... <!-- OMS END -->) in oms/AGENTS.md and/or
+oms/CLAUDE.md. These are root-repository files, not submodule files, and are not staged.
+Example:
+  $ oms agent install --target both
+`;
+const agentUninstallHelp = `
+Removes the marker-delimited OMS block; a file left empty is deleted. Missing files or blocks are a no-op.
+Example:
+  $ oms agent uninstall --target both
+`;
 const commandNames = new Set([
   "init",
   "doctor",
   "sync",
   "status",
+  "commit",
+  "record",
   "switch",
   "checkout",
   "fetch",
   "pull",
   "push",
   "unsync",
+  "agent",
   "update",
   "help",
 ]);
+
+const collectMessage = (value: string, acc: string[]): string[] => [...acc, value];
 const program = new Command();
 
 program
@@ -1937,8 +2954,9 @@ program
   .argument("[aliases...]", "repo aliases to sync (omit for interactive multi-select)")
   .option("--all", "sync every registered source repo")
   .option("--list", "print registered repos")
-  .addHelpText("after", exitHelp)
-  .action(async (aliases: string[], options: SourcesOptions) => {
+  .option("--commit", "create the root topology commit (chore(oms): add ...) without prompting")
+  .addHelpText("after", `${syncHelp}${exitHelp}`)
+  .action(async (aliases: string[], options: SyncCommitOptions) => {
     await exitWith(runSync(aliases, options));
   });
 
@@ -1947,9 +2965,29 @@ program
   .description("Show each submodule's branch, pointer state, dirtiness, and ahead/behind counts.")
   .argument("[aliases...]", "repo aliases to inspect (omit for all)")
   .option("--all", "inspect every registered source repo")
-  .addHelpText("after", exitHelp)
-  .action(async (aliases: string[], options: SourcesOptions) => {
+  .option("--json", "print machine-readable workspace state (one JSON object on stdout)")
+  .addHelpText("after", `${statusHelp}${exitHelp}`)
+  .action(async (aliases: string[], options: StatusOptions) => {
     await exitWith(runStatus(aliases, options));
+  });
+
+program
+  .command("commit")
+  .description("Commit source changes inside the selected submodule only (never the root gitlink).")
+  .argument("[alias]", "registered source alias (omit to infer from the current oms/<alias>/ directory)")
+  .option("-m, --message <message>", "commit message (repeatable; required only to create a commit)", collectMessage, [])
+  .addHelpText("after", `${commitHelp}${exitHelp}`)
+  .action(async (alias: string | undefined, options: CommitOptions) => {
+    await exitWith(runCommit(alias, options));
+  });
+
+program
+  .command("record")
+  .description("Commit an existing root gitlink pointer update for the selected submodule (root repo only).")
+  .argument("[alias]", "registered source alias (omit to infer from the current oms/<alias>/ directory)")
+  .addHelpText("after", `${recordHelp}${exitHelp}`)
+  .action(async (alias: string | undefined) => {
+    await exitWith(runRecord(alias));
   });
 
 program
@@ -1993,12 +3031,12 @@ program
 program
   .command("pull")
   .description(
-    "Run git pull --ff-only <remote> on each submodule's current branch and stage the moved pointer (defaults to origin).",
+    "Pull the submodule branch only (git pull --ff-only <remote>); never stages or commits the root gitlink (defaults to origin).",
   )
   .argument("[aliases...]", "repo aliases to pull (omit for interactive multi-select)")
   .option("--all", "pull every registered source repo")
   .option("--remote <name>", "remote to pull from (single; omit to choose interactively)", collectRemote, [])
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${pullHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
     await exitWith(runManage("pull", aliases, options));
   });
@@ -2006,12 +3044,13 @@ program
 program
   .command("push")
   .description(
-    "Run git push <remote> <branch> on each listed submodule (creating the remote branch on first push) and stage the moved pointer (defaults to origin).",
+    "Push the submodule branch only (creating the remote branch on first push); never stages or commits the root gitlink. Use \"oms record <alias>\" for root pointer commits (defaults to origin).",
   )
   .argument("<aliases...>", "repo aliases to push")
-  .option("--commit", "also commit the pointer update in the parent repo")
+  .option("--commit", "unsupported: use \"oms record <alias>\" after pushing")
+  .option("--record", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRemote, [])
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${pushHelp}${exitHelp}`)
   .action(async (aliases: string[], options: PushOptions & RemoteOptions) => {
     await exitWith(runManage("push", aliases, options));
   });
@@ -2024,9 +3063,33 @@ program
   .argument("[aliases...]", "repo aliases to unsync (omit for interactive multi-select)")
   .option("--all", "unsync every registered source repo")
   .option("--force", "discard uncommitted changes in the submodule")
-  .addHelpText("after", exitHelp)
+  .option("--commit", "create the root topology commit (chore(oms): remove ...) without prompting")
+  .addHelpText("after", `${unsyncHelp}${exitHelp}`)
   .action(async (aliases: string[], options: UnsyncOptions) => {
     await exitWith(runUnsync(aliases, options));
+  });
+
+const agentCommand = program
+  .command("agent")
+  .description(`Manage OMS agent instruction blocks under ${DATA_DIRNAME}/ (AGENTS.md, CLAUDE.md).`)
+  .addHelpText("after", exitHelp);
+
+agentCommand
+  .command("install")
+  .description(`Install or refresh the marker-managed OMS instruction block in ${DATA_DIRNAME}/AGENTS.md and/or ${DATA_DIRNAME}/CLAUDE.md.`)
+  .option("--target <target>", "agents | claude | both (omit to choose interactively)")
+  .addHelpText("after", `${agentInstallHelp}${exitHelp}`)
+  .action(async (options: AgentOptions) => {
+    await exitWith(runAgentInstall(options));
+  });
+
+agentCommand
+  .command("uninstall")
+  .description(`Remove the marker-managed OMS instruction block from ${DATA_DIRNAME}/AGENTS.md and/or ${DATA_DIRNAME}/CLAUDE.md.`)
+  .option("--target <target>", "agents | claude | both (omit to choose interactively)")
+  .addHelpText("after", `${agentUninstallHelp}${exitHelp}`)
+  .action(async (options: AgentOptions) => {
+    await exitWith(runAgentUninstall(options));
   });
 
 program
