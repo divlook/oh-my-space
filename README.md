@@ -43,6 +43,8 @@ repos:
     branch: main # optional; defaults to the remote's default branch
 ```
 
+After scaffolding, `oms init` prints optional AI-setup hints pointing to [`oms agent install`](#ai-agent-workflow) and [`oms skills`](#workspace-skills); both are opt-in and install nothing on their own.
+
 Sync the declared repositories and check their state:
 
 ```bash
