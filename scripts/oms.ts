@@ -2396,14 +2396,17 @@ async function finalizeTopology(
 const OMS_MARKER_START = "<!-- OMS START -->";
 const OMS_MARKER_END = "<!-- OMS END -->";
 
-/** Concise, durable agent rules; detailed usage is deferred to CLI help. */
+/** Canonical scope-guardrail kernel, single-sourced into the marker block and each published SKILL.md. */
+const OMS_SCOPE_GUARDRAIL = `- Run \`oms status --json\` before Git work involving \`oms/\` to read root versus submodule state.
+- Treat each \`oms/<alias>/\` directory as a separate Git repository.
+- Use \`oms\` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
+- Do not create root commits for existing submodule pointer updates unless the user explicitly runs \`oms record <alias>\`.`;
+
+/** Concise, durable agent rules; detailed usage is deferred to CLI help. The marker's own --help line stays outside the kernel constant. */
 const OMS_INSTRUCTION_BLOCK = `${OMS_MARKER_START}
 ## OMS Workspace Rules
 
-- Run \`oms status --json\` before Git work involving \`oms/\` to read root versus submodule state.
-- Treat each \`oms/<alias>/\` directory as a separate Git repository.
-- Use \`oms\` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
-- Do not create root commits for existing submodule pointer updates unless the user explicitly runs \`oms record <alias>\`.
+${OMS_SCOPE_GUARDRAIL}
 - Check \`oms --help\` and \`oms <command> --help\` for exact command usage.
 ${OMS_MARKER_END}`;
 
@@ -2564,6 +2567,55 @@ async function runAgentUninstall(options: AgentOptions): Promise<number> {
     }
   }
   return 0;
+}
+
+/** npx skills package identifier for the oms workspace skills. */
+const SKILLS_REPO = "divlook/oh-my-space";
+
+type SkillsOptions = { install?: boolean };
+
+/** Extra args forwarded to "npx skills add", read from argv so flags pass through verbatim. */
+function skillsForwardedArgs(): string[] {
+  // process.argv: [node, oms.js, "skills", ...rest]; drop the "--install" flag and forward the rest.
+  return process.argv.slice(3).filter((arg) => arg !== "--install");
+}
+
+/** Print the install commands, or with --install delegate to "npx skills add" from the workspace root. */
+async function runSkills(install: boolean, extraArgs: string[]): Promise<number> {
+  const projectCommand = `npx skills add ${SKILLS_REPO}`;
+  const globalCommand = `${projectCommand} -g`;
+
+  if (!install) {
+    log.info("Install the oms workspace skills with the skills tool:");
+    log.message(`  ${projectCommand}        # project scope (run at the workspace root)`);
+    log.message(`  ${globalCommand}     # global scope (every workspace)`);
+    log.message("Add --skill <name> to install one (oms-workspace, oms-pointer, oms-branch), or --list to list them.");
+    return 0;
+  }
+
+  const wantsGlobal = extraArgs.includes("-g") || extraArgs.includes("--global");
+  const workspaceRoot = findWorkspaceRoot();
+  if (!workspaceRoot && !wantsGlobal) {
+    log.error(
+      `"oms skills --install" must run inside an ${MANIFEST_FILENAME} workspace. ` +
+        `For a global install from anywhere, run: ${globalCommand}`,
+    );
+    return 1;
+  }
+
+  const args = ["skills", "add", SKILLS_REPO, ...extraArgs];
+  const npxBin = testEnv("OMS_NPX_BIN") ?? "npx";
+  const result = spawnSync(npxBin, args, {
+    stdio: "inherit",
+    cwd: workspaceRoot ?? process.cwd(),
+    shell: runtimePlatform() === "win32",
+  });
+  if (result.error || result.status === null) {
+    log.error(`Could not run "${[npxBin, ...args].join(" ")}".`);
+    log.message(`Install the skills manually: ${projectCommand}`);
+    return 1;
+  }
+  return result.status;
 }
 
 const INIT_TEMPLATE = `# yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
@@ -2903,6 +2955,18 @@ Removes the marker-delimited OMS block; a file left empty is deleted. Missing fi
 Example:
   $ oms agent uninstall --target both
 `;
+const skillsHelp = `
+Installs the oms workspace skills (oms-workspace, oms-pointer, oms-branch) via the external "skills" tool.
+Project scope (installed at the workspace root, discovered from the root and its subdirectories) is the
+default; -g installs globally for every workspace. With --install, oms resolves to the workspace root and
+delegates to "npx skills add", forwarding extra arguments (-g, --skill <name>, --list, --copy) straight
+through to the skills tool.
+Examples:
+  $ oms skills                                # print the project and global install commands
+  $ oms skills --install                      # install the skills project-scoped at the workspace root
+  $ oms skills --install -g                    # install the skills globally
+  $ oms skills --install --skill oms-branch    # install one skill
+`;
 const commandNames = new Set([
   "init",
   "doctor",
@@ -2917,6 +2981,7 @@ const commandNames = new Set([
   "push",
   "unsync",
   "agent",
+  "skills",
   "update",
   "help",
 ]);
@@ -3095,6 +3160,17 @@ agentCommand
   .addHelpText("after", `${agentUninstallHelp}${exitHelp}`)
   .action(async (options: AgentOptions) => {
     await exitWith(runAgentUninstall(options));
+  });
+
+program
+  .command("skills")
+  .description("Print the command to install the oms workspace skills, or run it with --install.")
+  .option("--install", "delegate to \"npx skills add\" (forwards extra args such as -g, --skill, --list)")
+  .allowUnknownOption()
+  .argument("[args...]", "extra arguments forwarded to \"npx skills add\" with --install")
+  .addHelpText("after", `${skillsHelp}${exitHelp}`)
+  .action(async (_args: string[], options: SkillsOptions) => {
+    await exitWith(runSkills(Boolean(options.install), skillsForwardedArgs()));
   });
 
 program

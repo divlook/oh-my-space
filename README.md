@@ -104,6 +104,29 @@ When an AI coding agent works in a workspace, the main risk is operating in the 
 
   These are **root-repository files under `oms/`, not submodule files**. The managed block is delimited by `<!-- OMS START -->` / `<!-- OMS END -->`; content outside the markers is preserved, and `oms agent uninstall` removes only that block (deleting the file if it becomes empty). The files are created but never staged, so you review and commit them yourself.
 
+## Workspace skills
+
+`oms` publishes three installable agent skills that carry the workspace Git guardrail to sessions started anywhere in the workspace — including at the root, which the [`oms agent install`](#ai-agent-workflow) marker under `oms/` cannot reach. They are installed with the external Vercel Labs `skills` tool (`npx skills`):
+
+```bash
+npx skills add divlook/oh-my-space                       # project scope: install at the workspace root
+npx skills add divlook/oh-my-space -g                    # global scope: available in every workspace
+npx skills add divlook/oh-my-space --skill oms-pointer   # install one skill by name
+npx skills add divlook/oh-my-space --list                # list the available skills without installing
+```
+
+Project scope is the default and recommended: these skills are only relevant in an `oms.yaml` workspace, so a project install keeps them out of unrelated repositories. `oms skills` prints these commands, and `oms skills --install` runs the project install for you, resolving to the workspace root first and forwarding extra arguments (`-g`, `--skill`, `--list`, `--copy`) straight through.
+
+The three skills are named by the Git domain each manages:
+
+| Skill | Use it when | What it does |
+| --- | --- | --- |
+| `oms-workspace` | Scope-ambiguous Git work in the workspace — committing from the root, a moved `oms status` pointer, a push, or adding/removing a repo with `oms sync`/`oms unsync`. | Establishes workspace state and root-versus-submodule scope before acting, and separates repo add/remove topology from recording a moved pointer. |
+| `oms-pointer` | After `oms commit` or `oms pull` moves a submodule's commit. | Records the moved root pointer with `oms record`, so a submodule change is not left without a recorded pointer and the root pointer is not committed by mistake. |
+| `oms-branch` | Starting or switching a branch inside a submodule. | Chooses `oms switch` (new local branch) versus `oms checkout` (track a remote branch) and avoids detached HEAD. |
+
+Skill firing is best-effort — an agent loads a skill only when it judges the skill's description relevant — so the skills complement, rather than replace, `oms <command> --help` and the always-on marker block inside `oms/`. Each skill defers exact `oms status --json` field semantics to `oms status --help`, the version-matched authoritative source that ships with the installed CLI.
+
 ## Command reference
 
 `oms.yaml` declares each source repo with `alias`, a `remotes` mapping (which must include `origin`), and optional `branch` (the baseline).
@@ -123,6 +146,7 @@ When an AI coding agent works in a workspace, the main risk is operating in the 
 | `oms push <alias>...` | workspace root | `git push <remote> <branch>` (creating the remote branch on first push). | Submodule branch only — never stages or commits the root gitlink. `--commit`/`--record` are unsupported; record the root pointer with `oms record <alias>`. `--remote <name>` (repeatable) picks the remote(s); upstream is set only for `origin`. |
 | `oms unsync <alias>` / `--all` | workspace root | `git submodule deinit` + `git rm` for the alias; drops an empty `.gitmodules`. | Keeps the `oms.yaml` entry. Use `--force` to discard uncommitted changes. Removal topology is left unstaged by default; commit via the prompt or `--commit` (`chore(oms): remove ...`). |
 | `oms agent install` / `uninstall` | workspace root | Manages a marker-delimited OMS instruction block in `oms/AGENTS.md` and/or `oms/CLAUDE.md` (root-repo files). | `--target agents\|claude\|both` (omit to choose interactively). Does not stage files. See [AI agent workflow](#ai-agent-workflow). |
+| `oms skills` | anywhere (`--install` resolves to root) | Prints the `npx skills add divlook/oh-my-space` commands (project scope and `-g` global) to install the workspace skills. | `--install` delegates to `npx skills add`, forwarding extra args (`-g`, `--skill <name>`, `--list`). Run outside a workspace without `-g`, it errors and points to the global install. See [Workspace skills](#workspace-skills). |
 | `oms update` | anywhere | Checks the npm registry and safely updates the installed `oms` CLI only when it detects a confident global install. | Use `--check` for a non-mutating check. Use `--yes` to skip the confirmation prompt for confident global updates. Project-local, temporary runner, development, and unknown installs print guidance only. |
 
 ## Updating the CLI
