@@ -210,6 +210,34 @@ test("init --force overwrites", () => {
   assert.match(readFileSync(join(cwd, "oms.yaml"), "utf8"), /alias: example/);
 });
 
+test("init points to both AI-setup commands without installing anything", () => {
+  const cwd = tempWorkspace();
+  const result = run(["init"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+
+  // Signposts both AI-setup commands so they are discoverable right after scaffolding.
+  assert.match(output, /oms agent install/);
+  assert.match(output, /oms skills/);
+  // Points to the command without expanding into the installer it would print.
+  assert.doesNotMatch(output, /npx skills add/);
+  // init writes only oms.yaml: no agent instruction files, no skills install.
+  assert.equal(existsSync(join(cwd, "oms", "AGENTS.md")), false);
+  assert.equal(existsSync(join(cwd, "oms", "CLAUDE.md")), false);
+});
+
+test("init --force re-init prints the same AI-setup guidance", () => {
+  const cwd = tempWorkspace();
+  writeSources(cwd);
+  const result = run(["init", "--force"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /created oms\.yaml/);
+  assert.match(output, /oms agent install/);
+  assert.match(output, /oms skills/);
+  assert.doesNotMatch(output, /npx skills add/);
+});
+
 test("doctor accepts the init-generated oms.yaml", () => {
   const cwd = tempWorkspace();
   run(["init"], { cwd });

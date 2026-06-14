@@ -2642,6 +2642,10 @@ async function runInit(options: { force?: boolean }): Promise<number> {
     log.info(`oms manages sources as git submodules; run "git init" here if this is not a git repo yet.`);
   }
   log.info(`edit alias/remotes/branch, then run "oms sync".`);
+  // Signpost the optional AI-setup commands; output-only, installs nothing.
+  log.info("Optional — set up AI agent guidance for this workspace:");
+  log.message(`  oms agent install   # add the OMS instruction block for AI agents`);
+  log.message(`  oms skills          # show how to install the oms workspace skills`);
   return 0;
 }
 
