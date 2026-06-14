@@ -176,37 +176,11 @@ Rules:
 
 JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json` for YAML LSPs).
 
-## Behavior changes
-
-The AI-submodule-workflow update scopes each command to a single Git boundary and makes root pointer commits explicit. If you have existing automation, note these changes:
-
-- **`oms push --commit` is removed** (and `oms push --record` is unsupported). It fails before pushing. Push the submodule branch, then record the root pointer separately:
-
-  ```bash
-  # before
-  oms push api --commit
-
-  # after
-  oms push api      # pushes the submodule branch only
-  oms record api    # commits the moved oms/api pointer in the parent
-  ```
-
-- **`oms pull` and `oms push` no longer stage the root gitlink.** They synchronize only the submodule branch; the moved pointer shows up in `git status` and is committed with `oms record <alias>`.
-
-- **`oms sync` and `oms unsync` no longer leave the root index staged.** Topology changes (`.gitmodules` and `oms/<alias>`) stay in the working tree, unstaged. Create the topology commit through the interactive prompt or with `--commit`:
-
-  ```bash
-  # before: sync left .gitmodules + oms/api staged for you to commit
-  oms sync api && git commit -m "add api"
-
-  # after: topology is unstaged by default
-  oms sync api --commit   # creates chore(oms): add api submodule
-  ```
-
 ## Migration guides
 
 Detailed migration steps are organized per version under [`docs/migrations/`](./docs/migrations/).
 
+- [0.9.x → 0.10.0](./docs/migrations/0.9.x-to-0.10.0.md) — scopes each command to a single Git boundary and makes root pointer commits explicit via `oms record`
 - [0.7.x → 0.8.0](./docs/migrations/0.7.x-to-0.8.0.md) — splits `oms checkout` into `oms switch` (local branches) and `oms checkout` (remote branches)
 - [0.5.x → 0.6.0](./docs/migrations/0.5.x-to-0.6.0.md) — switches the data model from bare clone + worktrees back to git submodules
 - [0.3.x → 0.4.0](./docs/migrations/0.3.x-to-0.4.0.md) — renames `sources.yaml`/`sources/` to `oms.yaml`/`oms/`
