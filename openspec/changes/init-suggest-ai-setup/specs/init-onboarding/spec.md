@@ -6,7 +6,7 @@ After successfully scaffolding `oms.yaml`, `oms init` SHALL print optional guida
 #### Scenario: Init points to both AI-setup commands
 - **WHEN** `oms init` creates `oms.yaml`
 - **THEN** the output includes guidance to run `oms agent install`
-- **AND** the output includes guidance to run `oms skills` (to install the workspace skills)
+- **AND** the output includes guidance to run `oms skills` (the entry point for installing the workspace skills)
 - **AND** `oms init` exits 0
 
 #### Scenario: Init installs nothing while printing the guidance

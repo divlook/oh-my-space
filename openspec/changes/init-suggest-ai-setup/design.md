@@ -37,6 +37,14 @@ The hint section references both AI-setup commands, not just agent instructions.
 
 Reuse the existing output style: `runSkills` already prints a `log.info` label followed by indented `log.message` command lines. The init hint section follows the same shape for visual consistency.
 
+### Decision: Bare command forms, not action forms
+
+The hint prints the bare commands — `oms agent install` and `oms skills` — not their action forms (`oms agent install --target both`, `oms skills --install`). This is one principle applied to both: each command surfaces its own choice when run (agent install prompts for the target; `oms skills` prints the scoped `npx skills add …` install commands), which matches how both were already designed and keeps the hint a signpost rather than a script. It also fires no `npx` install from an init hint.
+
+This is deliberately *not* a determinism trade-off: the printed hint string does not branch on `process.stdin.isTTY`, so init's identical-output guarantee holds regardless of form. The interactivity belongs to the separate command the user runs later.
+
+Consequence for wording: because bare `oms skills` *prints* the installer command rather than installing, the hint descriptor must say it shows how to install the workspace skills, not that it installs them. (The proposal already uses the accurate "entry point for installing" phrasing.)
+
 ### Decision: Init writes only `oms.yaml`
 
 The hint section is pure output; `oms init` creates no instruction or skill files. This keeps `oms.yaml` the single authoritative outcome of init and removes any need for best-effort failure handling — there is nothing the AI-setup step can fail at, because it does nothing but print.
@@ -61,4 +69,4 @@ The hint section does not depend on `process.stdin.isTTY`. A printed hint is saf
 
 ## Open Questions
 
-- Exact wording and format of the hint section are left to implementation; tests assert that both commands are mentioned, not the exact text, to avoid brittle assertions.
+- Exact label text and column alignment of the hint section are left to implementation. Tests assert that both command names (`oms agent install`, `oms skills`) appear and that `oms skills`'s installer command (`npx skills add …`) does *not* appear in init's output — proving init points to the command without expanding into the installer — rather than asserting exact prose, to avoid brittle assertions.
