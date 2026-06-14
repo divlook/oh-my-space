@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.11.1
+
+### Patch Changes
+
+- [#36](https://github.com/divlook/oh-my-space/pull/36) [`c45f166`](https://github.com/divlook/oh-my-space/commit/c45f1668b4950e0c162e535b14c3b8685543fdd7) Thanks [@divlook](https://github.com/divlook)! - `oms init` now prints optional AI-setup hints after scaffolding `oms.yaml`, pointing to `oms agent install` and `oms skills`. Additive output only — no new command, flag, or behavior change.
+
 ## 0.11.0
 
 ### Minor Changes
