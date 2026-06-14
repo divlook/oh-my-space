@@ -1519,6 +1519,29 @@ test("status help documents the machine-readable --json mode", () => {
   assert.match(result.stdout, /JSON object/);
 });
 
+test("status help documents the schemaVersion 1 field contract", () => {
+  const result = run(["status", "--help"]);
+  assert.equal(result.status, 0);
+  // Names every schemaVersion 1 top-level key.
+  for (const key of [
+    "schemaVersion",
+    "toolVersion",
+    "workspaceRoot",
+    "currentAlias",
+    "root",
+    "repos",
+    "errors",
+  ]) {
+    assert.ok(result.stdout.includes(key), `status --help should name top-level key ${key}`);
+  }
+  // Pointer arrays live under root.submodulePointers, never a top-level "pointers" key.
+  assert.match(result.stdout, /root\.submodulePointers/);
+  for (const arr of ["moved", "staged", "split", "conflict"]) {
+    assert.ok(result.stdout.includes(arr), `status --help should name pointer array ${arr}`);
+  }
+  assert.doesNotMatch(result.stdout, /repos,\s*pointers/i);
+});
+
 test("sync and unsync help document the default-unstage and --commit topology behavior", () => {
   const sync = run(["sync", "--help"]);
   assert.match(sync.stdout, /left unstaged by default/);

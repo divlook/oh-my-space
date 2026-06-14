@@ -1905,7 +1905,7 @@ async function resolveCommandAlias(
   return { kind: "alias", alias: choice as string };
 }
 
-/** Machine-readable per-repo status entry. See design.md for the stable schemaVersion 1 contract. */
+/** Machine-readable per-repo status entry. The stable schemaVersion 1 contract is specified by the ai-submodule-workflow capability and summarized by oms status --help. */
 type JsonRepoStatus = {
   alias: string;
   path: string;
@@ -2841,7 +2841,12 @@ const exitHelp = "\nExit codes: 0 ok | 1 usage/config error | 2 one or more git 
 
 // Per-command help: each new or changed command states its purpose, scope boundary, and an example.
 const statusHelp = `
-Machine-readable mode prints exactly one JSON object on stdout (schemaVersion, root, repos, pointers).
+Machine-readable mode prints exactly one JSON object on stdout. The schemaVersion 1 payload has seven
+top-level keys: schemaVersion, toolVersion, workspaceRoot, currentAlias, root, repos, and errors.
+Submodule pointer movement lives under root.submodulePointers, with moved, staged, split, and conflict
+arrays (not a top-level "pointers" key). Each repos[] entry summarizes one oms/<alias>/ submodule
+(alias, path, branch, head, pin, dirty, ahead/behind, error). Read the live --json output for exact
+per-field values.
 Examples:
   $ oms status --json          # full workspace state for tools and agents
   $ oms status api --json      # narrow the JSON to one alias
