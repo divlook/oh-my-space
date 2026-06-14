@@ -66,15 +66,16 @@ oms/
 
 ## Typical branch flow
 
-Start a branch, do the work inside the submodule, push it, then record the pointer move in your project history:
+Start a branch, commit inside the submodule, push it, then record the pointer move in your project history. Each command stays in a single Git scope:
 
 ```bash
-oms switch api feature/login      # local branch, no remote needed
-# ... edit and commit inside oms/api ...
-oms push api                      # creates origin/feature/login and stages the pointer
-git status                        # shows the staged oms/api pointer update
-git commit                        # record the pointer in your project history
+oms switch api feature/login         # local branch, no remote needed
+oms commit api -m "feat: add login"  # commit inside oms/api (submodule only)
+oms push api                         # creates origin/feature/login (submodule branch only)
+oms record api                       # commit the moved oms/api pointer in your project history
 ```
+
+`oms commit` and `oms push` stay inside the submodule and never touch the root gitlink; `oms record` is the only command that commits an existing root pointer update. After a successful `oms commit`/`oms pull`/`oms push`, `oms` prints an `oms record <alias>` hint when the pointer has moved. Run `oms status --json` for a machine-readable view of which scope changed.
 
 Omit the alias or branch on `oms switch` and `oms checkout` to pick one interactively — synced submodules, and local or `origin/*` branches respectively.
 
@@ -84,11 +85,24 @@ Omit the alias or branch on `oms switch` and `oms checkout` to pick one interact
 
 - **Start branches locally.** `oms switch <alias> <branch>` starts a local branch right away, even before it exists on the remote. `oms checkout <alias> <branch>` fetches origin and checks out an existing remote branch as a tracking branch. The remote branch is created lazily on your first `oms push`.
 - **Stay on a branch.** `oms sync` attaches the baseline branch at the pinned commit instead of leaving a detached HEAD, so everyday submodule work never strands you off a branch.
-- **Keep pointer moves visible.** `oms pull` and `oms push` stage the updated gitlink in the parent repo so you can review and commit it, and `oms status` shows when a submodule has drifted from the recorded pointer.
+- **Keep pointer moves visible, commit them explicitly.** `oms pull` and `oms push` synchronize only the submodule branch — they never stage or commit the root gitlink. The moved pointer shows up in `git status`, `oms status` flags when a submodule has drifted from the recorded pointer, and `oms record <alias>` commits that pointer update in the parent repo.
 
 Submodules must **not** be gitignored, since the `oms/<alias>` gitlink is what records each pinned commit. `oms sync` removes a stale `oms/` entry from `.gitignore` if a previous version added one.
 
-> `oms` makes local submodule work easier, but reproducible sharing still requires pushing the source commit and committing the parent pointer.
+> `oms` makes local submodule work easier, but reproducible sharing still requires pushing the source commit (`oms push`) and recording the parent pointer (`oms record`).
+
+## AI agent workflow
+
+When an AI coding agent works in a workspace, the main risk is operating in the wrong Git scope — the root repository versus an `oms/<alias>/` submodule. Two features make that boundary explicit:
+
+- **`oms status --json`** prints exactly one machine-readable JSON object on stdout (schema-versioned) describing the workspace root, the current alias, root submodule pointers, and each submodule's branch, dirtiness, and ahead/behind state. An agent can inspect it before deciding where to branch or commit.
+- **`oms agent install`** writes a concise, marker-delimited instruction block into `oms/AGENTS.md` and/or `oms/CLAUDE.md`:
+
+  ```bash
+  oms agent install --target both   # or: --target agents | --target claude
+  ```
+
+  These are **root-repository files under `oms/`, not submodule files**. The managed block is delimited by `<!-- OMS START -->` / `<!-- OMS END -->`; content outside the markers is preserved, and `oms agent uninstall` removes only that block (deleting the file if it becomes empty). The files are created but never staged, so you review and commit them yourself.
 
 ## Command reference
 
@@ -98,14 +112,17 @@ Submodules must **not** be gitignored, since the `oms/<alias>` gitlink is what r
 | --- | --- | --- | --- |
 | `oms init` | current directory | Writes a starter `oms.yaml`. | Refuses if `oms.yaml` exists; use `--force`. Does not gitignore `oms/`. |
 | `oms doctor` | project root or child path | Checks `oms.yaml`, git availability, that the workspace is a git repo, and each alias's submodule state. | Returns exit 2 if any warning is raised. |
-| `oms sync <alias>` / `--all` | workspace root | Registers missing repos with `git submodule add`, initializes registered-but-uninitialized ones, fetches, and attaches the baseline branch. | Reproduces the recorded pointer on a fresh clone. |
-| `oms status [alias...]` / `--all` | anywhere under root | Prints branch, pointer state (`ok`/`moved`/`uninit`), dirtiness, and ahead/behind for each submodule. | `moved` means the working commit differs from the recorded pointer — stage/commit it. |
+| `oms sync <alias>` / `--all` | workspace root | Registers missing repos with `git submodule add`, initializes registered-but-uninitialized ones, fetches, and attaches the baseline branch. | Reproduces the recorded pointer on a fresh clone. Topology changes (`.gitmodules`, `oms/<alias>`) are left unstaged by default; commit them via the prompt or `--commit` (`chore(oms): add ...`). |
+| `oms status [alias...]` / `--all` | anywhere under root | Prints branch, pointer state (`ok`/`moved`/`uninit`/`missing`/`conflict`), dirtiness, and ahead/behind for each submodule. | `moved` means the working commit differs from the recorded pointer — record it with `oms record`. `--json` prints one machine-readable object on stdout for tooling and agents. |
+| `oms commit [alias]` | workspace root or inside `oms/<alias>/` | Commits source changes inside the selected submodule only; never the root gitlink. | `-m <message>` is required (repeatable). Commits existing staged changes as-is, otherwise stages all with `git add -A`. Infers the alias from the current `oms/<alias>/` directory. |
+| `oms record [alias]` | workspace root or inside `oms/<alias>/` | Commits an existing root gitlink pointer update for one alias (`chore(oms): update <alias> submodule to <sha>`). | Root repo only, path-limited to `oms/<alias>`; refuses unrelated staged changes. Not for adds/removals — use `oms sync`/`oms unsync`. |
 | `oms switch [alias] [branch]` | workspace root | `git switch` to a LOCAL branch, creating it locally if it does not exist yet (no remote required). | `--from <ref>` sets the start point for a new branch. Omit alias/branch to pick interactively (or create a new branch). |
 | `oms checkout [alias] [branch]` | workspace root | `git fetch origin --prune`, then check out a REMOTE branch (`origin/*`) as a local tracking branch (or switch to an existing local counterpart). | Omit alias/branch to pick interactively. To create a brand-new local branch, use `oms switch`. |
 | `oms fetch ...` | workspace root | `git fetch <remote> --prune` in each submodule. | `--remote <name>` (repeatable) picks the remote(s); omit to choose interactively, defaults to `origin`. |
-| `oms pull ...` | workspace root | `git pull --ff-only <remote>` on each submodule's current branch, then stages the moved pointer. | Requires the submodule to be on a branch. `--remote <name>` selects a single remote (defaults to `origin`). |
-| `oms push <alias>...` | workspace root | `git push <remote> <branch>` (creating the remote branch on first push), then stages the moved pointer. | `--remote <name>` (repeatable) picks the remote(s), defaults to `origin`; upstream is set only for `origin`. `--commit` also commits the pointer update in the parent. |
-| `oms unsync <alias>` / `--all` | workspace root | `git submodule deinit` + `git rm` for the alias; drops an empty `.gitmodules`. | Keeps the `oms.yaml` entry. Use `--force` to discard uncommitted changes. |
+| `oms pull ...` | workspace root | `git pull --ff-only <remote>` on each submodule's current branch. | Submodule branch only — never stages or commits the root gitlink. Rejects a dirty submodule; prints an `oms record <alias>` hint when the pointer moves. `--remote <name>` selects a single remote (defaults to `origin`). |
+| `oms push <alias>...` | workspace root | `git push <remote> <branch>` (creating the remote branch on first push). | Submodule branch only — never stages or commits the root gitlink. `--commit`/`--record` are unsupported; record the root pointer with `oms record <alias>`. `--remote <name>` (repeatable) picks the remote(s); upstream is set only for `origin`. |
+| `oms unsync <alias>` / `--all` | workspace root | `git submodule deinit` + `git rm` for the alias; drops an empty `.gitmodules`. | Keeps the `oms.yaml` entry. Use `--force` to discard uncommitted changes. Removal topology is left unstaged by default; commit via the prompt or `--commit` (`chore(oms): remove ...`). |
+| `oms agent install` / `uninstall` | workspace root | Manages a marker-delimited OMS instruction block in `oms/AGENTS.md` and/or `oms/CLAUDE.md` (root-repo files). | `--target agents\|claude\|both` (omit to choose interactively). Does not stage files. See [AI agent workflow](#ai-agent-workflow). |
 | `oms update` | anywhere | Checks the npm registry and safely updates the installed `oms` CLI only when it detects a confident global install. | Use `--check` for a non-mutating check. Use `--yes` to skip the confirmation prompt for confident global updates. Project-local, temporary runner, development, and unknown installs print guidance only. |
 
 ## Updating the CLI
@@ -158,6 +175,33 @@ Rules:
 - `branch` is optional. When omitted, the remote's default branch is used as the baseline.
 
 JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json` for YAML LSPs).
+
+## Behavior changes
+
+The AI-submodule-workflow update scopes each command to a single Git boundary and makes root pointer commits explicit. If you have existing automation, note these changes:
+
+- **`oms push --commit` is removed** (and `oms push --record` is unsupported). It fails before pushing. Push the submodule branch, then record the root pointer separately:
+
+  ```bash
+  # before
+  oms push api --commit
+
+  # after
+  oms push api      # pushes the submodule branch only
+  oms record api    # commits the moved oms/api pointer in the parent
+  ```
+
+- **`oms pull` and `oms push` no longer stage the root gitlink.** They synchronize only the submodule branch; the moved pointer shows up in `git status` and is committed with `oms record <alias>`.
+
+- **`oms sync` and `oms unsync` no longer leave the root index staged.** Topology changes (`.gitmodules` and `oms/<alias>`) stay in the working tree, unstaged. Create the topology commit through the interactive prompt or with `--commit`:
+
+  ```bash
+  # before: sync left .gitmodules + oms/api staged for you to commit
+  oms sync api && git commit -m "add api"
+
+  # after: topology is unstaged by default
+  oms sync api --commit   # creates chore(oms): add api submodule
+  ```
 
 ## Migration guides
 
