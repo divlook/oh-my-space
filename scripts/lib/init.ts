@@ -14,7 +14,7 @@ repos:
     branch: main
 `;
 
-/** 현재 디렉터리에 기본 oms.yaml 템플릿을 생성합니다. */
+/** Creates a basic oms.yaml template in the current directory. */
 export async function runInit(options: { force?: boolean }): Promise<number> {
   const target = join(process.cwd(), MANIFEST_FILENAME);
   if (existsSync(target) && !options.force) {
