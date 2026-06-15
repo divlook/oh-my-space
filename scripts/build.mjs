@@ -1,10 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import esbuild from "esbuild";
 
 /** Runtime dependencies that must be inlined into the bundle (never externalized). */
 const INLINED_DEPS = ["commander", "@clack/prompts", "semver", "yaml"];
+
+/** Candidate license-file names to look for inside an installed dependency. */
+const LICENSE_FILENAMES = ["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "COPYING"];
 
 const result = await esbuild.build({
   entryPoints: ["scripts/oms.ts"],
@@ -37,8 +40,50 @@ try {
 mkdirSync("dist", { recursive: true });
 writeFileSync("dist/build-info.json", JSON.stringify({ commit }) + "\n");
 
+// The inlined deps are vendored into the bundle; MIT/ISC require their notices to
+// ship with it. esbuild's legalComments only collects inline source comments, which
+// these packages don't carry (they ship separate LICENSE files), so emit a sibling
+// notices file instead. It ships via the existing "dist/" entry in package.json files.
+writeFileSync("dist/THIRD-PARTY-NOTICES.txt", buildThirdPartyNotices());
+
 // Guarantee the bin is executable; do not rely on esbuild's implicit shebang exec bit.
 chmodSync("dist/oms.js", 0o755);
+
+/**
+ * Builds the third-party attribution text reproducing each inlined dependency's
+ * license and copyright notice, as required by their MIT/ISC terms.
+ * @returns {string} the full notices document
+ */
+function buildThirdPartyNotices() {
+  const sections = INLINED_DEPS.map((dep) => {
+    const pkg = JSON.parse(readFileSync(`node_modules/${dep}/package.json`, "utf8"));
+    const license = readLicenseText(dep);
+    const heading = `${pkg.name}@${pkg.version} (${pkg.license ?? "see notice below"})`;
+    const rule = "=".repeat(80);
+    return `${rule}\n${heading}\n${rule}\n\n${license}`;
+  });
+  const header =
+    "oh-my-space bundles the following third-party packages into dist/oms.js.\n" +
+    "Their licenses and copyright notices are reproduced below.\n";
+  return [header, ...sections].join("\n") + "\n";
+}
+
+/**
+ * Reads a dependency's license file text, trying common filenames.
+ * @param {string} dep - dependency package name (its node_modules folder)
+ * @returns {string} the license file contents, trimmed
+ */
+function readLicenseText(dep) {
+  for (const name of LICENSE_FILENAMES) {
+    try {
+      return readFileSync(`node_modules/${dep}/${name}`, "utf8").trim();
+    } catch {
+      // try the next candidate filename
+    }
+  }
+  console.error(`Could not find a license file for inlined dep "${dep}"`);
+  process.exit(1);
+}
 
 /**
  * Fails the build unless the bundle is self-contained: only Node builtins may be
