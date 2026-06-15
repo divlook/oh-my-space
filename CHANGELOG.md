@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.11.2
+
+### Patch Changes
+
+- [#38](https://github.com/divlook/oh-my-space/pull/38) [`3c1319a`](https://github.com/divlook/oh-my-space/commit/3c1319a3133e99f8b12aa713d726c8c23933f9d5) Thanks [@divlook](https://github.com/divlook)! - `oms skills` now points to the scoped `divlook/oh-my-space/skills` source so `npx skills add` discovers only the three `oms` workspace skills (`oms-workspace`, `oms-pointer`, `oms-branch`), excluding repository-development skills from agent directories such as `.opencode/skills/`, `.codex/skills/`, and `.claude/skills/`. Affects the printed project/global commands, `--install` delegation, and manual-fallback output.
+
 ## 0.11.1
 
 ### Patch Changes
