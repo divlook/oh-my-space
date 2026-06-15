@@ -1,0 +1,20 @@
+export const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_@-]*$/;
+export const REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+export const ALLOWED_TOP_KEYS = new Set(["repos"]);
+export const ALLOWED_ITEM_KEYS = new Set(["alias", "remotes", "branch"]);
+export const MANIFEST_FILENAME = "oms.yaml";
+export const DATA_DIRNAME = "oms";
+export const GITIGNORE_ENTRY = `${DATA_DIRNAME}/`;
+export const GITIGNORE_COMMENT = "# managed by oms";
+export const LEGACY_MANIFEST = "sources.yaml";
+export const LEGACY_DATA_DIRNAME = "sources";
+export const RENAME_MIGRATION_DOC = "docs/migrations/0.3.x-to-0.4.0.md";
+export const WORKTREE_MIGRATION_DOC = "docs/migrations/0.5.x-to-0.6.0.md";
+export const REMOTES_MIGRATION_DOC = "docs/migrations/0.6.x-to-0.7.0.md";
+/** GitHub blob base for the clickable doc permalinks shown in CLI messages. */
+export const DOCS_REPO_BLOB_BASE = "https://github.com/divlook/oh-my-space/blob";
+export const MIN_GIT_MAJOR = 2;
+export const MIN_GIT_MINOR = 40;
+export const PACKAGE_NAME = "oh-my-space";
+export const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
+export const REGISTRY_TIMEOUT_MS = 10_000;
