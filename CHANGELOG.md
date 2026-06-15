@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.11.3
+
+### Patch Changes
+
+- [#40](https://github.com/divlook/oh-my-space/pull/40) [`652b01f`](https://github.com/divlook/oh-my-space/commit/652b01fc7b8dd1bedbdd1cb02afd46127fbd6529) Thanks [@divlook](https://github.com/divlook)! - build: bundle the CLI into a single dependency-free `dist/oms.js`. The build now type-checks with `tsc --noEmit` and bundles via esbuild, inlining the former runtime dependencies (`commander`, `@clack/prompts`, `semver`, `yaml`) so the published package declares no runtime dependencies. Internally, the monolithic `scripts/oms.ts` was split into cohesive `scripts/lib/*` modules. No user-facing CLI behavior, command surface, or output changes.
+
 ## 0.11.2
 
 ### Patch Changes
