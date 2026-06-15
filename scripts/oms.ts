@@ -2569,8 +2569,8 @@ async function runAgentUninstall(options: AgentOptions): Promise<number> {
   return 0;
 }
 
-/** npx skills package identifier for the oms workspace skills. */
-const SKILLS_REPO = "divlook/oh-my-space";
+/** npx skills package identifier for the oms workspace skills (scoped to the repository skills/ directory). */
+const SKILLS_REPO = "divlook/oh-my-space/skills";
 
 type SkillsOptions = { install?: boolean };
 

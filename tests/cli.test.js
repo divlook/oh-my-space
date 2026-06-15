@@ -2369,8 +2369,8 @@ test("skills prints the project and global install commands", () => {
   const result = run(["skills"]);
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.match(output, /npx skills add divlook\/oh-my-space\b/); // project scope
-  assert.match(output, /npx skills add divlook\/oh-my-space -g\b/); // global scope
+  assert.match(output, /npx skills add divlook\/oh-my-space\/skills\b/); // project scope
+  assert.match(output, /npx skills add divlook\/oh-my-space\/skills -g\b/); // global scope
 });
 
 test("skills --install delegates to npx skills add from the workspace root, forwarding extra args", () => {
@@ -2384,7 +2384,7 @@ test("skills --install delegates to npx skills add from the workspace root, forw
   assert.equal(result.status, 0, result.stdout + result.stderr);
 
   const captured = JSON.parse(readFileSync(captureFile, "utf8"));
-  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space", "--skill", "oms-branch"]);
+  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space/skills", "--skill", "oms-branch"]);
   // Resolved to the workspace root, not the oms/<alias>/ subdir the command ran from.
   assert.equal(realpathSync(captured.cwd), realpathSync(ws));
 });
@@ -2404,7 +2404,7 @@ test("skills --install delegates the overridden executable the same args npx wou
   const result = run(["skills", "--install"], { cwd: ws, env: skillsEnv(bin) });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const captured = JSON.parse(readFileSync(captureFile, "utf8"));
-  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space"]);
+  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space/skills"]);
 });
 
 test("skills --install outside a workspace without -g errors and points to the global install", () => {
@@ -2413,7 +2413,7 @@ test("skills --install outside a workspace without -g errors and points to the g
   const result = run(["skills", "--install"], { cwd: dir, env: skillsEnv(bin) });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
-  assert.match(output, /npx skills add divlook\/oh-my-space -g/);
+  assert.match(output, /npx skills add divlook\/oh-my-space\/skills -g/);
   assert.ok(!existsSync(captureFile), "delegation must not run outside a workspace without -g");
 });
 
@@ -2423,7 +2423,7 @@ test("skills --install -g delegates even outside a workspace", () => {
   const result = run(["skills", "--install", "-g"], { cwd: dir, env: skillsEnv(bin) });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const captured = JSON.parse(readFileSync(captureFile, "utf8"));
-  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space", "-g"]);
+  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space/skills", "-g"]);
 });
 
 test("skills --install prints the manual command when delegation cannot execute", () => {
@@ -2433,7 +2433,7 @@ test("skills --install prints the manual command when delegation cannot execute"
   const result = run(["skills", "--install"], { cwd: ws, env: skillsEnv(missing) });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
-  assert.match(output, /npx skills add divlook\/oh-my-space/);
+  assert.match(output, /npx skills add divlook\/oh-my-space\/skills/);
 });
 
 test("skills help documents purpose, scope, and an example", () => {
