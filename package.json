@@ -35,7 +35,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/oms.js', 0o755)\" && node scripts/gen-build-info.mjs",
+    "build": "tsc --noEmit && node scripts/build.mjs",
     "test": "npm run build && node --test tests/*.test.js",
     "prepack": "npm test",
     "changeset": "changeset",
@@ -45,14 +45,13 @@
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.29.7",
+    "@clack/prompts": "^1.4.0",
     "@types/node": "^20.19.0",
     "@types/semver": "^7.7.1",
-    "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "@clack/prompts": "^1.4.0",
     "commander": "^14.0.3",
+    "esbuild": "^0.28.1",
     "semver": "^7.8.4",
+    "typescript": "^5.9.3",
     "yaml": "^2.8.1"
   }
 }
