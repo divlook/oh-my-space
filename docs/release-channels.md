@@ -70,7 +70,6 @@ For follow-up beta fixes, choose the new commit and run the beta release script 
 Promote a tested beta by publishing a stable semver version to `latest`, not by retagging the beta version as stable.
 
 ```bash
-npx changeset pre exit
 npm run version
 npm run release
 npm view oh-my-space dist-tags
