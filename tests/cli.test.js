@@ -2036,6 +2036,45 @@ test("update --check reports prerelease channel guidance", () => {
   assert.match(output, /Return to stable: npm install -g oh-my-space@latest/);
 });
 
+test("update --check reports prerelease guidance for detected package manager", () => {
+  const betaVersion = "0.12.0-beta.0";
+  const stableVersion = "0.12.0";
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_PACKAGE_VERSION: betaVersion,
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: stableVersion } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        label: "global pnpm install",
+        updateCommand: { executable: "pnpm", args: ["add", "-g", "oh-my-space@latest"] },
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Stay on beta manually: pnpm add -g oh-my-space@beta/);
+  assert.match(output, /Return to stable: pnpm add -g oh-my-space@latest/);
+  assert.doesNotMatch(output, /Stay on beta manually: npm install -g oh-my-space@beta/);
+  assert.doesNotMatch(output, /Return to stable: npm install -g oh-my-space@latest/);
+});
+
+test("update --check reports prerelease guidance alternatives without detected package manager", () => {
+  const betaVersion = "0.12.0-beta.0";
+  const stableVersion = "0.12.0";
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_PACKAGE_VERSION: betaVersion,
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: stableVersion } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("unknown", { guidance: [] }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /npm beta: npm install -g oh-my-space@beta/);
+  assert.match(output, /pnpm beta: pnpm add -g oh-my-space@beta/);
+  assert.match(output, /yarn stable: yarn global add oh-my-space@latest/);
+  assert.match(output, /bun stable: bun add -g oh-my-space@latest/);
+});
+
 test("update fails cleanly when registry latest is unavailable", () => {
   const result = run(["update", "--check"], {
     env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": {} }) }),

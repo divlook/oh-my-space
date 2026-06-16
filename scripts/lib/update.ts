@@ -4,7 +4,7 @@ import semver from "semver";
 import { PACKAGE_NAME, REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
 import { detectInstallContext, formatCommand } from "./doctor.js";
 import { readPackageVersion, runtimePlatform, testEnv } from "./env.js";
-import type { InstallContext, UpdateCommand, UpdateOptions } from "./types.js";
+import type { InstallContext, PackageManager, UpdateCommand, UpdateOptions } from "./types.js";
 
 async function fetchLatestPackageVersion(): Promise<string> {
   const mocked = testEnv("OMS_TEST_REGISTRY_RESPONSE");
@@ -75,10 +75,29 @@ function printGuidance(context: InstallContext): void {
   for (const command of context.guidance) log.message(`  ${command}`);
 }
 
-function printPrereleaseGuidance(): void {
+function channelInstallCommand(manager: PackageManager, tag: "beta" | "latest"): string {
+  if (manager === "npm") return `npm install -g ${PACKAGE_NAME}@${tag}`;
+  if (manager === "pnpm") return `pnpm add -g ${PACKAGE_NAME}@${tag}`;
+  if (manager === "yarn") return `yarn global add ${PACKAGE_NAME}@${tag}`;
+  return `bun add -g ${PACKAGE_NAME}@${tag}`;
+}
+
+function prereleaseGuidanceManager(context: InstallContext): PackageManager | null {
+  return context.manager ?? context.updateCommand?.executable ?? null;
+}
+
+function printPrereleaseGuidance(context: InstallContext): void {
+  const manager = prereleaseGuidanceManager(context);
   log.info("Prerelease channel guidance:");
-  log.message("  Stay on beta manually: npm install -g oh-my-space@beta");
-  log.message("  Return to stable: npm install -g oh-my-space@latest");
+  if (manager) {
+    log.message(`  Stay on beta manually: ${channelInstallCommand(manager, "beta")}`);
+    log.message(`  Return to stable: ${channelInstallCommand(manager, "latest")}`);
+    return;
+  }
+  for (const fallbackManager of ["npm", "pnpm", "yarn", "bun"] as const) {
+    log.message(`  ${fallbackManager} beta: ${channelInstallCommand(fallbackManager, "beta")}`);
+    log.message(`  ${fallbackManager} stable: ${channelInstallCommand(fallbackManager, "latest")}`);
+  }
 }
 
 function printPrereleaseStatus(currentVersion: string, latestVersion: string): void {
@@ -150,12 +169,12 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
     printUpdateHeader(currentVersion, latestVersion);
     if (prerelease) printPrereleaseStatus(currentVersion, latestVersion);
     if (comparison === 0) {
-      if (prerelease) printPrereleaseGuidance();
+      if (prerelease) printPrereleaseGuidance(detectInstallContext());
       log.success("oms is up to date.");
       return 0;
     }
     if (comparison > 0) {
-      if (prerelease) printPrereleaseGuidance();
+      if (prerelease) printPrereleaseGuidance(detectInstallContext());
       log.info("Installed version is newer than the npm registry latest; no downgrade will be performed.");
       return 0;
     }
@@ -170,7 +189,7 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
   const prerelease = isPrereleaseVersion(currentVersion);
   if (prerelease) {
     log.info("Selected update channel: stable latest (oh-my-space@latest).");
-    printPrereleaseGuidance();
+    printPrereleaseGuidance(context);
   }
 
   if (options.check) {

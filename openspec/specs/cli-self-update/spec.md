@@ -78,7 +78,7 @@ The system SHALL provide actionable manual update guidance when it cannot or mus
 - **THEN** the command exits without prompting for update or running a package-manager command
 
 ### Requirement: Provide prerelease channel update guidance
-The system SHALL provide clear guidance when the installed CLI version is a prerelease or beta version.
+The system SHALL provide clear guidance when the installed CLI version is a prerelease or beta version. When the installation context identifies a package manager, the guidance SHALL use commands for that package manager. When no package manager can be confidently selected, the guidance SHALL provide supported package-manager alternatives.
 
 #### Scenario: Check update from beta installation
 - **WHEN** the user runs `oms update --check` from a prerelease installation
@@ -93,3 +93,11 @@ The system SHALL provide clear guidance when the installed CLI version is a prer
 #### Scenario: Staying on beta manually
 - **WHEN** beta channel automatic updates are not supported
 - **THEN** the update guidance includes a command targeting `oh-my-space@beta`
+
+#### Scenario: Prerelease guidance matches detected package manager
+- **WHEN** the user runs `oms update --check` from a prerelease installation and the installation context identifies a package manager
+- **THEN** the beta and stable guidance uses commands for the detected package manager
+
+#### Scenario: Prerelease guidance without a detected package manager
+- **WHEN** the user runs `oms update --check` from a prerelease installation and no package manager can be confidently selected
+- **THEN** the beta and stable guidance includes supported package-manager alternatives
