@@ -40,7 +40,8 @@
     "prepack": "npm test",
     "changeset": "changeset",
     "version": "changeset version",
-    "release": "changeset publish"
+    "release": "changeset publish",
+    "release:beta": "node scripts/publish-beta.mjs"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",

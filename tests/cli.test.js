@@ -2014,6 +2014,28 @@ test("update --check reports update availability and global command", () => {
   assert.match(output, /Selected command: npm install -g oh-my-space@latest/);
 });
 
+test("update --check reports prerelease channel guidance", () => {
+  const betaVersion = "0.12.0-beta.0";
+  const stableVersion = "0.12.0";
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_PACKAGE_VERSION: betaVersion,
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: stableVersion } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        label: "global npm install",
+        updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Installed prerelease version: 0\.12\.0-beta\.0/);
+  assert.match(output, /Stable latest version: 0\.12\.0/);
+  assert.match(output, /Selected update channel: stable latest \(oh-my-space@latest\)/);
+  assert.match(output, /Stay on beta manually: npm install -g oh-my-space@beta/);
+  assert.match(output, /Return to stable: npm install -g oh-my-space@latest/);
+});
+
 test("update fails cleanly when registry latest is unavailable", () => {
   const result = run(["update", "--check"], {
     env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": {} }) }),
@@ -2275,6 +2297,29 @@ test("update --yes runs a confident global command and warns on verification mis
   assert.equal(result.status, 0, output);
   assert.match(output, /Selected command: pnpm add -g oh-my-space@latest/);
   assert.match(output, versionPattern(`Post-update verification saw ${currentVersion}, expected ${newerVersion}`));
+  assert.match(output, /Update command completed/);
+});
+
+test("update --yes from prerelease makes the stable target explicit before mutation", () => {
+  const betaVersion = "0.12.0-beta.0";
+  const stableVersion = "0.12.0";
+  const result = run(["update", "--yes"], {
+    env: updateEnv({
+      OMS_TEST_PACKAGE_VERSION: betaVersion,
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: stableVersion } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        label: "global npm install",
+        updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "1",
+      OMS_TEST_UPDATE_EXIT: "0",
+      OMS_TEST_VERIFY_VERSION: stableVersion,
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Selected command: npm install -g oh-my-space@latest/);
+  assert.match(output, /Selected update channel: stable latest \(oh-my-space@latest\)/);
   assert.match(output, /Update command completed/);
 });
 
