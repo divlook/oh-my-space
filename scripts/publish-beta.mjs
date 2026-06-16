@@ -45,6 +45,9 @@ try {
     run("npm", ["pack", "--dry-run"]);
     console.log("Dry-run complete. Re-run with --publish to publish this beta version.");
   }
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
 } finally {
   restorePackageFiles();
 }
@@ -75,7 +78,7 @@ function run(command, args) {
   const result = spawnSync(command, args, { stdio: "inherit", shell: process.platform === "win32" });
   if (result.status === 0) return;
   const detail = result.status === null ? `signal ${result.signal ?? "unknown"}` : `exit ${result.status}`;
-  fail(`${command} ${args.join(" ")} failed with ${detail}`);
+  throw new Error(`${command} ${args.join(" ")} failed with ${detail}`);
 }
 
 /** Writes the temporary beta version to package metadata. */
