@@ -46,6 +46,8 @@ export function readJson<T>(path: string): T | null {
 }
 
 export function readPackageVersion(): string {
+  const mocked = testEnv("OMS_TEST_PACKAGE_VERSION");
+  if (mocked !== undefined) return mocked;
   const pkg = readJson<{ version?: string }>(join(packageRoot, "package.json"));
   return pkg?.version ?? "0.0.0";
 }

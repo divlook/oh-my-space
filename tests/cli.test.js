@@ -17,6 +17,7 @@ import semver from "semver";
 import { parse as parseYaml } from "yaml";
 
 const cli = resolve("dist/oms.js");
+const publishBetaScript = resolve("scripts/publish-beta.mjs");
 
 const testEnv = {
   ...process.env,
@@ -2014,6 +2015,91 @@ test("update --check reports update availability and global command", () => {
   assert.match(output, /Selected command: npm install -g oh-my-space@latest/);
 });
 
+test("update --check reports prerelease channel guidance", () => {
+  const betaVersion = "0.12.0-beta.0";
+  const stableVersion = "0.12.0";
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_PACKAGE_VERSION: betaVersion,
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: stableVersion } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        label: "global npm install",
+        updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Installed prerelease version: 0\.12\.0-beta\.0/);
+  assert.match(output, /Stable latest version: 0\.12\.0/);
+  assert.match(output, /Selected update channel: stable latest \(oh-my-space@latest\)/);
+  assert.match(output, /Stay on beta manually: npm install -g oh-my-space@beta/);
+  assert.match(output, /Return to stable: npm install -g oh-my-space@latest/);
+});
+
+test("update --check reports prerelease guidance for detected package manager", () => {
+  const betaVersion = "0.12.0-beta.0";
+  const stableVersion = "0.12.0";
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_PACKAGE_VERSION: betaVersion,
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: stableVersion } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        label: "global pnpm install",
+        updateCommand: { executable: "pnpm", args: ["add", "-g", "oh-my-space@latest"] },
+      }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Stay on beta manually: pnpm add -g oh-my-space@beta/);
+  assert.match(output, /Return to stable: pnpm add -g oh-my-space@latest/);
+  assert.doesNotMatch(output, /Stay on beta manually: npm install -g oh-my-space@beta/);
+  assert.doesNotMatch(output, /Return to stable: npm install -g oh-my-space@latest/);
+});
+
+test("update --check reports prerelease guidance alternatives without detected package manager", () => {
+  const betaVersion = "0.12.0-beta.0";
+  const stableVersion = "0.12.0";
+  const result = run(["update", "--check"], {
+    env: updateEnv({
+      OMS_TEST_PACKAGE_VERSION: betaVersion,
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: stableVersion } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("unknown", { guidance: [] }),
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /npm beta: npm install -g oh-my-space@beta/);
+  assert.match(output, /pnpm beta: pnpm add -g oh-my-space@beta/);
+  assert.match(output, /yarn stable: yarn global add oh-my-space@latest/);
+  assert.match(output, /bun stable: bun add -g oh-my-space@latest/);
+});
+
+test("release:beta rejects publishing with allow-dirty", () => {
+  const cwd = tempWorkspace();
+  execFileSync("git", ["init", "-b", "main", cwd], { stdio: "ignore", env: testEnv });
+  configIdentity(cwd);
+  writeFileSync(join(cwd, "package.json"), `${JSON.stringify({ name: "oh-my-space", version: "0.12.0" }, null, 2)}\n`);
+  writeFileSync(
+    join(cwd, "package-lock.json"),
+    `${JSON.stringify({ name: "oh-my-space", version: "0.12.0", packages: { "": { version: "0.12.0" } } }, null, 2)}\n`,
+  );
+  git(cwd, "add", "package.json", "package-lock.json");
+  git(cwd, "commit", "-m", "init");
+  writeFileSync(join(cwd, "dirty.txt"), "uncommitted\n");
+
+  const result = spawnSync(process.execPath, [publishBetaScript, "--publish", "--allow-dirty"], {
+    cwd,
+    encoding: "utf8",
+    env: testEnv,
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /--allow-dirty is only supported for dry-run verification/);
+  assert.doesNotMatch(output, /Preparing oh-my-space@/);
+});
+
 test("update fails cleanly when registry latest is unavailable", () => {
   const result = run(["update", "--check"], {
     env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": {} }) }),
@@ -2275,6 +2361,29 @@ test("update --yes runs a confident global command and warns on verification mis
   assert.equal(result.status, 0, output);
   assert.match(output, /Selected command: pnpm add -g oh-my-space@latest/);
   assert.match(output, versionPattern(`Post-update verification saw ${currentVersion}, expected ${newerVersion}`));
+  assert.match(output, /Update command completed/);
+});
+
+test("update --yes from prerelease makes the stable target explicit before mutation", () => {
+  const betaVersion = "0.12.0-beta.0";
+  const stableVersion = "0.12.0";
+  const result = run(["update", "--yes"], {
+    env: updateEnv({
+      OMS_TEST_PACKAGE_VERSION: betaVersion,
+      OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: stableVersion } }),
+      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+        label: "global npm install",
+        updateCommand: { executable: "npm", args: ["install", "-g", "oh-my-space@latest"] },
+      }),
+      OMS_TEST_MANAGER_AVAILABLE: "1",
+      OMS_TEST_UPDATE_EXIT: "0",
+      OMS_TEST_VERIFY_VERSION: stableVersion,
+    }),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Selected command: npm install -g oh-my-space@latest/);
+  assert.match(output, /Selected update channel: stable latest \(oh-my-space@latest\)/);
   assert.match(output, /Update command completed/);
 });
 

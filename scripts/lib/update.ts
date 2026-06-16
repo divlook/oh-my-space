@@ -4,7 +4,7 @@ import semver from "semver";
 import { PACKAGE_NAME, REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
 import { detectInstallContext, formatCommand } from "./doctor.js";
 import { readPackageVersion, runtimePlatform, testEnv } from "./env.js";
-import type { InstallContext, UpdateCommand, UpdateOptions } from "./types.js";
+import type { InstallContext, PackageManager, UpdateCommand, UpdateOptions } from "./types.js";
 
 async function fetchLatestPackageVersion(): Promise<string> {
   const mocked = testEnv("OMS_TEST_REGISTRY_RESPONSE");
@@ -52,6 +52,12 @@ function compareVersions(currentVersion: string, latestVersion: string): number 
   return semver.compare(current, latest);
 }
 
+function isPrereleaseVersion(version: string): boolean {
+  const parsed = semver.valid(version);
+  if (!parsed) throw new Error(`Installed version is not valid semver: ${version}`);
+  return semver.prerelease(parsed) !== null;
+}
+
 function printUpdateHeader(currentVersion: string, latestVersion: string): void {
   log.info(`Current version: ${currentVersion}`);
   log.info(`Latest version: ${latestVersion}`);
@@ -67,6 +73,36 @@ function printGuidance(context: InstallContext): void {
   if (context.guidance.length === 0) return;
   log.info("Manual update guidance:");
   for (const command of context.guidance) log.message(`  ${command}`);
+}
+
+function channelInstallCommand(manager: PackageManager, tag: "beta" | "latest"): string {
+  if (manager === "npm") return `npm install -g ${PACKAGE_NAME}@${tag}`;
+  if (manager === "pnpm") return `pnpm add -g ${PACKAGE_NAME}@${tag}`;
+  if (manager === "yarn") return `yarn global add ${PACKAGE_NAME}@${tag}`;
+  return `bun add -g ${PACKAGE_NAME}@${tag}`;
+}
+
+function prereleaseGuidanceManager(context: InstallContext): PackageManager | null {
+  return context.manager ?? context.updateCommand?.executable ?? null;
+}
+
+function printPrereleaseGuidance(context: InstallContext): void {
+  const manager = prereleaseGuidanceManager(context);
+  log.info("Prerelease channel guidance:");
+  if (manager) {
+    log.message(`  Stay on beta manually: ${channelInstallCommand(manager, "beta")}`);
+    log.message(`  Return to stable: ${channelInstallCommand(manager, "latest")}`);
+    return;
+  }
+  for (const fallbackManager of ["npm", "pnpm", "yarn", "bun"] as const) {
+    log.message(`  ${fallbackManager} beta: ${channelInstallCommand(fallbackManager, "beta")}`);
+    log.message(`  ${fallbackManager} stable: ${channelInstallCommand(fallbackManager, "latest")}`);
+  }
+}
+
+function printPrereleaseStatus(currentVersion: string, latestVersion: string): void {
+  log.info(`Installed prerelease version: ${currentVersion}`);
+  log.info(`Stable latest version: ${latestVersion}`);
 }
 
 function commandAvailability(command: UpdateCommand): boolean {
@@ -129,12 +165,16 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
   try {
     latestVersion = await fetchLatestPackageVersion();
     const comparison = compareVersions(currentVersion, latestVersion);
+    const prerelease = isPrereleaseVersion(currentVersion);
     printUpdateHeader(currentVersion, latestVersion);
+    if (prerelease) printPrereleaseStatus(currentVersion, latestVersion);
     if (comparison === 0) {
+      if (prerelease) printPrereleaseGuidance(detectInstallContext());
       log.success("oms is up to date.");
       return 0;
     }
     if (comparison > 0) {
+      if (prerelease) printPrereleaseGuidance(detectInstallContext());
       log.info("Installed version is newer than the npm registry latest; no downgrade will be performed.");
       return 0;
     }
@@ -146,6 +186,11 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
   log.warn("Update available.");
   const context = detectInstallContext();
   printInstallContext(context);
+  const prerelease = isPrereleaseVersion(currentVersion);
+  if (prerelease) {
+    log.info("Selected update channel: stable latest (oh-my-space@latest).");
+    printPrereleaseGuidance(context);
+  }
 
   if (options.check) {
     if (!context.updateCommand) printGuidance(context);
