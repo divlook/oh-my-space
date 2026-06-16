@@ -17,6 +17,7 @@ import semver from "semver";
 import { parse as parseYaml } from "yaml";
 
 const cli = resolve("dist/oms.js");
+const publishBetaScript = resolve("scripts/publish-beta.mjs");
 
 const testEnv = {
   ...process.env,
@@ -2073,6 +2074,30 @@ test("update --check reports prerelease guidance alternatives without detected p
   assert.match(output, /pnpm beta: pnpm add -g oh-my-space@beta/);
   assert.match(output, /yarn stable: yarn global add oh-my-space@latest/);
   assert.match(output, /bun stable: bun add -g oh-my-space@latest/);
+});
+
+test("release:beta rejects publishing with allow-dirty", () => {
+  const cwd = tempWorkspace();
+  execFileSync("git", ["init", "-b", "main", cwd], { stdio: "ignore", env: testEnv });
+  configIdentity(cwd);
+  writeFileSync(join(cwd, "package.json"), `${JSON.stringify({ name: "oh-my-space", version: "0.12.0" }, null, 2)}\n`);
+  writeFileSync(
+    join(cwd, "package-lock.json"),
+    `${JSON.stringify({ name: "oh-my-space", version: "0.12.0", packages: { "": { version: "0.12.0" } } }, null, 2)}\n`,
+  );
+  git(cwd, "add", "package.json", "package-lock.json");
+  git(cwd, "commit", "-m", "init");
+  writeFileSync(join(cwd, "dirty.txt"), "uncommitted\n");
+
+  const result = spawnSync(process.execPath, [publishBetaScript, "--publish", "--allow-dirty"], {
+    cwd,
+    encoding: "utf8",
+    env: testEnv,
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /--allow-dirty is only supported for dry-run verification/);
+  assert.doesNotMatch(output, /Preparing oh-my-space@/);
 });
 
 test("update fails cleanly when registry latest is unavailable", () => {

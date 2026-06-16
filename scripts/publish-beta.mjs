@@ -23,6 +23,9 @@ process.once("SIGTERM", () => restoreAndExit(143));
 if (!isStableSemver(baseVersion)) {
   fail(`--base-version must be a stable semver version, got ${baseVersion}`);
 }
+if (args.publish && args.allowDirty) {
+  fail("--allow-dirty is only supported for dry-run verification and cannot be combined with --publish.");
+}
 if (!args.allowDirty && gitStatus().length > 0) {
   fail("Working tree must be clean before beta publishing. Use --allow-dirty only for intentional local verification.");
 }
@@ -136,7 +139,7 @@ Creates a temporary prerelease version like 0.12.0-beta.sha-a1b2c3d from the cur
 Options:
   --base-version <version>  Stable version base for the beta package. Defaults to package.json version.
   --publish                 Publish to npm with the beta dist-tag. Omit for a dry-run pack.
-  --allow-dirty             Allow a dirty working tree.
+  --allow-dirty             Allow a dirty working tree for dry-run verification only.
   -h, --help                Show this help.
 `);
 }

@@ -46,6 +46,7 @@ npm run release:beta -- --base-version 0.12.0 --publish
 The script:
 
 - Requires a clean working tree by default.
+- Rejects `--publish --allow-dirty` so published beta artifacts always match the printed source commit.
 - Temporarily sets a version such as `0.12.0-beta.sha-a1b2c3d`.
 - Runs npm's package flow, including the existing `prepack` test gate.
 - Publishes with `npm publish --tag beta` only when `--publish` is provided.

@@ -60,3 +60,10 @@ The release documentation SHALL include a verification step for npm dist-tags af
 #### Scenario: Verifying a stable publish
 - **WHEN** maintainers publish a stable version
 - **THEN** the release process directs them to inspect npm dist-tags and confirm that `latest` points to the intended stable version
+
+### Requirement: Beta publishing is reproducible
+The beta publishing process SHALL prevent public beta artifacts from including uncommitted local changes.
+
+#### Scenario: Dirty working tree override is limited to dry-runs
+- **WHEN** maintainers request a beta publish with dirty working tree override enabled
+- **THEN** the release process rejects the publish before creating a package artifact
