@@ -13,9 +13,18 @@
   },
   "keywords": [
     "oms",
-    "submodule",
+    "oh-my-space",
     "git",
-    "cli"
+    "cli",
+    "git-submodule",
+    "submodule",
+    "workspace",
+    "multi-repo",
+    "monorepo",
+    "repository-management",
+    "developer-tools",
+    "ai",
+    "agent"
   ],
   "author": {
     "name": "divlook",
