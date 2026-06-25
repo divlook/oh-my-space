@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "@clack/prompts";
 import { DATA_DIRNAME } from "./constants.js";
@@ -37,7 +37,13 @@ import {
   resolveRemotes,
   selectRepos,
 } from "./prompts.js";
-import { printRootFollowup } from "./status.js";
+import {
+  gitOperationInProgress,
+  gitlinkState,
+  partialRemovalTopology,
+  pendingRemovalTopology,
+  printRootFollowup,
+} from "./status.js";
 import type {
   CheckoutOptions,
   ManageCommand,
@@ -65,10 +71,151 @@ function cleanupFailedAdd(repoRoot: string, alias: string): void {
   } catch {}
 }
 
+function headGitmodulesSection(repoRoot: string, alias: string): string | null {
+  const path = submodulePath(alias);
+  const r = runGit(repoRoot, ["show", "HEAD:.gitmodules"]);
+  if (!r.success) return null;
+  const lines = r.stdout.split("\n");
+  const start = lines.findIndex((line) => line.trim() === `[submodule "${path}"]`);
+  if (start === -1) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^\s*\[submodule ".+"\]\s*$/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return `${lines.slice(start, end).join("\n").replace(/\n*$/, "\n")}`;
+}
+
+function headFollowingGitmodulesHeaders(repoRoot: string, alias: string): string[] {
+  const path = submodulePath(alias);
+  const r = runGit(repoRoot, ["show", "HEAD:.gitmodules"]);
+  if (!r.success) return [];
+  const lines = r.stdout.split("\n");
+  const start = lines.findIndex((line) => line.trim() === `[submodule "${path}"]`);
+  if (start === -1) return [];
+  const headers: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const match = lines[i].trim().match(/^\[submodule "(.+)"\]$/);
+    if (match) headers.push(`[submodule "${match[1]}"]`);
+  }
+  return headers;
+}
+
+function currentGitmodulesHasSameAliasSection(repoRoot: string, alias: string): boolean {
+  const gitmodules = join(repoRoot, ".gitmodules");
+  if (!existsSync(gitmodules)) return false;
+  return readFileSync(gitmodules, "utf8").split("\n").some((line) => line.trim() === `[submodule "${submodulePath(alias)}"]`);
+}
+
+function insertGitmodulesSection(repoRoot: string, alias: string, section: string): void {
+  const gitmodules = join(repoRoot, ".gitmodules");
+  const existing = existsSync(gitmodules) ? readFileSync(gitmodules, "utf8") : "";
+  const followingHeaders = headFollowingGitmodulesHeaders(repoRoot, alias);
+  const lines = existing.split("\n");
+  for (const followingHeader of followingHeaders) {
+    const insertAt = lines.findIndex((line) => line.trim() === followingHeader);
+    if (insertAt !== -1) {
+      lines.splice(insertAt, 0, ...section.replace(/\n$/, "").split("\n"));
+      writeFileSync(gitmodules, lines.join("\n"));
+      return;
+    }
+  }
+  const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+  writeFileSync(gitmodules, `${existing}${separator}${section}`);
+}
+
+function gitmoduleValue(repoRoot: string, alias: string, key: "url" | "branch"): string | null {
+  const r = runGit(repoRoot, ["config", "--file", ".gitmodules", "--get", `submodule.${submodulePath(alias)}.${key}`]);
+  const value = r.stdout.trim();
+  return r.success && value.length > 0 ? value : null;
+}
+
+function reconcileGitmodulesMetadata(repoRoot: string, repo: Repo): boolean {
+  const path = submodulePath(repo.alias);
+  let changed = false;
+  if (gitmoduleValue(repoRoot, repo.alias, "url") !== repo.remotes.origin) {
+    runGit(repoRoot, ["config", "--file", ".gitmodules", `submodule.${path}.url`, repo.remotes.origin]);
+    changed = true;
+  }
+  const currentBranchValue = gitmoduleValue(repoRoot, repo.alias, "branch");
+  if (repo.branch) {
+    if (currentBranchValue !== repo.branch) {
+      runGit(repoRoot, ["config", "--file", ".gitmodules", `submodule.${path}.branch`, repo.branch]);
+      changed = true;
+    }
+  } else if (currentBranchValue !== null) {
+    runGit(repoRoot, ["config", "--file", ".gitmodules", "--unset", `submodule.${path}.branch`]);
+    changed = true;
+  }
+  return changed;
+}
+
+function cleanupRestorableAliasDir(repoRoot: string, alias: string): boolean {
+  const dir = aliasDir(repoRoot, alias);
+  if (!existsSync(dir) || submoduleInitialized(repoRoot, alias)) return true;
+  const entries = readdirSync(dir);
+  if (entries.length > 0 && entries.some((entry) => entry !== ".DS_Store")) return false;
+  rmSync(dir, { recursive: true, force: true });
+  return true;
+}
+
+function restorePendingRemoval(repo: Repo, repoRoot: string): { result: OperationResult; restored: boolean } {
+  const alias = repo.alias;
+  const path = submodulePath(alias);
+  const state = gitlinkState(repoRoot, alias);
+  const shouldRestore = state.headOid !== null && (pendingRemovalTopology(state) || partialRemovalTopology(state));
+  if (!shouldRestore) return { result: "failed", restored: false };
+
+  const unsafe = (detail: string): { result: OperationResult; restored: boolean } => {
+    log.error(`${alias}: cannot restore pending removal safely (${detail}). Resolve or commit the pending removal before syncing.`);
+    return { result: "failed", restored: true };
+  };
+
+  if (state.conflict) return unsafe("root gitlink is conflicted");
+  const rootOp = gitOperationInProgress(repoRoot);
+  if (rootOp) return unsafe(`root repository has a ${rootOp} in progress`);
+  if (currentGitmodulesHasSameAliasSection(repoRoot, alias) && !state.gitmodulesEntry) {
+    return unsafe("current .gitmodules has an incomplete same-alias section");
+  }
+  const section = headGitmodulesSection(repoRoot, alias);
+  if (!section) return unsafe(".gitmodules metadata is not recoverable from HEAD");
+  if (!cleanupRestorableAliasDir(repoRoot, alias)) {
+    return unsafe(`${path} is occupied by a non-submodule path`);
+  }
+
+  runGit(repoRoot, ["restore", "--source=HEAD", "--staged", "--", ".gitmodules"]);
+  if (!state.gitmodulesEntry) insertGitmodulesSection(repoRoot, alias, section);
+  const metadataUpdated = reconcileGitmodulesMetadata(repoRoot, repo);
+
+  const restorePath = runGit(repoRoot, ["restore", "--source=HEAD", "--staged", "--worktree", "--", path], true);
+  if (!restorePath.success) return unsafe(`failed to restore ${path} from HEAD`);
+  runGit(repoRoot, ["submodule", "sync", "--", path]);
+
+  log.step(`${alias}: git submodule update --init ${path}`);
+  const upd = runGit(repoRoot, ["submodule", "update", "--init", "--", path], true);
+  if (!upd.success) {
+    log.error(`${alias}: git submodule update --init failed (exit ${upd.exitCode})`);
+    return { result: "failed", restored: true };
+  }
+  ensureRemotes(repoRoot, alias, repo.remotes);
+  const branch = gitmodulesBranch(repoRoot, alias) ?? repo.branch;
+  if (branch) attachBranch(repoRoot, alias, branch);
+  log.success(`${alias}: restored pending removal${metadataUpdated ? " and updated .gitmodules metadata" : ""}`);
+  return { result: "added", restored: true };
+}
+
 function syncRepo(repo: Repo, repoRoot: string): OperationResult {
   const alias = repo.alias;
   const path = submodulePath(alias);
   const registered = isRegisteredSubmodule(repoRoot, path);
+  const state = gitlinkState(repoRoot, alias);
+
+  if (!registered && state.headOid !== null) {
+    const restore = restorePendingRemoval(repo, repoRoot);
+    if (restore.restored) return restore.result;
+  }
 
   if (!registered) {
     if (existsSync(aliasDir(repoRoot, alias)) && readdirSync(aliasDir(repoRoot, alias)).length > 0) {
