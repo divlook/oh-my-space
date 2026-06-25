@@ -157,7 +157,11 @@ function cleanupRestorableAliasDir(repoRoot: string, alias: string): boolean {
   if (!existsSync(dir) || submoduleInitialized(repoRoot, alias)) return true;
   const entries = readdirSync(dir);
   if (entries.length > 0 && entries.some((entry) => entry !== ".DS_Store")) return false;
-  rmSync(dir, { recursive: true, force: true });
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    return false;
+  }
   return true;
 }
 
