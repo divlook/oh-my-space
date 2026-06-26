@@ -1435,6 +1435,20 @@ test("sync restore fails before add when a non-submodule path occupies the alias
   assert.doesNotMatch(output, /git submodule add failed/);
 });
 
+test("sync restore fails safely when a regular file occupies the alias", () => {
+  const { cwd } = workspaceWithApi();
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  mkdirSync(join(cwd, "oms"), { recursive: true });
+  writeFileSync(join(cwd, "oms", "api"), "not a submodule");
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /cannot restore pending removal safely/);
+  assert.doesNotMatch(output, /git submodule add failed/);
+  assert.equal(readFileSync(join(cwd, "oms", "api"), "utf8"), "not a submodule");
+});
+
 test("sync restore fails before add when the selected root gitlink is conflicted", () => {
   const { cwd, wt } = workspaceWithApi();
   const base = gitOut(wt, "rev-parse", "HEAD");

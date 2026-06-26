@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "@clack/prompts";
 import { DATA_DIRNAME } from "./constants.js";
@@ -152,13 +152,32 @@ function reconcileGitmodulesMetadata(repoRoot: string, repo: Repo): boolean {
   return changed;
 }
 
-function cleanupRestorableAliasDir(repoRoot: string, alias: string): boolean {
+type AliasDirEntries =
+  | { exists: false }
+  | { exists: true; entries: string[] | null };
+
+function readAliasDirEntries(repoRoot: string, alias: string): AliasDirEntries {
   const dir = aliasDir(repoRoot, alias);
-  if (!existsSync(dir) || submoduleInitialized(repoRoot, alias)) return true;
-  const entries = readdirSync(dir);
+  try {
+    if (!lstatSync(dir).isDirectory()) return { exists: true, entries: null };
+    return { exists: true, entries: readdirSync(dir) };
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return { exists: false };
+    }
+    return { exists: true, entries: null };
+  }
+}
+
+function cleanupRestorableAliasDir(repoRoot: string, alias: string): boolean {
+  if (submoduleInitialized(repoRoot, alias)) return true;
+  const dirState = readAliasDirEntries(repoRoot, alias);
+  if (!dirState.exists) return true;
+  if (dirState.entries === null) return false;
+  const entries = dirState.entries;
   if (entries.length > 0 && entries.some((entry) => entry !== ".DS_Store")) return false;
   try {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(aliasDir(repoRoot, alias), { recursive: true, force: true });
   } catch {
     return false;
   }
@@ -222,7 +241,8 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
   }
 
   if (!registered) {
-    if (existsSync(aliasDir(repoRoot, alias)) && readdirSync(aliasDir(repoRoot, alias)).length > 0) {
+    const dirState = readAliasDirEntries(repoRoot, alias);
+    if (dirState.exists && (dirState.entries === null || dirState.entries.length > 0)) {
       log.error(
         `${alias}: ${path}/ already exists but is not a registered submodule. Move or remove it manually, then retry.`,
       );
