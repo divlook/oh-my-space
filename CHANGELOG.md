@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.11.4
+
+### Patch Changes
+
+- [#43](https://github.com/divlook/oh-my-space/pull/43) [`4bc983a`](https://github.com/divlook/oh-my-space/commit/4bc983a4122f574d3c484b6c3174f5e6c3a5095d) Thanks [@divlook](https://github.com/divlook)! - Restore selected submodules during `oms sync` when they are pending removal from an uncommitted `oms unsync`, avoiding Git's low-level index error.
+
 ## 0.11.3
 
 ### Patch Changes
