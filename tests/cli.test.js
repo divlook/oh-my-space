@@ -1335,6 +1335,185 @@ test("unsync --commit rejects partial removal topology it cannot complete", () =
   assert.match(output, /partial removal topology/i);
 });
 
+test("sync restores an uncommitted unsync instead of adding over the recorded gitlink", () => {
+  const { cwd } = workspaceWithApi();
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /restored pending removal/);
+  assert.doesNotMatch(output, /already exists in the index/);
+  assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
+  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+});
+
+test("sync restore is scoped to the selected alias and preserves unrelated .gitmodules edits", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  git(cwd, "add", "-A");
+  git(cwd, "commit", "-m", "add submodules");
+  writeFileSync(join(cwd, ".gitmodules"), `${readFileSync(join(cwd, ".gitmodules"), "utf8")}# keep web edit\n`);
+
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+
+  const modules = readFileSync(join(cwd, ".gitmodules"), "utf8");
+  assert.match(modules, /oms\/api/);
+  assert.match(modules, /oms\/web/);
+  assert.match(modules, /# keep web edit/);
+  assert.equal(existsSync(join(cwd, "oms", "web", ".git")), true);
+});
+
+test("sync restore preserves .gitmodules section order for a clean multi-alias restore", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const c = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }, { alias: "docs", bare: c }]));
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  git(cwd, "add", "-A");
+  git(cwd, "commit", "-m", "add submodules");
+
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "web"], { cwd }).status, 0);
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.equal(run(["sync", "web"], { cwd }).status, 0);
+
+  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+});
+
+test("sync restore removes a metadata-only alias directory before initialization", () => {
+  const { cwd } = workspaceWithApi();
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  mkdirSync(join(cwd, "oms", "api"), { recursive: true });
+  writeFileSync(join(cwd, "oms", "api", ".DS_Store"), "metadata");
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.equal(existsSync(join(cwd, "oms", "api", ".DS_Store")), false);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "status", "--porcelain"), "");
+});
+
+test("sync restores representative partial removal states", () => {
+  {
+    const { cwd } = workspaceWithApi();
+    git(cwd, "config", "--file", ".gitmodules", "--remove-section", "submodule.oms/api");
+    const result = run(["sync", "api"], { cwd });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(readFileSync(join(cwd, ".gitmodules"), "utf8"), /oms\/api/);
+  }
+
+  {
+    const { cwd } = workspaceWithApi();
+    rmSync(join(cwd, "oms", "api"), { recursive: true, force: true });
+    const result = run(["sync", "api"], { cwd });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
+  }
+});
+
+test("sync restore fails before add when a non-submodule path occupies the alias", () => {
+  const { cwd } = workspaceWithApi();
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  mkdirSync(join(cwd, "oms", "api"), { recursive: true });
+  writeFileSync(join(cwd, "oms", "api", "file.txt"), "not a submodule");
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /cannot restore pending removal safely/);
+  assert.doesNotMatch(output, /git submodule add failed/);
+});
+
+test("sync restore fails safely when a regular file occupies the alias", () => {
+  const { cwd } = workspaceWithApi();
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  mkdirSync(join(cwd, "oms"), { recursive: true });
+  writeFileSync(join(cwd, "oms", "api"), "not a submodule");
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /cannot restore pending removal safely/);
+  assert.doesNotMatch(output, /git submodule add failed/);
+  assert.equal(readFileSync(join(cwd, "oms", "api"), "utf8"), "not a submodule");
+});
+
+test("sync restore fails before add when the selected root gitlink is conflicted", () => {
+  const { cwd, wt } = workspaceWithApi();
+  const base = gitOut(wt, "rev-parse", "HEAD");
+  git(cwd, "checkout", "-b", "x");
+  writeFileSync(join(wt, "b.txt"), "b");
+  git(wt, "add", "-A");
+  git(wt, "commit", "-m", "B");
+  git(cwd, "add", "oms/api");
+  git(cwd, "commit", "-m", "ptr B");
+  git(cwd, "checkout", "main");
+  git(wt, "reset", "--hard", base);
+  writeFileSync(join(wt, "c.txt"), "c");
+  git(wt, "add", "-A");
+  git(wt, "commit", "-m", "C");
+  git(cwd, "add", "oms/api");
+  git(cwd, "commit", "-m", "ptr C");
+  const merge = spawnSync("git", ["merge", "x"], { cwd, encoding: "utf8", env: testEnv });
+  assert.notEqual(merge.status, 0, "merge should conflict on the gitlink");
+  git(cwd, "config", "--file", ".gitmodules", "--remove-section", "submodule.oms/api");
+  rmSync(join(cwd, "oms", "api"), { recursive: true, force: true });
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /root gitlink is conflicted/);
+  assert.doesNotMatch(output, /git submodule add failed/);
+});
+
+test("sync restore fails before add during an in-progress root operation", () => {
+  const { cwd } = workspaceWithApi();
+  writeFileSync(join(cwd, "conflict.txt"), "base\n");
+  git(cwd, "add", "conflict.txt");
+  git(cwd, "commit", "-m", "base");
+  git(cwd, "checkout", "-b", "other");
+  writeFileSync(join(cwd, "conflict.txt"), "other\n");
+  git(cwd, "commit", "-am", "other");
+  git(cwd, "checkout", "main");
+  writeFileSync(join(cwd, "conflict.txt"), "main\n");
+  git(cwd, "commit", "-am", "main");
+  const merge = spawnSync("git", ["merge", "other"], { cwd, encoding: "utf8", env: testEnv });
+  assert.notEqual(merge.status, 0, "merge should conflict");
+  git(cwd, "config", "--file", ".gitmodules", "--remove-section", "submodule.oms/api");
+  rmSync(join(cwd, "oms", "api"), { recursive: true, force: true });
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /in progress/);
+  assert.doesNotMatch(output, /git submodule add failed/);
+});
+
+test("sync restore reconciles manifest metadata as unstaged .gitmodules edits", () => {
+  const { cwd, bare } = workspaceWithApi();
+  writeSources(cwd, sourceFor("api", `${bare}/`));
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /updated \.gitmodules metadata/);
+  assert.match(readFileSync(join(cwd, ".gitmodules"), "utf8"), new RegExp(`url = file://${bare.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}/`));
+  assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  assert.match(gitOut(cwd, "diff", "--name-only"), /^\.gitmodules$/m);
+});
+
 test("pull rejects a dirty submodule before running", () => {
   const { cwd, wt } = workspaceWithApi();
   writeFileSync(join(wt, "dirty.txt"), "x");
