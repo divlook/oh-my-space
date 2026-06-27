@@ -1531,6 +1531,66 @@ test("unsync refuses and preserves a non-submodule path occupying the alias", ()
   assert.doesNotMatch(output, /uncommitted or untracked changes/);
 });
 
+// chmod 0o000 is not enforced for root, so the unreadable-path cases cannot be provoked there.
+const skipUnreadable =
+  typeof process.getuid === "function" && process.getuid() === 0
+    ? { skip: "chmod 0o000 is not enforced when running as root" }
+    : {};
+
+test("unsync refuses when oms/<alias> is unreadable", skipUnreadable, () => {
+  const { cwd } = workspaceWithApi();
+  // Leave a pending removal (api unregistered), then make oms/api unreadable.
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  mkdirSync(join(cwd, "oms", "api"), { recursive: true });
+  chmodSync(join(cwd, "oms", "api"), 0o000);
+  try {
+    const result = run(["unsync", "api"], { cwd });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 2, output);
+    assert.match(output, /could not be read \(permission or I\/O error\)/);
+    // The misleading "occupied by a non-submodule path" wording is not used for an access error.
+    assert.doesNotMatch(output, /occupied by a non-submodule/);
+    assert.doesNotMatch(output, /api: unsynced/);
+  } finally {
+    chmodSync(join(cwd, "oms", "api"), 0o755);
+  }
+});
+
+test("sync restore fails safely when oms/<alias> is unreadable", skipUnreadable, () => {
+  const { cwd } = workspaceWithApi();
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  mkdirSync(join(cwd, "oms", "api"), { recursive: true });
+  chmodSync(join(cwd, "oms", "api"), 0o000);
+  try {
+    const result = run(["sync", "api"], { cwd });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 2, output);
+    assert.match(output, /cannot restore pending removal safely/);
+    assert.match(output, /could not be read \(permission or I\/O error\)/);
+    assert.doesNotMatch(output, /git submodule add failed/);
+  } finally {
+    chmodSync(join(cwd, "oms", "api"), 0o755);
+  }
+});
+
+test("sync fresh add fails when oms/<alias> is unreadable", skipUnreadable, () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  // api was never synced (no root gitlink), so this hits the fresh-add occupied check.
+  mkdirSync(join(cwd, "oms", "api"), { recursive: true });
+  chmodSync(join(cwd, "oms", "api"), 0o000);
+  try {
+    const result = run(["sync", "api"], { cwd });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 2, output);
+    assert.match(output, /could not be read \(permission or I\/O error\)/);
+    assert.doesNotMatch(output, /already exists but is not a registered/);
+  } finally {
+    chmodSync(join(cwd, "oms", "api"), 0o755);
+  }
+});
+
 test("unsync refuses before deinit/rm during an in-progress root operation", () => {
   const { cwd } = workspaceWithApi();
   // A root-level merge conflict on a regular file leaves a merge in progress; the gitlink is clean.

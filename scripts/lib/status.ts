@@ -239,26 +239,30 @@ export function partialRemovalTopology(s: GitlinkState): boolean {
   return s.headOid !== null && !s.pathExists !== !s.gitmodulesEntry;
 }
 
-/** Whether oms/<alias> is absent, a non-directory file, or a readable directory (with its entries). */
+/** Whether oms/<alias> is absent, a non-directory file, an unreadable path, or a readable directory. */
 export type AliasDirEntries =
   | { exists: false }
-  | { exists: true; entries: string[] | null };
+  | { exists: true; kind: "dir"; entries: string[] }
+  | { exists: true; kind: "file" }
+  | { exists: true; kind: "unreadable" };
 
 /**
- * Inspect oms/<alias> without throwing: distinguishes "absent" from "occupied by a non-submodule
- * file/dir" so callers can refuse before destructive Git/filesystem calls. `entries === null` means
- * the path exists but is a non-directory file or could not be read.
+ * Inspect oms/<alias> without throwing: distinguishes "absent", "non-directory file", "unreadable"
+ * (permission or I/O error), and "readable directory" so callers can refuse before destructive
+ * Git/filesystem calls and report the precise cause.
  */
 export function readAliasDirEntries(repoRoot: string, alias: string): AliasDirEntries {
   const dir = aliasDir(repoRoot, alias);
   try {
-    if (!lstatSync(dir).isDirectory()) return { exists: true, entries: null };
-    return { exists: true, entries: readdirSync(dir) };
+    if (!lstatSync(dir).isDirectory()) return { exists: true, kind: "file" };
+    return { exists: true, kind: "dir", entries: readdirSync(dir) };
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
       return { exists: false };
     }
-    return { exists: true, entries: null };
+    // Non-ENOENT errors (EACCES, EPERM, EBUSY, ...) mean the path exists but cannot be read; surface
+    // this distinctly so callers report an access problem instead of a stray non-submodule path.
+    return { exists: true, kind: "unreadable" };
   }
 }
 
@@ -268,6 +272,11 @@ export type RootTopologyCheck = "conflict" | "inProgressOp" | "occupiedPath";
 /** Result of a root-topology preflight: safe to mutate, or a deterministic human-readable reason. */
 export type RootTopologySafety = { safe: true } | { safe: false; reason: string };
 
+/** Shared refusal message when oms/<alias> exists but cannot be read (permission or I/O error). */
+export function unreadablePathReason(alias: string): string {
+  return `oms/${alias} could not be read (permission or I/O error). Resolve access to it, then retry.`;
+}
+
 /** Centralized refusal reasons so messages stay consistent across the routed callers. */
 const TOPOLOGY_REASON = {
   conflict: "the root gitlink is conflicted. Resolve the root repository conflict first.",
@@ -275,13 +284,20 @@ const TOPOLOGY_REASON = {
     `the root repository has a ${op} in progress. Resolve, continue, or abort it first.`,
   occupiedPath: (alias: string) =>
     `oms/${alias} is occupied by a non-submodule path. Move or remove it manually, then retry.`,
+  unreadable: (alias: string) => unreadablePathReason(alias),
 } as const;
 
-/** oms/<alias> is occupied by non-submodule content while not being a registered submodule. */
-function occupiedByNonSubmodule(repoRoot: string, alias: string): boolean {
-  if (isRegisteredSubmodule(repoRoot, submodulePath(alias))) return false;
+/** How oms/<alias> blocks a topology mutation when it is not a registered submodule. */
+type OccupiedPathState = "clear" | "occupied" | "unreadable";
+
+/** Classify oms/<alias> for the occupied-path preflight when it is not a registered submodule. */
+function occupiedByNonSubmodule(repoRoot: string, alias: string): OccupiedPathState {
+  if (isRegisteredSubmodule(repoRoot, submodulePath(alias))) return "clear";
   const dirState = readAliasDirEntries(repoRoot, alias);
-  return dirState.exists && (dirState.entries === null || dirState.entries.length > 0);
+  if (!dirState.exists) return "clear";
+  if (dirState.kind === "unreadable") return "unreadable";
+  if (dirState.kind === "file") return "occupied";
+  return dirState.entries.length > 0 ? "occupied" : "clear";
 }
 
 /**
@@ -303,8 +319,10 @@ export function assertRootTopologySafe(
     const op = gitOperationInProgress(repoRoot);
     if (op) return { safe: false, reason: TOPOLOGY_REASON.inProgressOp(op) };
   }
-  if (applies.has("occupiedPath") && occupiedByNonSubmodule(repoRoot, alias)) {
-    return { safe: false, reason: TOPOLOGY_REASON.occupiedPath(alias) };
+  if (applies.has("occupiedPath")) {
+    const occupied = occupiedByNonSubmodule(repoRoot, alias);
+    if (occupied === "unreadable") return { safe: false, reason: TOPOLOGY_REASON.unreadable(alias) };
+    if (occupied === "occupied") return { safe: false, reason: TOPOLOGY_REASON.occupiedPath(alias) };
   }
   return { safe: true };
 }

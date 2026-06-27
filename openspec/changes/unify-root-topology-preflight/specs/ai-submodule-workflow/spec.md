@@ -1,12 +1,12 @@
 ## ADDED Requirements
 
 ### Requirement: Root topology actions share a consistent safety preflight
-The system SHALL provide one shared root-topology safety preflight in the status spine and route the root-touching commands through it, so the guard set evolves in one place rather than being re-implemented per command. The preflight SHALL classify, for a selected alias, whether the root gitlink is conflicted, whether the root repository has a merge, rebase, cherry-pick, revert, bisect, or similar operation in progress, and whether `oms/<alias>` is occupied by a non-submodule file or directory. Each routed command SHALL apply the subset of these checks that is meaningful for it, refuse before mutating Git state when an applied check fails, fail with a deterministic OMS message instead of leaking a raw Git error, and return a non-zero exit code.
+The system SHALL provide one shared root-topology safety preflight in the status spine and route the root-touching commands through it, so the guard set evolves in one place rather than being re-implemented per command. The preflight SHALL classify, for a selected alias, whether the root gitlink is conflicted, whether the root repository has a merge, rebase, cherry-pick, revert, bisect, or similar operation in progress, and whether `oms/<alias>` is occupied by a non-submodule file or directory or exists but cannot be read (permission or I/O error). Each routed command SHALL apply the subset of these checks that is meaningful for it, refuse before mutating Git state when an applied check fails, fail with a deterministic OMS message instead of leaking a raw Git error, and return a non-zero exit code. The occupied-path classification SHALL distinguish an unreadable path from one occupied by non-submodule content so the refusal message names the actual cause (access error vs. stray content) rather than misdirecting the user to "move or remove" a path they cannot read.
 
 The checks applicable to each command are:
-- `oms unsync` SHALL apply all three checks (conflicted gitlink, in-progress root operation, and occupied non-submodule path), reaching parity with `oms sync`'s existing data-loss protection.
+- `oms unsync` SHALL apply all three checks (conflicted gitlink, in-progress root operation, and occupied-or-unreadable non-submodule path), reaching parity with `oms sync`'s existing data-loss protection.
 - `oms record` SHALL apply the conflicted-gitlink and in-progress-root-operation checks. The occupied-non-submodule-path check does not apply because `record` neither creates nor occupies `oms/<alias>`; its existing record-specific checks and message ordering are preserved.
-- `oms sync` already refuses on an occupied non-submodule path (its `!registered` branch) and on unsafe pending-removal restore states (conflicted gitlink or in-progress root operation while restoring). Its observable behavior is unchanged by this change; it consumes the same shared spine primitives (`gitlinkState`, `gitOperationInProgress`, `readAliasDirEntries`) that the preflight composes.
+- `oms sync` already refuses on an occupied non-submodule path (its `!registered` branch) and on unsafe pending-removal restore states (conflicted gitlink or in-progress root operation while restoring). It still refuses in exactly the same states with the same exit codes; the only observable change is that a path which exists but cannot be read now reports a distinct "could not be read (permission or I/O error)" message — in both its pending-removal restore branch and its `!registered` fresh-add branch — instead of the previous "occupied" / "already exists" wording. It consumes the same shared spine primitives (`gitlinkState`, `gitOperationInProgress`, `readAliasDirEntries`) that the preflight composes.
 
 Commands that operate only inside an initialized submodule working tree (`oms commit`, `oms switch`, `oms checkout`, `oms fetch`, `oms pull`, `oms push`) are unaffected and remain gated only by their existing initialization precondition.
 
@@ -28,6 +28,15 @@ The system SHALL guard `oms unsync` with the same root-topology safety checks as
 - **AND** the command does not report `api` as unsynced
 - **AND** the command returns a non-zero exit code
 - **AND** the message explains that `oms/api` is occupied by a non-submodule path and must be resolved manually
+
+#### Scenario: Unsync refuses an unreadable occupied path
+- **WHEN** `oms/api` exists but cannot be read (a permission or I/O error such as `EACCES`) and `api` is not a registered submodule
+- **AND** the user runs `oms unsync api`
+- **THEN** the command fails before running `git submodule deinit` or `git rm`
+- **AND** the path at `oms/api` is left untouched
+- **AND** the command does not report `api` as unsynced
+- **AND** the command returns a non-zero exit code
+- **AND** the message explains that `oms/api` could not be read (permission or I/O error) rather than directing the user to move or remove an occupying path
 
 #### Scenario: Unsync refuses during an in-progress root operation
 - **WHEN** the root repository has a merge, rebase, cherry-pick, revert, bisect, or similar operation in progress

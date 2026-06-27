@@ -118,6 +118,11 @@ export async function runRecord(alias: string | undefined): Promise<number> {
   // Delegate the conflict / in-progress-op portion to the shared preflight. The fixed
   // conflict → inProgressOp order preserves record's original reporting order; occupiedPath does
   // not apply because record neither creates nor occupies oms/<alias>.
+  //
+  // Note: assertRootTopologySafe re-invokes gitlinkState internally for its conflict check,
+  // duplicating the call above. The extra subprocess cost is accepted to keep the preflight a
+  // self-contained, single-source-of-truth safety API rather than threading a pre-computed state
+  // (and its staleness/alias-mismatch footgun) through the signature.
   const safety = assertRootTopologySafe(repoRoot, selected, ["conflict", "inProgressOp"]);
   if (!safety.safe) {
     log.error(`${selected}: ${safety.reason}`);

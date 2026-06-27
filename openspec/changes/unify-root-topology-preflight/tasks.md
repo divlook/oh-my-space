@@ -31,3 +31,11 @@
 ## 5. Release hygiene
 
 - [x] 5.1 Add a changeset (`.changeset/*.md`) describing the unsync data-loss fix and the shared preflight as a patch-level behavioral change
+
+## 6. Unreadable-path refinement (review follow-up)
+
+- [x] 6.1 Extend `AliasDirEntries`/`readAliasDirEntries` (`status.ts`) to a `kind: "dir" | "file" | "unreadable"` discriminator so a non-`ENOENT` error (`EACCES`/`EPERM`/`EBUSY`) is surfaced as `unreadable` instead of being folded into the non-submodule-file case
+- [x] 6.2 Make the occupied-path classification tri-state (`clear` / `occupied` / `unreadable`) and add a shared `unreadablePathReason` reason so `assertRootTopologySafe` (unsync) reports a distinct "could not be read (permission or I/O error)" message
+- [x] 6.3 Apply the same distinction to `sync`'s two refusal branches: `restorePendingRemoval` (cause fragment inside the existing wrapper) and `syncRepo`'s `!registered` fresh-add branch (full shared message)
+- [x] 6.4 Note the accepted `gitlinkState` re-invocation trade-off in `runRecord` (`commit.ts`) rather than threading a pre-computed state through the preflight signature
+- [x] 6.5 Add regression tests (root-skipped via `chmod 0o000`) for the unreadable refusal on `unsync`, `sync` restore, and `sync` fresh-add; confirm the full suite passes

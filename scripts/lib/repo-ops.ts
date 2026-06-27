@@ -45,6 +45,7 @@ import {
   pendingRemovalTopology,
   printRootFollowup,
   readAliasDirEntries,
+  unreadablePathReason,
 } from "./status.js";
 import type {
   CheckoutOptions,
@@ -154,19 +155,23 @@ function reconcileGitmodulesMetadata(repoRoot: string, repo: Repo): boolean {
   return changed;
 }
 
-function cleanupRestorableAliasDir(repoRoot: string, alias: string): boolean {
-  if (submoduleInitialized(repoRoot, alias)) return true;
+/** Whether oms/<alias> can be cleared to restore a pending removal: cleaned/absent, or why not. */
+type RestorableCleanup = "ok" | "occupied" | "unreadable";
+
+function cleanupRestorableAliasDir(repoRoot: string, alias: string): RestorableCleanup {
+  if (submoduleInitialized(repoRoot, alias)) return "ok";
   const dirState = readAliasDirEntries(repoRoot, alias);
-  if (!dirState.exists) return true;
-  if (dirState.entries === null) return false;
+  if (!dirState.exists) return "ok";
+  if (dirState.kind === "unreadable") return "unreadable";
+  if (dirState.kind === "file") return "occupied";
   const entries = dirState.entries;
-  if (entries.length > 0 && entries.some((entry) => entry !== ".DS_Store")) return false;
+  if (entries.length > 0 && entries.some((entry) => entry !== ".DS_Store")) return "occupied";
   try {
     rmSync(aliasDir(repoRoot, alias), { recursive: true, force: true });
   } catch {
-    return false;
+    return "occupied";
   }
-  return true;
+  return "ok";
 }
 
 function restorePendingRemoval(repo: Repo, repoRoot: string): { result: OperationResult; restored: boolean } {
@@ -189,9 +194,9 @@ function restorePendingRemoval(repo: Repo, repoRoot: string): { result: Operatio
   }
   const section = headGitmodulesSection(repoRoot, alias);
   if (!section) return unsafe(".gitmodules metadata is not recoverable from HEAD");
-  if (!cleanupRestorableAliasDir(repoRoot, alias)) {
-    return unsafe(`${path} is occupied by a non-submodule path`);
-  }
+  const cleanup = cleanupRestorableAliasDir(repoRoot, alias);
+  if (cleanup === "unreadable") return unsafe(`${path} could not be read (permission or I/O error)`);
+  if (cleanup === "occupied") return unsafe(`${path} is occupied by a non-submodule path`);
 
   runGit(repoRoot, ["restore", "--source=HEAD", "--staged", "--", ".gitmodules"]);
   if (!state.gitmodulesEntry) insertGitmodulesSection(repoRoot, alias, section);
@@ -227,7 +232,11 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
 
   if (!registered) {
     const dirState = readAliasDirEntries(repoRoot, alias);
-    if (dirState.exists && (dirState.entries === null || dirState.entries.length > 0)) {
+    if (dirState.exists && dirState.kind === "unreadable") {
+      log.error(`${alias}: ${unreadablePathReason(alias)}`);
+      return "failed";
+    }
+    if (dirState.exists && (dirState.kind === "file" || dirState.entries.length > 0)) {
       log.error(
         `${alias}: ${path}/ already exists but is not a registered submodule. Move or remove it manually, then retry.`,
       );
