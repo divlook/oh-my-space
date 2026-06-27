@@ -1514,6 +1514,86 @@ test("sync restore reconciles manifest metadata as unstaged .gitmodules edits", 
   assert.match(gitOut(cwd, "diff", "--name-only"), /^\.gitmodules$/m);
 });
 
+test("unsync refuses and preserves a non-submodule path occupying the alias", () => {
+  const { cwd } = workspaceWithApi();
+  // Leave a pending removal (api unregistered), then drop a non-submodule file at oms/api.
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  mkdirSync(join(cwd, "oms", "api"), { recursive: true });
+  writeFileSync(join(cwd, "oms", "api", "file.txt"), "not a submodule");
+
+  const result = run(["unsync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /occupied by a non-submodule/);
+  // The occupying file is untouched, api is not reported as unsynced, and no dirty-tree cause leaks.
+  assert.equal(readFileSync(join(cwd, "oms", "api", "file.txt"), "utf8"), "not a submodule");
+  assert.doesNotMatch(output, /api: unsynced/);
+  assert.doesNotMatch(output, /uncommitted or untracked changes/);
+});
+
+test("unsync refuses before deinit/rm during an in-progress root operation", () => {
+  const { cwd } = workspaceWithApi();
+  // A root-level merge conflict on a regular file leaves a merge in progress; the gitlink is clean.
+  writeFileSync(join(cwd, "conflict.txt"), "base\n");
+  git(cwd, "add", "conflict.txt");
+  git(cwd, "commit", "-m", "base");
+  git(cwd, "checkout", "-b", "other");
+  writeFileSync(join(cwd, "conflict.txt"), "other\n");
+  git(cwd, "commit", "-am", "other");
+  git(cwd, "checkout", "main");
+  writeFileSync(join(cwd, "conflict.txt"), "main\n");
+  git(cwd, "commit", "-am", "main");
+  const merge = spawnSync("git", ["merge", "other"], { cwd, encoding: "utf8", env: testEnv });
+  assert.notEqual(merge.status, 0, "merge should conflict");
+
+  const result = run(["unsync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /in progress/);
+  assert.doesNotMatch(output, /uncommitted or untracked changes/);
+  // The submodule is preserved: deinit/rm never ran.
+  assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
+});
+
+test("unsync refuses before deinit/rm when the root gitlink is conflicted", () => {
+  const { cwd, wt } = workspaceWithApi();
+  const base = gitOut(wt, "rev-parse", "HEAD");
+  git(cwd, "checkout", "-b", "x");
+  writeFileSync(join(wt, "b.txt"), "b");
+  git(wt, "add", "-A");
+  git(wt, "commit", "-m", "B");
+  git(cwd, "add", "oms/api");
+  git(cwd, "commit", "-m", "ptr B");
+  git(cwd, "checkout", "main");
+  git(wt, "reset", "--hard", base);
+  writeFileSync(join(wt, "c.txt"), "c");
+  git(wt, "add", "-A");
+  git(wt, "commit", "-m", "C");
+  git(cwd, "add", "oms/api");
+  git(cwd, "commit", "-m", "ptr C");
+  const merge = spawnSync("git", ["merge", "x"], { cwd, encoding: "utf8", env: testEnv });
+  assert.notEqual(merge.status, 0, "merge should conflict on the gitlink");
+
+  const result = run(["unsync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /conflicted/);
+  assert.doesNotMatch(output, /uncommitted or untracked changes/);
+  assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
+});
+
+test("unsync still removes a normal registered submodule and leaves removal topology", () => {
+  const { cwd } = workspaceWithApi();
+  const result = run(["unsync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /api: unsynced/);
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+  // The removal is left unstaged by default (existing topology finalization policy); --commit records it.
+  assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  assert.equal(run(["unsync", "api", "--commit"], { cwd }).status, 0);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): remove api submodule");
+});
+
 test("pull rejects a dirty submodule before running", () => {
   const { cwd, wt } = workspaceWithApi();
   writeFileSync(join(wt, "dirty.txt"), "x");
