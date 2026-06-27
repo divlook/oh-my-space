@@ -9,3 +9,5 @@ Guard `oms unsync` with the same root-topology safety preflight as `oms sync`. I
 Internally, `unsync` and `oms record` are routed through a single shared preflight (`assertRootTopologySafe`) in the status spine so the guard set evolves in one place. `oms record`'s observable behavior, messages, and exit codes are unchanged.
 
 The occupied-path guard now distinguishes a path that exists but cannot be read (permission or I/O error) from one occupied by non-submodule content. In that case `oms unsync` and `oms sync` report `oms/<alias> could not be read (permission or I/O error)` instead of telling you to "move or remove" a path you cannot access. `oms sync` still refuses in the same states with the same exit codes — only this message wording changes, in both its pending-removal restore and fresh-add branches.
+
+Relatedly, when `oms sync` restores a pending removal and the empty `oms/<alias>` directory cannot be deleted (a delete-time permission or I/O error rather than occupancy), it now reports `oms/<alias> could not be removed (permission or I/O error)` instead of falsely claiming the path is occupied by non-submodule content.

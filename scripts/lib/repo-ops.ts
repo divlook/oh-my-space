@@ -156,7 +156,7 @@ function reconcileGitmodulesMetadata(repoRoot: string, repo: Repo): boolean {
 }
 
 /** Whether oms/<alias> can be cleared to restore a pending removal: cleaned/absent, or why not. */
-type RestorableCleanup = "ok" | "occupied" | "unreadable";
+type RestorableCleanup = "ok" | "occupied" | "unreadable" | "unremovable";
 
 function cleanupRestorableAliasDir(repoRoot: string, alias: string): RestorableCleanup {
   if (submoduleInitialized(repoRoot, alias)) return "ok";
@@ -169,7 +169,9 @@ function cleanupRestorableAliasDir(repoRoot: string, alias: string): RestorableC
   try {
     rmSync(aliasDir(repoRoot, alias), { recursive: true, force: true });
   } catch {
-    return "occupied";
+    // The directory was readable and empty, so a removal failure is a delete-time access/IO problem,
+    // not occupancy; report it distinctly so the message does not falsely claim non-submodule content.
+    return "unremovable";
   }
   return "ok";
 }
@@ -196,6 +198,7 @@ function restorePendingRemoval(repo: Repo, repoRoot: string): { result: Operatio
   if (!section) return unsafe(".gitmodules metadata is not recoverable from HEAD");
   const cleanup = cleanupRestorableAliasDir(repoRoot, alias);
   if (cleanup === "unreadable") return unsafe(`${path} could not be read (permission or I/O error)`);
+  if (cleanup === "unremovable") return unsafe(`${path} could not be removed (permission or I/O error)`);
   if (cleanup === "occupied") return unsafe(`${path} is occupied by a non-submodule path`);
 
   runGit(repoRoot, ["restore", "--source=HEAD", "--staged", "--", ".gitmodules"]);
