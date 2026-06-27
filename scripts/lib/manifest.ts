@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { log } from "@clack/prompts";
 import { parse as parseYaml } from "yaml";
@@ -7,8 +7,6 @@ import {
   ALLOWED_ITEM_KEYS,
   ALLOWED_TOP_KEYS,
   DATA_DIRNAME,
-  GITIGNORE_COMMENT,
-  GITIGNORE_ENTRY,
   LEGACY_DATA_DIRNAME,
   LEGACY_MANIFEST,
   MANIFEST_FILENAME,
@@ -20,14 +18,8 @@ import {
 import { docUrl } from "./env.js";
 import {
   aliasDir,
-  currentBranch,
   findWorkspaceRoot,
   isGitRepo,
-  localBranchExists,
-  remoteBranchExists,
-  runGit,
-  runSub,
-  submodulePath,
 } from "./git.js";
 import type { Repo, WorkspaceOptions } from "./types.js";
 
@@ -118,55 +110,6 @@ export function validateSources(data: unknown): Repo[] {
   return validated;
 }
 
-/** The branch recorded in .gitmodules for the submodule, if any. */
-export function gitmodulesBranch(repoRoot: string, alias: string): string | null {
-  const r = runGit(repoRoot, [
-    "config",
-    "--file",
-    ".gitmodules",
-    "--get",
-    `submodule.${submodulePath(alias)}.branch`,
-  ]);
-  if (!r.success) return null;
-  const b = r.stdout.trim();
-  return b.length > 0 ? b : null;
-}
-
-/**
- * Keep the submodule on a branch instead of a detached HEAD. Only acts when HEAD is detached,
- * so a branch the user is already working on is never disturbed. When no local branch exists
- * yet, a branch is created at the current (pinned) commit — the checked-out commit is preserved,
- * which keeps the parent's recorded pointer reproducible.
- */
-export function attachBranch(repoRoot: string, alias: string, branch: string): void {
-  if (currentBranch(aliasDir(repoRoot, alias)) !== null) return;
-
-  if (localBranchExists(aliasDir(repoRoot, alias), branch)) {
-    runSub(repoRoot, alias, ["switch", branch]);
-    return;
-  }
-  // Create the branch at the current HEAD (the pinned commit) so the worktree stays put.
-  if (!runSub(repoRoot, alias, ["switch", "-c", branch]).success) return;
-  if (remoteBranchExists(aliasDir(repoRoot, alias), branch)) {
-    runSub(repoRoot, alias, ["branch", "--set-upstream-to", `origin/${branch}`, branch]);
-  }
-}
-
-/**
- * Reconcile the submodule's git remotes with the declared `remotes` map: add missing remotes and
- * update URLs that drifted. Non-destructive — remotes no longer in oms.yaml are left untouched.
- */
-export function ensureRemotes(repoRoot: string, alias: string, remotes: Record<string, string>): void {
-  for (const [name, url] of Object.entries(remotes)) {
-    const existing = runSub(repoRoot, alias, ["remote", "get-url", name]);
-    if (!existing.success) {
-      runSub(repoRoot, alias, ["remote", "add", name, url]);
-    } else if (existing.stdout.trim() !== url) {
-      runSub(repoRoot, alias, ["remote", "set-url", name, url]);
-    }
-  }
-}
-
 export function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: boolean }): void {
   const artifacts = [
     found.manifest ? `'${LEGACY_MANIFEST}'` : null,
@@ -220,38 +163,6 @@ export function abortOnLegacyWorktree(repoRoot: string, repos: Repo[]): boolean 
       `  See ${docUrl(WORKTREE_MIGRATION_DOC)} for the manual steps. Aborting to avoid destructive change.`,
   );
   return true;
-}
-
-/** Submodules live inside the parent's history, so oms/ must not be gitignored. Strip a managed entry. */
-export function ensureOmsNotIgnored(repoRoot: string): void {
-  const path = join(repoRoot, ".gitignore");
-  if (!existsSync(path)) return;
-  const lines = readFileSync(path, "utf8").split("\n");
-  const out: string[] = [];
-  let removed = false;
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed === GITIGNORE_ENTRY || trimmed === `/${GITIGNORE_ENTRY}`) {
-      if (out.length > 0 && out[out.length - 1].trim() === GITIGNORE_COMMENT) out.pop();
-      removed = true;
-      continue;
-    }
-    out.push(line);
-  }
-  if (removed) {
-    writeFileSync(path, out.join("\n"));
-    log.info(`removed ${GITIGNORE_ENTRY} from .gitignore (submodules are tracked, not ignored)`);
-  }
-}
-
-export function gitignoreIgnoresOms(repoRoot: string): boolean {
-  const gi = join(repoRoot, ".gitignore");
-  return (
-    existsSync(gi)
-    && readFileSync(gi, "utf8")
-      .split("\n")
-      .some((l) => l.trim() === GITIGNORE_ENTRY || l.trim() === `/${GITIGNORE_ENTRY}`)
-  );
 }
 
 export function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repoRoot: string } | null {

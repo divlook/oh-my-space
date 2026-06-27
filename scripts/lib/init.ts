@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { log } from "@clack/prompts";
 import { MANIFEST_FILENAME } from "./constants.js";
 import { isGitRepo } from "./git.js";
-import { ensureOmsNotIgnored } from "./manifest.js";
+import { ensureOmsNotIgnored } from "./workspace-ignore.js";
 
 const INIT_TEMPLATE = `# yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
 repos:

@@ -2,7 +2,6 @@ import { existsSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync
 import { join } from "node:path";
 import { log } from "@clack/prompts";
 import { DATA_DIRNAME } from "./constants.js";
-import { finalizeTopology } from "./commit.js";
 import {
   aliasDir,
   currentBranch,
@@ -10,10 +9,6 @@ import {
   isDirty,
   isGitRepo,
   isRegisteredSubmodule,
-  listLocalBranches,
-  listRemoteBranches,
-  localBranchExists,
-  remoteBranchExists,
   runGit,
   runSub,
   submoduleInitialized,
@@ -22,40 +17,31 @@ import {
 import {
   abortOnLegacyRenameAt,
   abortOnLegacyWorktree,
-  attachBranch,
   emitLegacyRenameHintWalkUp,
-  ensureOmsNotIgnored,
-  ensureRemotes,
-  gitmodulesBranch,
   loadForSubmodules,
   loadRepos,
 } from "./manifest.js";
 import {
-  pickBranch,
   printList,
-  resolveInitializedAlias,
-  resolveRemotes,
   selectRepos,
 } from "./prompts.js";
+import { exitFromResults, printSummary } from "./operation-results.js";
 import {
   assertRootTopologySafe,
   gitOperationInProgress,
   gitlinkState,
   partialRemovalTopology,
   pendingRemovalTopology,
-  printRootFollowup,
   readAliasDirEntries,
   unreadablePathReason,
 } from "./status.js";
+import { finalizeTopology } from "./topology-commit.js";
+import { attachBranch, ensureRemotes, gitmodulesBranch } from "./submodule-config.js";
+import { ensureOmsNotIgnored } from "./workspace-ignore.js";
 import type {
-  CheckoutOptions,
-  ManageCommand,
   OperationResult,
-  PushOptions,
-  RemoteOptions,
   RemoveOutcome,
   Repo,
-  SourcesOptions,
   SyncCommitOptions,
   UnsyncOptions,
 } from "./types.js";
@@ -379,106 +365,6 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
   return "removed";
 }
 
-function fetchRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
-  if (!submoduleInitialized(repoRoot, repo.alias)) {
-    log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
-    return "failed";
-  }
-  for (const remote of remotes) {
-    log.step(`${repo.alias}: git fetch ${remote} --prune`);
-    const r = runSub(repoRoot, repo.alias, ["fetch", remote, "--prune"], true);
-    if (!r.success) {
-      log.error(`${repo.alias}: fetch ${remote} failed (exit ${r.exitCode})`);
-      return "failed";
-    }
-  }
-  log.success(`${repo.alias}: fetched (${remotes.join(", ")})`);
-  return "fetched";
-}
-
-function pullRepo(repo: Repo, repoRoot: string, remote: string): OperationResult {
-  if (!submoduleInitialized(repoRoot, repo.alias)) {
-    log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
-    return "failed";
-  }
-  const branch = currentBranch(aliasDir(repoRoot, repo.alias));
-  if (!branch) {
-    log.error(
-      `${repo.alias}: detached HEAD. Run "oms switch ${repo.alias} <branch>" before pulling.`,
-    );
-    return "failed";
-  }
-  if (isDirty(aliasDir(repoRoot, repo.alias))) {
-    log.error(
-      `${repo.alias}: submodule has uncommitted changes. Commit, stash, or clean them inside oms/${repo.alias} before pulling.`,
-    );
-    return "failed";
-  }
-  log.step(`${repo.alias}/${branch}: git pull --ff-only ${remote} ${branch}`);
-  const r = runSub(repoRoot, repo.alias, ["pull", "--ff-only", remote, branch], true);
-  if (!r.success) {
-    log.error(`${repo.alias}/${branch}: pull from ${remote} failed (exit ${r.exitCode})`);
-    return "failed";
-  }
-  // Pull synchronizes only the submodule branch; the root gitlink is never staged or committed.
-  log.success(`${repo.alias}/${branch}: pulled from ${remote}`);
-  printRootFollowup(repoRoot, repo.alias);
-  return "pulled";
-}
-
-function pushRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
-  if (!submoduleInitialized(repoRoot, repo.alias)) {
-    log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
-    return "failed";
-  }
-  const branch = currentBranch(aliasDir(repoRoot, repo.alias));
-  if (!branch) {
-    log.error(
-      `${repo.alias}: detached HEAD. Run "oms switch ${repo.alias} <branch>" before pushing.`,
-    );
-    return "failed";
-  }
-  if (isDirty(aliasDir(repoRoot, repo.alias))) {
-    log.warn(`${repo.alias}: submodule has uncommitted changes; only the current HEAD will be pushed.`);
-  }
-  for (const remote of remotes) {
-    // Only origin sets upstream — repointing @{u} to a fork would skew "oms status" ahead/behind.
-    const args = remote === "origin" ? ["push", "-u", "origin", branch] : ["push", remote, branch];
-    log.step(`${repo.alias}/${branch}: git ${args.join(" ")}`);
-    const r = runSub(repoRoot, repo.alias, args, true);
-    if (!r.success) {
-      log.error(`${repo.alias}/${branch}: push to ${remote} failed (exit ${r.exitCode})`);
-      return "failed";
-    }
-  }
-  // Push synchronizes only the submodule branch; the root gitlink is never staged or committed.
-  log.success(`${repo.alias}/${branch}: pushed to ${remotes.join(", ")}`);
-  printRootFollowup(repoRoot, repo.alias);
-  return "pushed";
-}
-
-function printSummary(results: OperationResult[]): void {
-  const counts: Record<OperationResult, number> = {
-    added: 0,
-    updated: 0,
-    fetched: 0,
-    pulled: 0,
-    pushed: 0,
-    unsynced: 0,
-    failed: 0,
-  };
-  for (const r of results) counts[r]++;
-
-  const parts = Object.entries(counts)
-    .filter(([, count]) => count > 0)
-    .map(([name, count]) => `${name} ${count}`);
-  log.message(`Summary: ${parts.join(", ")}`);
-}
-
-function exitFromResults(results: OperationResult[]): number {
-  return results.includes("failed") ? 2 : 0;
-}
-
 export async function runSync(aliases: string[], options: SyncCommitOptions): Promise<number> {
   const loaded = loadRepos();
   if (!loaded) {
@@ -516,45 +402,6 @@ export async function runSync(aliases: string[], options: SyncCommitOptions): Pr
   );
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results) || topoExit;
-}
-
-export async function runManage(
-  command: ManageCommand,
-  aliases: string[],
-  options: SourcesOptions & PushOptions & RemoteOptions,
-): Promise<number> {
-  const loaded = loadForSubmodules();
-  if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
-
-  // Reject the removed push pointer shortcuts before any push runs, with migration guidance.
-  if (command === "push" && (options.commit || options.record)) {
-    const flag = options.record ? "--record" : "--commit";
-    const pushExample = aliases.length > 0 ? `oms push ${aliases.join(" ")}` : "oms push <alias>";
-    const recordExample = aliases.length > 0 ? `oms record ${aliases[0]}` : "oms record <alias>";
-    log.error(
-      `"oms push ${flag}" is not supported. Push the submodule branch with "${pushExample}", then commit the existing root pointer update with "${recordExample}".`,
-    );
-    return 1;
-  }
-
-  const picked = await selectRepos(repos, aliases, options, command);
-  if (!picked || picked.length === 0) return 1;
-
-  // Each alias is processed independently; a per-alias failure does not stop later aliases.
-  const results: OperationResult[] = [];
-  for (const repo of picked) {
-    const remotes = await resolveRemotes(repo, options.remote, command);
-    if (!remotes || remotes.length === 0) {
-      results.push("failed");
-      continue;
-    }
-    if (command === "fetch") results.push(fetchRepo(repo, repoRoot, remotes));
-    else if (command === "pull") results.push(pullRepo(repo, repoRoot, remotes[0]));
-    else results.push(pushRepo(repo, repoRoot, remotes));
-  }
-  if (results.length > 1 || options.all) printSummary(results);
-  return exitFromResults(results);
 }
 
 export async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<number> {
@@ -596,92 +443,4 @@ export async function runUnsync(aliases: string[], options: UnsyncOptions): Prom
     log.error(`Not unsynced: ${failed.join(", ")}. See the per-alias error above for each.`);
   }
   return exitFromResults(results) || topoExit;
-}
-
-/**
- * LOCAL branch management: switch the submodule to an existing local branch or create a new one.
- * No remote is consulted — creating a brand-new branch needs no remote precondition and sets no
- * upstream (that is checkout's job). Omitting alias and/or branch prompts for them interactively.
- */
-export async function runSwitch(
-  alias: string | undefined,
-  branch: string | undefined,
-  options: CheckoutOptions,
-): Promise<number> {
-  const loaded = loadForSubmodules();
-  if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
-
-  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "switch");
-  if (!repo) return 1;
-  const dir = aliasDir(repoRoot, repo.alias);
-
-  let target = branch;
-  if (!target) {
-    const picked = await pickBranch(listLocalBranches(dir), `${repo.alias}: select a local branch`, true);
-    if (!picked) return 1;
-    target = picked;
-  }
-
-  if (localBranchExists(dir, target)) {
-    log.step(`${repo.alias}: git switch ${target}`);
-    const r = runSub(repoRoot, repo.alias, ["switch", target], true);
-    if (!r.success) return 2;
-    log.success(`${repo.alias}: on ${target}`);
-    return 0;
-  }
-
-  // Brand-new local branch: no remote precondition, no upstream tracking (use "oms checkout" for that).
-  const args = ["switch", "-c", target, ...(options.from ? [options.from] : [])];
-  log.step(`${repo.alias}: git ${args.join(" ")}`);
-  const r = runSub(repoRoot, repo.alias, args, true);
-  if (!r.success) return 2;
-  log.success(`${repo.alias}: created new local branch ${target}. Push it with "oms push ${repo.alias}".`);
-  return 0;
-}
-
-/**
- * REMOTE branch exploration: fetch origin, then check out a remote branch as a local tracking
- * branch (or switch to an existing local counterpart). Omitting alias and/or branch prompts for
- * them interactively. Creating brand-new local branches is "oms switch"'s job.
- */
-export async function runCheckout(alias: string | undefined, branch: string | undefined): Promise<number> {
-  const loaded = loadForSubmodules();
-  if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
-
-  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "checkout");
-  if (!repo) return 1;
-  const dir = aliasDir(repoRoot, repo.alias);
-
-  log.step(`${repo.alias}: git fetch origin --prune`);
-  const fetch = runSub(repoRoot, repo.alias, ["fetch", "origin", "--prune"], true);
-  if (!fetch.success) return 2;
-
-  let target = branch;
-  if (!target) {
-    const picked = await pickBranch(listRemoteBranches(dir), `${repo.alias}: select a remote branch (origin/*)`, false);
-    if (!picked) return 1;
-    target = picked;
-  }
-
-  if (localBranchExists(dir, target)) {
-    log.step(`${repo.alias}: git switch ${target}`);
-    const r = runSub(repoRoot, repo.alias, ["switch", target], true);
-    if (!r.success) return 2;
-    log.success(`${repo.alias}: on ${target}`);
-    return 0;
-  }
-  if (remoteBranchExists(dir, target)) {
-    log.step(`${repo.alias}: git switch -c ${target} origin/${target}`);
-    const r = runSub(repoRoot, repo.alias, ["switch", "-c", target, `origin/${target}`], true);
-    if (!r.success) return 2;
-    log.success(`${repo.alias}: on ${target} (tracking origin/${target})`);
-    return 0;
-  }
-
-  log.error(
-    `${repo.alias}: "${target}" not found on origin. To create a new local branch, run "oms switch ${repo.alias} ${target}".`,
-  );
-  return 1;
 }
