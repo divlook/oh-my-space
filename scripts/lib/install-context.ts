@@ -144,44 +144,40 @@ function commandShimPaths(prefix: string, name: string): string[] {
   return [`${prefix}/${name}`, `${prefix}/${name}.cmd`, `${prefix}/${name}.ps1`];
 }
 
-function isNpmGlobalLayout(packageRootPath: string, binPaths: string[]): boolean {
-  const root = normalizePath(packageRootPath);
-  if (root.endsWith(`/lib/node_modules/${PACKAGE_NAME}`)) {
-    const prefix = root.slice(0, -`/lib/node_modules/${PACKAGE_NAME}`.length);
+function isNpmGlobalLayout(normalizedRoot: string, binPaths: string[]): boolean {
+  if (normalizedRoot.endsWith(`/lib/node_modules/${PACKAGE_NAME}`)) {
+    const prefix = normalizedRoot.slice(0, -`/lib/node_modules/${PACKAGE_NAME}`.length);
     return hasBinPath(binPaths, commandShimPaths(`${prefix}/bin`, "oms"));
   }
-  if (root.endsWith(`/node_modules/${PACKAGE_NAME}`)) {
-    const prefix = root.slice(0, -`/node_modules/${PACKAGE_NAME}`.length);
+  if (normalizedRoot.endsWith(`/node_modules/${PACKAGE_NAME}`)) {
+    const prefix = normalizedRoot.slice(0, -`/node_modules/${PACKAGE_NAME}`.length);
     return hasBinPath(binPaths, commandShimPaths(prefix, "oms"));
   }
   return false;
 }
 
-function isPnpmGlobalLayout(packageRootPath: string, binPaths: string[]): boolean {
-  const root = normalizePath(packageRootPath);
+function isPnpmGlobalLayout(normalizedRoot: string, binPaths: string[]): boolean {
   const suffix = `/node_modules/${PACKAGE_NAME}`;
   const marker = "/global/";
-  const markerIndex = root.lastIndexOf(marker);
-  if (markerIndex === -1 || !root.endsWith(suffix)) return false;
-  const storeVersion = root.slice(markerIndex + marker.length, -suffix.length);
+  const markerIndex = normalizedRoot.lastIndexOf(marker);
+  if (markerIndex === -1 || !normalizedRoot.endsWith(suffix)) return false;
+  const storeVersion = normalizedRoot.slice(markerIndex + marker.length, -suffix.length);
   if (!/^\d+$/.test(storeVersion)) return false;
-  const prefix = root.slice(0, markerIndex);
+  const prefix = normalizedRoot.slice(0, markerIndex);
   return hasBinPath(binPaths, [...commandShimPaths(prefix, "oms"), ...commandShimPaths(`${prefix}/bin`, "oms")]);
 }
 
-function isYarnGlobalLayout(packageRootPath: string, binPaths: string[]): boolean {
-  const root = normalizePath(packageRootPath);
+function isYarnGlobalLayout(normalizedRoot: string, binPaths: string[]): boolean {
   const suffix = `/.config/yarn/global/node_modules/${PACKAGE_NAME}`;
-  if (!root.endsWith(suffix)) return false;
-  const home = root.slice(0, -suffix.length);
+  if (!normalizedRoot.endsWith(suffix)) return false;
+  const home = normalizedRoot.slice(0, -suffix.length);
   return hasBinPath(binPaths, commandShimPaths(`${home}/.yarn/bin`, "oms"));
 }
 
-function isBunGlobalLayout(packageRootPath: string, binPaths: string[]): boolean {
-  const root = normalizePath(packageRootPath);
+function isBunGlobalLayout(normalizedRoot: string, binPaths: string[]): boolean {
   const suffix = `/.bun/install/global/node_modules/${PACKAGE_NAME}`;
-  if (!root.endsWith(suffix)) return false;
-  const home = root.slice(0, -suffix.length);
+  if (!normalizedRoot.endsWith(suffix)) return false;
+  const home = normalizedRoot.slice(0, -suffix.length);
   return hasBinPath(binPaths, commandShimPaths(`${home}/.bun/bin`, "oms"));
 }
 
