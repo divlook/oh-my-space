@@ -67,6 +67,12 @@ function readPackageName(root: string): string | null {
   }
 }
 
+function resolveRunningBin(mockedArgv1: string | undefined, modulePath: string): string {
+  if (mockedArgv1 !== undefined) return resolve(mockedArgv1);
+  if (process.argv[1]) return resolve(process.argv[1]);
+  return modulePath;
+}
+
 export function collectRuntimeEvidence(): RuntimeEvidence {
   const mocked = testEnv("OMS_TEST_RUNTIME_EVIDENCE");
   if (mocked !== undefined) return JSON.parse(mocked) as RuntimeEvidence;
@@ -74,11 +80,7 @@ export function collectRuntimeEvidence(): RuntimeEvidence {
   const modulePath = testEnv("OMS_TEST_MODULE_PATH") ?? moduleFilePath;
   const detectedPackageRoot = findPackageRoot(dirname(modulePath)) ?? packageRoot;
   const mockedArgv1 = testEnv("OMS_TEST_ARGV1");
-  const runningBin = mockedArgv1 !== undefined
-    ? resolve(mockedArgv1)
-    : process.argv[1]
-      ? resolve(process.argv[1])
-      : modulePath;
+  const runningBin = resolveRunningBin(mockedArgv1, modulePath);
   const pathBin = resolvePathBinary("oms");
   return {
     packageRoot: detectedPackageRoot,
@@ -183,23 +185,25 @@ function isBunGlobalLayout(packageRootPath: string, binPaths: string[]): boolean
   return hasBinPath(binPaths, commandShimPaths(`${home}/.bun/bin`, "oms"));
 }
 
+function evidenceBinPaths(evidence: RuntimeEvidence): string[] {
+  return [evidence.pathBin, evidence.runningBin, evidence.realPathBin, evidence.realRunningBin]
+    .filter((path): path is string => Boolean(path))
+    .map(normalizePath);
+}
+
 function isProjectLocalLayout(evidence: RuntimeEvidence): boolean {
   const projectRoot = findPackageRoot(dirname(evidence.realPackageRoot));
   if (!projectRoot) return false;
   const root = normalizePath(evidence.realPackageRoot);
   const project = normalizePath(projectRoot);
   if (!root.startsWith(`${project}/`)) return false;
-  const binPaths = [evidence.pathBin, evidence.runningBin, evidence.realPathBin, evidence.realRunningBin]
-    .filter((path): path is string => Boolean(path))
-    .map(normalizePath);
+  const binPaths = evidenceBinPaths(evidence);
   return hasBinPath(binPaths, commandShimPaths(`${project}/node_modules/.bin`, "oms"));
 }
 
 function globalManagerFromPaths(evidence: RuntimeEvidence): PackageManager | null {
   const root = normalizePath(evidence.realPackageRoot);
-  const binPaths = [evidence.pathBin, evidence.runningBin, evidence.realPathBin, evidence.realRunningBin]
-    .filter((path): path is string => Boolean(path))
-    .map(normalizePath);
+  const binPaths = evidenceBinPaths(evidence);
   const managers = new Set<PackageManager>();
 
   if (isNpmGlobalLayout(root, binPaths)) managers.add("npm");
