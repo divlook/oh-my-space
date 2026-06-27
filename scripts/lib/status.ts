@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { log } from "@clack/prompts";
 import { DATA_DIRNAME } from "./constants.js";
@@ -237,6 +237,94 @@ export function pendingRemovalTopology(s: GitlinkState): boolean {
 /** Root HEAD has a gitlink and exactly one of the working tree path or .gitmodules entry is gone. */
 export function partialRemovalTopology(s: GitlinkState): boolean {
   return s.headOid !== null && !s.pathExists !== !s.gitmodulesEntry;
+}
+
+/** Whether oms/<alias> is absent, a non-directory file, an unreadable path, or a readable directory. */
+export type AliasDirEntries =
+  | { exists: false }
+  | { exists: true; kind: "dir"; entries: string[] }
+  | { exists: true; kind: "file" }
+  | { exists: true; kind: "unreadable" };
+
+/**
+ * Inspect oms/<alias> without throwing: distinguishes "absent", "non-directory file", "unreadable"
+ * (permission or I/O error), and "readable directory" so callers can refuse before destructive
+ * Git/filesystem calls and report the precise cause.
+ */
+export function readAliasDirEntries(repoRoot: string, alias: string): AliasDirEntries {
+  const dir = aliasDir(repoRoot, alias);
+  try {
+    if (!lstatSync(dir).isDirectory()) return { exists: true, kind: "file" };
+    return { exists: true, kind: "dir", entries: readdirSync(dir) };
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return { exists: false };
+    }
+    // Non-ENOENT errors (EACCES, EPERM, EBUSY, ...) mean the path exists but cannot be read; surface
+    // this distinctly so callers report an access problem instead of a stray non-submodule path.
+    return { exists: true, kind: "unreadable" };
+  }
+}
+
+/** The single check applied to a selected alias's root topology before a mutating command runs. */
+export type RootTopologyCheck = "conflict" | "inProgressOp" | "occupiedPath";
+
+/** Result of a root-topology preflight: safe to mutate, or a deterministic human-readable reason. */
+export type RootTopologySafety = { safe: true } | { safe: false; reason: string };
+
+/** Shared refusal message when oms/<alias> exists but cannot be read (permission or I/O error). */
+export function unreadablePathReason(alias: string): string {
+  return `oms/${alias} could not be read (permission or I/O error). Resolve access to it, then retry.`;
+}
+
+/** Centralized refusal reasons so messages stay consistent across the routed callers. */
+const TOPOLOGY_REASON = {
+  conflict: "the root gitlink is conflicted. Resolve the root repository conflict first.",
+  inProgressOp: (op: string) =>
+    `the root repository has a ${op} in progress. Resolve, continue, or abort it first.`,
+  occupiedPath: (alias: string) =>
+    `oms/${alias} is occupied by a non-submodule path. Move or remove it manually, then retry.`,
+  unreadable: (alias: string) => unreadablePathReason(alias),
+} as const;
+
+/** How oms/<alias> blocks a topology mutation when it is not a registered submodule. */
+type OccupiedPathState = "clear" | "occupied" | "unreadable";
+
+/** Classify oms/<alias> for the occupied-path preflight when it is not a registered submodule. */
+function occupiedByNonSubmodule(repoRoot: string, alias: string): OccupiedPathState {
+  if (isRegisteredSubmodule(repoRoot, submodulePath(alias))) return "clear";
+  const dirState = readAliasDirEntries(repoRoot, alias);
+  if (!dirState.exists) return "clear";
+  if (dirState.kind === "unreadable") return "unreadable";
+  if (dirState.kind === "file") return "occupied";
+  return dirState.entries.length > 0 ? "occupied" : "clear";
+}
+
+/**
+ * Whether the selected alias's root topology can be mutated safely.
+ * Callers pass the checks that apply to them; checks are always evaluated
+ * in the fixed order conflict → inProgressOp → occupiedPath and the first
+ * failing applied check determines the returned reason.
+ */
+export function assertRootTopologySafe(
+  repoRoot: string,
+  alias: string,
+  checks: RootTopologyCheck[] = ["conflict", "inProgressOp", "occupiedPath"],
+): RootTopologySafety {
+  const applies = new Set(checks);
+  if (applies.has("conflict") && gitlinkState(repoRoot, alias).conflict) {
+    return { safe: false, reason: TOPOLOGY_REASON.conflict };
+  }
+  if (applies.has("inProgressOp")) {
+    const op = gitOperationInProgress(repoRoot);
+    if (op) return { safe: false, reason: TOPOLOGY_REASON.inProgressOp(op) };
+  }
+  if (applies.has("occupiedPath")) {
+    const occupied = occupiedByNonSubmodule(repoRoot, alias);
+    if (occupied === "unreadable") return { safe: false, reason: TOPOLOGY_REASON.unreadable(alias) };
+    if (occupied === "occupied") return { safe: false, reason: TOPOLOGY_REASON.occupiedPath(alias) };
+  }
+  return { safe: true };
 }
 
 /**

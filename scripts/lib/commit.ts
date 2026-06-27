@@ -12,6 +12,7 @@ import {
 import { loadForSubmodules } from "./manifest.js";
 import { resolveCommandAlias } from "./prompts.js";
 import {
+  assertRootTopologySafe,
   changeCounts,
   gitOperationInProgress,
   gitlinkState,
@@ -114,15 +115,17 @@ export async function runRecord(alias: string | undefined): Promise<number> {
 
   const state = gitlinkState(repoRoot, selected);
 
-  // A conflicted gitlink is the specific blocker, so report it ahead of the generic in-progress merge
-  // it implies; an in-progress operation that does not conflict this gitlink is reported next.
-  if (state.conflict) {
-    log.error(`${selected}: the root gitlink is conflicted. Resolve the root repository conflict first.`);
-    return 1;
-  }
-  const rootOp = gitOperationInProgress(repoRoot);
-  if (rootOp) {
-    log.error(`Root repository has a ${rootOp} in progress. Resolve, continue, or abort it before recording.`);
+  // Delegate the conflict / in-progress-op portion to the shared preflight. The fixed
+  // conflict → inProgressOp order preserves record's original reporting order; occupiedPath does
+  // not apply because record neither creates nor occupies oms/<alias>.
+  //
+  // Note: assertRootTopologySafe re-invokes gitlinkState internally for its conflict check,
+  // duplicating the call above. The extra subprocess cost is accepted to keep the preflight a
+  // self-contained, single-source-of-truth safety API rather than threading a pre-computed state
+  // (and its staleness/alias-mismatch footgun) through the signature.
+  const safety = assertRootTopologySafe(repoRoot, selected, ["conflict", "inProgressOp"]);
+  if (!safety.safe) {
+    log.error(`${selected}: ${safety.reason}`);
     return 1;
   }
   if (currentBranch(repoRoot) === null) {

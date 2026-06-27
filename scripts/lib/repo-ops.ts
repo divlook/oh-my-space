@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "@clack/prompts";
 import { DATA_DIRNAME } from "./constants.js";
@@ -38,11 +38,14 @@ import {
   selectRepos,
 } from "./prompts.js";
 import {
+  assertRootTopologySafe,
   gitOperationInProgress,
   gitlinkState,
   partialRemovalTopology,
   pendingRemovalTopology,
   printRootFollowup,
+  readAliasDirEntries,
+  unreadablePathReason,
 } from "./status.js";
 import type {
   CheckoutOptions,
@@ -152,36 +155,25 @@ function reconcileGitmodulesMetadata(repoRoot: string, repo: Repo): boolean {
   return changed;
 }
 
-type AliasDirEntries =
-  | { exists: false }
-  | { exists: true; entries: string[] | null };
+/** Whether oms/<alias> can be cleared to restore a pending removal: cleaned/absent, or why not. */
+type RestorableCleanup = "ok" | "occupied" | "unreadable" | "unremovable";
 
-function readAliasDirEntries(repoRoot: string, alias: string): AliasDirEntries {
-  const dir = aliasDir(repoRoot, alias);
-  try {
-    if (!lstatSync(dir).isDirectory()) return { exists: true, entries: null };
-    return { exists: true, entries: readdirSync(dir) };
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return { exists: false };
-    }
-    return { exists: true, entries: null };
-  }
-}
-
-function cleanupRestorableAliasDir(repoRoot: string, alias: string): boolean {
-  if (submoduleInitialized(repoRoot, alias)) return true;
+function cleanupRestorableAliasDir(repoRoot: string, alias: string): RestorableCleanup {
+  if (submoduleInitialized(repoRoot, alias)) return "ok";
   const dirState = readAliasDirEntries(repoRoot, alias);
-  if (!dirState.exists) return true;
-  if (dirState.entries === null) return false;
+  if (!dirState.exists) return "ok";
+  if (dirState.kind === "unreadable") return "unreadable";
+  if (dirState.kind === "file") return "occupied";
   const entries = dirState.entries;
-  if (entries.length > 0 && entries.some((entry) => entry !== ".DS_Store")) return false;
+  if (entries.length > 0 && entries.some((entry) => entry !== ".DS_Store")) return "occupied";
   try {
     rmSync(aliasDir(repoRoot, alias), { recursive: true, force: true });
   } catch {
-    return false;
+    // The directory was readable and empty, so a removal failure is a delete-time access/IO problem,
+    // not occupancy; report it distinctly so the message does not falsely claim non-submodule content.
+    return "unremovable";
   }
-  return true;
+  return "ok";
 }
 
 function restorePendingRemoval(repo: Repo, repoRoot: string): { result: OperationResult; restored: boolean } {
@@ -204,9 +196,10 @@ function restorePendingRemoval(repo: Repo, repoRoot: string): { result: Operatio
   }
   const section = headGitmodulesSection(repoRoot, alias);
   if (!section) return unsafe(".gitmodules metadata is not recoverable from HEAD");
-  if (!cleanupRestorableAliasDir(repoRoot, alias)) {
-    return unsafe(`${path} is occupied by a non-submodule path`);
-  }
+  const cleanup = cleanupRestorableAliasDir(repoRoot, alias);
+  if (cleanup === "unreadable") return unsafe(`${path} could not be read (permission or I/O error)`);
+  if (cleanup === "unremovable") return unsafe(`${path} could not be removed (permission or I/O error)`);
+  if (cleanup === "occupied") return unsafe(`${path} is occupied by a non-submodule path`);
 
   runGit(repoRoot, ["restore", "--source=HEAD", "--staged", "--", ".gitmodules"]);
   if (!state.gitmodulesEntry) insertGitmodulesSection(repoRoot, alias, section);
@@ -242,7 +235,11 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
 
   if (!registered) {
     const dirState = readAliasDirEntries(repoRoot, alias);
-    if (dirState.exists && (dirState.entries === null || dirState.entries.length > 0)) {
+    if (dirState.exists && dirState.kind === "unreadable") {
+      log.error(`${alias}: ${unreadablePathReason(alias)}`);
+      return "failed";
+    }
+    if (dirState.exists && (dirState.kind === "file" || dirState.entries.length > 0)) {
       log.error(
         `${alias}: ${path}/ already exists but is not a registered submodule. Move or remove it manually, then retry.`,
       );
@@ -324,6 +321,15 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
   const exists = existsSync(aliasDir(repoRoot, alias));
 
   if (!registered && !exists) return "nothing-to-remove";
+
+  // Refuse before any deinit/rm/rmSync when the root topology cannot be mutated safely. The
+  // occupied-path check guards the unregistered-but-occupied case that previously fell through to a
+  // destructive rmSync, deleting a non-submodule path while falsely reporting success.
+  const safety = assertRootTopologySafe(repoRoot, alias);
+  if (!safety.safe) {
+    log.error(`${alias}: ${safety.reason}`);
+    return "failed";
+  }
 
   if (!force && submoduleInitialized(repoRoot, alias) && isDirty(aliasDir(repoRoot, alias))) {
     log.error(
@@ -582,12 +588,12 @@ export async function runUnsync(aliases: string[], options: UnsyncOptions): Prom
   );
 
   if (results.length > 1 || options.all) printSummary(results);
-  // Name the failed aliases so a buried failure among several isn't read as "all unsynced".
+  // Name the failed aliases so a buried failure among several isn't read as "all unsynced". The
+  // specific cause was already logged per alias by unsyncRepo (dirty tree, conflict, in-progress
+  // root op, or occupied path), so the aggregate must not assert a single contradictory cause.
   const failed = picked.filter((_, i) => results[i] === "failed").map((r) => r.alias);
   if (failed.length > 0) {
-    log.error(
-      `Not unsynced: ${failed.join(", ")}. The submodule had uncommitted or untracked changes — commit/stash/remove them, or re-run with --force.`,
-    );
+    log.error(`Not unsynced: ${failed.join(", ")}. See the per-alias error above for each.`);
   }
   return exitFromResults(results) || topoExit;
 }
