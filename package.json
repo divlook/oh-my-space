@@ -1,6 +1,6 @@
 {
   "name": "oh-my-space",
-  "version": "0.11.5",
+  "version": "0.11.6",
   "description": "Manage multi-repo workspaces with Git submodules.",
   "license": "MIT",
   "homepage": "https://github.com/divlook/oh-my-space",
