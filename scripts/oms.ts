@@ -4,6 +4,7 @@ import { log } from "@clack/prompts";
 import { DATA_DIRNAME, MANIFEST_FILENAME } from "./lib/constants.js";
 import { readPackageVersion } from "./lib/env.js";
 import { runAgentInstall, runAgentUninstall } from "./lib/agent.js";
+import { runCheckout, runSwitch } from "./lib/branch-ops.js";
 import { runCommit, runRecord } from "./lib/commit.js";
 import { runDoctor } from "./lib/doctor.js";
 import {
@@ -20,7 +21,8 @@ import {
   unsyncHelp,
 } from "./lib/help.js";
 import { runInit } from "./lib/init.js";
-import { runCheckout, runManage, runSwitch, runSync, runUnsync } from "./lib/repo-ops.js";
+import { runManage } from "./lib/manage-ops.js";
+import { runSync, runUnsync } from "./lib/repo-ops.js";
 import { runSkills, skillsForwardedArgs } from "./lib/skills.js";
 import { runStatus } from "./lib/status.js";
 import { runUpdate } from "./lib/update.js";
@@ -67,7 +69,7 @@ const commandNames = new Set([
   "help",
 ]);
 
-const collectMessage = (value: string, acc: string[]): string[] => [...acc, value];
+const collectRepeatable = (value: string, acc: string[]): string[] => [...acc, value];
 const program = new Command();
 
 program
@@ -126,7 +128,7 @@ program
   .command("commit")
   .description("Commit source changes inside the selected submodule only (never the root gitlink).")
   .argument("[alias]", "registered source alias (omit to infer from the current oms/<alias>/ directory)")
-  .option("-m, --message <message>", "commit message (repeatable; required only to create a commit)", collectMessage, [])
+  .option("-m, --message <message>", "commit message (repeatable; required only to create a commit)", collectRepeatable, [])
   .addHelpText("after", `${commitHelp}${exitHelp}`)
   .action(async (alias: string | undefined, options: CommitOptions) => {
     await exitWith(runCommit(alias, options));
@@ -166,14 +168,12 @@ program
     await exitWith(runCheckout(alias, branch));
   });
 
-const collectRemote = (value: string, acc: string[]): string[] => [...acc, value];
-
 program
   .command("fetch")
   .description("Run git fetch <remote> --prune in each submodule (defaults to origin).")
   .argument("[aliases...]", "repo aliases to fetch (omit for interactive multi-select)")
   .option("--all", "fetch every registered source repo")
-  .option("--remote <name>", "remote to fetch (repeatable; omit to choose interactively)", collectRemote, [])
+  .option("--remote <name>", "remote to fetch (repeatable; omit to choose interactively)", collectRepeatable, [])
   .addHelpText("after", exitHelp)
   .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
     await exitWith(runManage("fetch", aliases, options));
@@ -186,7 +186,7 @@ program
   )
   .argument("[aliases...]", "repo aliases to pull (omit for interactive multi-select)")
   .option("--all", "pull every registered source repo")
-  .option("--remote <name>", "remote to pull from (single; omit to choose interactively)", collectRemote, [])
+  .option("--remote <name>", "remote to pull from (single; omit to choose interactively)", collectRepeatable, [])
   .addHelpText("after", `${pullHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
     await exitWith(runManage("pull", aliases, options));
@@ -200,7 +200,7 @@ program
   .argument("<aliases...>", "repo aliases to push")
   .option("--commit", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--record", "unsupported: use \"oms record <alias>\" after pushing")
-  .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRemote, [])
+  .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRepeatable, [])
   .addHelpText("after", `${pushHelp}${exitHelp}`)
   .action(async (aliases: string[], options: PushOptions & RemoteOptions) => {
     await exitWith(runManage("push", aliases, options));

@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import { cancel, isCancel, log, select } from "@clack/prompts";
 import semver from "semver";
 import { PACKAGE_NAME, REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
-import { detectInstallContext, formatCommand } from "./doctor.js";
 import { readPackageVersion, runtimePlatform, testEnv } from "./env.js";
+import { detectInstallContext, formatCommand } from "./install-context.js";
 import type { InstallContext, PackageManager, UpdateCommand, UpdateOptions } from "./types.js";
 
 async function fetchLatestPackageVersion(): Promise<string> {
