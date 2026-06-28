@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.11.6
+
+### Patch Changes
+
+- [#47](https://github.com/divlook/oh-my-space/pull/47) [`767abe1`](https://github.com/divlook/oh-my-space/commit/767abe1e5a492fe70ee96117b375077d78e07241) Thanks [@divlook](https://github.com/divlook)! - Refactor OMS CLI internals to clarify module boundaries while preserving existing command behavior.
+
 ## 0.11.5
 
 ### Patch Changes
