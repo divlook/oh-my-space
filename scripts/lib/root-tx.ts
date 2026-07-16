@@ -287,6 +287,7 @@ function runGitWithInput(cwd: string, args: string[], input: Buffer): GitResult 
     exitCode: result.status,
     success: result.status === 0,
     stdout: result.stdout ? result.stdout.toString("utf8") : "",
+    stderr: result.stderr ? result.stderr.toString("utf8") : "",
   };
 }
 
