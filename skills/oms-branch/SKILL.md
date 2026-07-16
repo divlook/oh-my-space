@@ -1,6 +1,6 @@
 ---
 name: oms-branch
-description: Use when starting, switching, or deleting a branch inside an `oms/<alias>/` submodule — `oms switch` to create or move to a local branch, `oms checkout` to check out an existing remote branch as a tracking branch, `oms branch delete` to remove a local branch safely. Helps avoid leaving a submodule in detached HEAD and keeps deletion local-only.
+description: Use when discovering, starting, switching, or deleting a branch inside an `oms/<alias>/` submodule — `oms branch list` to inspect choices, `oms switch` for local branches, `oms checkout` for remote branches, and `oms branch delete` for safe local deletion.
 ---
 
 # Choose the right branch command inside a submodule
@@ -16,6 +16,7 @@ Branching happens inside a submodule (`oms/<alias>/`), which is its own Git repo
 
 ## Switch versus checkout
 
+- Run `oms branch list <alias>` to discover local and declared-remote branch choices before selecting an operation. It prepares safe existing registration and refreshes declared remotes automatically.
 - `oms switch <alias> <branch>` starts or moves to a LOCAL branch, creating it locally if it does not exist yet. No remote is required. Use this to begin new work.
 - `oms checkout <alias> <branch>` fetches `origin` and checks out an existing REMOTE branch (`origin/*`) as a local tracking branch. Use this to continue work that already exists on the remote.
 
@@ -30,4 +31,4 @@ Both commands attach HEAD to a branch. Prefer them over a raw `git checkout <sha
 - Omit the alias or branch to choose interactively; protected branches (current and baseline) are shown but not selectable.
 - Do not `cd` into `oms/<alias>/` and run raw `git branch -d/-D`; the command resolves and protects baseline branches for you.
 
-These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer remaining flag detail to `oms switch --help`, `oms checkout --help`, and `oms branch delete --help`.
+These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer branch inventory fields, preparation, freshness, and exit behavior to `oms branch list --help`; defer remaining flag detail to `oms switch --help`, `oms checkout --help`, and `oms branch delete --help`.

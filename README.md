@@ -13,6 +13,10 @@ Declare external repositories in `oms.yaml` and sync them into `oms/<alias>/`. Y
 - You want to stay on a real branch during everyday submodule work instead of landing in a detached HEAD.
 - You want pointer changes to show up in `git status` so you can review them before committing.
 
+## Automation-first commands
+
+OMS automates routine, deterministic preparation and bounded recovery whenever it can do so safely. It asks only when a choice depends on intent that cannot be inferred, such as creating missing root submodule topology. If safe completion or a useful degraded result is impossible, the error identifies the failed operation, the state that was preserved, and an actionable OMS command or bounded Git repair.
+
 ## Requirements
 
 - [Node.js](https://nodejs.org) `>=20.19.0` to run `oms`.
@@ -81,6 +85,26 @@ oms record api                       # commit the moved oms/api pointer in your 
 
 Omit the alias or branch on `oms switch` and `oms checkout` to pick one interactively — synced submodules, and local or `origin/*` branches respectively.
 
+## Listing branches
+
+`oms branch list [alias]` produces a current branch inventory for one declared submodule. Use an explicit alias, omit it to select the sole declaration automatically, or choose among multiple aliases interactively:
+
+```bash
+oms branch list api
+oms branch list
+oms branch # choose list or delete interactively
+```
+
+Before listing, OMS safely initializes an existing registered submodule when needed, reconciles every remote declared for that alias in `oms.yaml`, and runs `git fetch <remote> --prune` sequentially in manifest order. A failed fetch is retried once. If both attempts fail, cached refs remain visible as `stale`; a failed remote without usable refs is `unavailable`. These degraded states still exit 0 when local refs can be inspected. Extra local remotes are not fetched or included in the remote inventory, although an actual configured upstream on one of them remains visible for its local branch.
+
+The output identifies the selected alias and detached HEAD when applicable, then prints:
+
+- a `known`, `incomplete`, or `unknown` baseline summary, including reliable baseline names that have no matching local branch;
+- a sorted LOCAL table with current/baseline flags, the exact configured upstream, and ahead/behind counts (`?` when an upstream is unavailable);
+- a REMOTE table grouped in manifest order, with branch names sorted inside each `fresh`, `stale`, or `unavailable` remote.
+
+When `branch` is omitted from `oms.yaml`, a successful origin fetch refreshes `origin/HEAD`; a failed refresh is reported as baseline uncertainty instead of blocking the inventory. Listing never switches, creates, deletes, merges, or pushes a branch, never changes or records a root gitlink, and never prints an `oms record` hint. An interactive user may explicitly delegate missing topology creation to `oms sync`; otherwise root topology remains unchanged. Exit 1 covers selection or safe-preparation refusal, and exit 2 covers automatic initialization or local-ref inspection failure. Run `oms branch list --help` for the authoritative behavior and examples.
+
 ## Deleting a local branch
 
 `oms branch delete [alias] [branch]` removes one **local** branch inside a single initialized submodule. It is deliberately narrow and safe:
@@ -89,7 +113,7 @@ Omit the alias or branch on `oms switch` and `oms checkout` to pick one interact
 oms branch delete api feature/login        # safe delete (git branch -d)
 oms branch delete api feature/login --force # force delete (git branch -D)
 oms branch delete                           # pick alias, then branch, interactively
-oms branch                                  # interactive action selector (currently: delete)
+oms branch                                  # interactive list/delete action selector
 ```
 
 - **Local only.** It never deletes a remote branch or a remote-tracking ref, never fetches or pushes, and never stages or commits the root gitlink. A missing local branch whose name exists on `origin` is reported as local-only.
@@ -167,6 +191,7 @@ Skill firing is best-effort — an agent loads a skill only when it judges the s
 | `oms record [alias]` | workspace root or inside `oms/<alias>/` | Commits an existing root gitlink pointer update for one alias (`chore(oms): update <alias> submodule to <sha>`). | Root repo only, path-limited to `oms/<alias>`; refuses unrelated staged changes. Not for adds/removals — use `oms sync`/`oms unsync`. |
 | `oms switch [alias] [branch]` | workspace root | `git switch` to a LOCAL branch, creating it locally if it does not exist yet (no remote required). | `--from <ref>` sets the start point for a new branch. Omit alias/branch to pick interactively (or create a new branch). |
 | `oms checkout [alias] [branch]` | workspace root | `git fetch origin --prune`, then check out a REMOTE branch (`origin/*`) as a local tracking branch (or switch to an existing local counterpart). | Omit alias/branch to pick interactively. To create a brand-new local branch, use `oms switch`. |
+| `oms branch list [alias]` | workspace root | Safely prepares one declared submodule, refreshes all declared remotes, and lists local and remote-tracking branches. | Shows baseline certainty, current/baseline flags, exact upstream divergence, detached HEAD, and per-remote `fresh`/`stale`/`unavailable` state. Never switches a branch or changes a root gitlink outside an explicitly accepted `oms sync`. |
 | `oms branch delete [alias] [branch]` | workspace root | Deletes one LOCAL branch inside one initialized submodule with `git branch -d` (safe) or `-D` (`--force`). | Local only — never deletes a remote or remote-tracking ref, never touches the root gitlink. Protects the current branch and every resolved baseline (see below). Omit alias/branch to pick interactively; a registered-but-uninitialized alias is initialized first. Exit 0 on success, 1 on input/precondition errors, 2 on a declined/failed/concurrent deletion. |
 | `oms fetch ...` | workspace root | `git fetch <remote> --prune` in each submodule. | `--remote <name>` (repeatable) picks the remote(s); omit to choose interactively, defaults to `origin`. |
 | `oms pull ...` | workspace root | `git pull --ff-only <remote>` on each submodule's current branch. | Submodule branch only — never stages or commits the root gitlink. Rejects a dirty submodule; prints an `oms record <alias>` hint when the pointer moves. `--remote <name>` selects a single remote (defaults to `origin`). |
