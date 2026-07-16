@@ -1,6 +1,6 @@
 ---
 name: oms-branch
-description: Use when starting or switching a branch inside an `oms/<alias>/` submodule — `oms switch` to create or move to a local branch, `oms checkout` to check out an existing remote branch as a tracking branch. Helps avoid leaving a submodule in detached HEAD.
+description: Use when starting, switching, or deleting a branch inside an `oms/<alias>/` submodule — `oms switch` to create or move to a local branch, `oms checkout` to check out an existing remote branch as a tracking branch, `oms branch delete` to remove a local branch safely. Helps avoid leaving a submodule in detached HEAD and keeps deletion local-only.
 ---
 
 # Choose the right branch command inside a submodule
@@ -23,4 +23,11 @@ Branching happens inside a submodule (`oms/<alias>/`), which is its own Git repo
 
 Both commands attach HEAD to a branch. Prefer them over a raw `git checkout <sha>` inside the submodule, which detaches HEAD. If `oms status --json` shows a submodule with no branch (detached), attach one with `oms switch` before committing.
 
-These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer remaining flag detail to `oms switch --help` and `oms checkout --help`.
+## Delete a LOCAL branch
+
+- `oms branch delete <alias> <branch>` removes one LOCAL branch inside a submodule with a safe delete. It is local-only: it never deletes a remote branch or a remote-tracking ref, and never touches the root pointer. To remove a branch on the remote, use plain Git against the remote instead — this command does not do that.
+- Deleting an unmerged branch is refused by the safe delete; force it with `oms branch delete <alias> <branch> --force` only when losing its unmerged commits is intended. Force still cannot delete the current branch or a baseline branch.
+- Omit the alias or branch to choose interactively; protected branches (current and baseline) are shown but not selectable.
+- Do not `cd` into `oms/<alias>/` and run raw `git branch -d/-D`; the command resolves and protects baseline branches for you.
+
+These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer remaining flag detail to `oms switch --help`, `oms checkout --help`, and `oms branch delete --help`.
