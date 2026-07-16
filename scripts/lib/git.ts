@@ -4,11 +4,12 @@ import { dirname, join, resolve } from "node:path";
 import { DATA_DIRNAME, MANIFEST_FILENAME, MIN_GIT_MAJOR, MIN_GIT_MINOR } from "./constants.js";
 import type { GitResult, WorkspaceOptions } from "./types.js";
 
-export function runGit(cwd: string, args: string[], inheritOutput = false): GitResult {
+export function runGit(cwd: string, args: string[], inheritOutput = false, env?: NodeJS.ProcessEnv): GitResult {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
     stdio: inheritOutput ? "inherit" : ["ignore", "pipe", "pipe"],
+    ...(env ? { env } : {}),
   });
 
   return {
@@ -107,6 +108,30 @@ export function shortSha(dir: string): string {
 
 export function localBranchExists(dir: string, branch: string): boolean {
   return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).success;
+}
+
+/** Full 40-hex OID of a local branch tip, or null when the branch does not exist. */
+export function localBranchOid(dir: string, branch: string): string | null {
+  const r = runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
+  const oid = r.stdout.trim();
+  return r.success && /^[0-9a-f]{40}$/.test(oid) ? oid : null;
+}
+
+/** Abbreviated OID for an arbitrary revision, or a sentinel when it cannot be read. */
+export function shortOid(dir: string, rev: string): string {
+  const r = runGit(dir, ["rev-parse", "--short", rev]);
+  return r.success && r.stdout.trim().length > 0 ? r.stdout.trim() : "???????";
+}
+
+/** Branch name that origin/HEAD points to (e.g. "main"), or null when the default is unset or dangling. */
+export function resolveOriginHead(dir: string): string | null {
+  const r = runGit(dir, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  if (!r.success) return null;
+  const ref = r.stdout.trim();
+  const name = ref.startsWith("origin/") ? ref.slice("origin/".length) : "";
+  if (!name) return null;
+  // A default that points at a nonexistent remote-tracking branch is not a usable baseline.
+  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${name}`]).success ? name : null;
 }
 
 export function remoteBranchExists(dir: string, branch: string): boolean {
