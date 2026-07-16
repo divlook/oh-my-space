@@ -4,18 +4,34 @@ import { dirname, join, resolve } from "node:path";
 import { DATA_DIRNAME, MANIFEST_FILENAME, MIN_GIT_MAJOR, MIN_GIT_MINOR } from "./constants.js";
 import type { GitResult, WorkspaceOptions } from "./types.js";
 
+/** Remove credentials from URLs while retaining useful host, path, and failure context. */
+export function redactSensitiveUrls(value: string): string {
+  return value
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi, "$1[redacted]@")
+    .replace(/([?&](?:(?:access|auth|bearer|id|oauth|refresh)?[_-]?token|(?:api|private)?[_-]?key|auth(?:orization)?|(?:client|consumer)?[_-]?secret|credential|jwt|pass(?:word|wd)?|signature)=)[^&\s]+/gi, "$1[redacted]");
+}
+
 export function runGit(cwd: string, args: string[], inheritOutput = false, env?: NodeJS.ProcessEnv): GitResult {
+  const redactOutput = inheritOutput && process.env.OMS_REDACT_GIT_DIAGNOSTICS === "1";
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
-    stdio: inheritOutput ? "inherit" : ["ignore", "pipe", "pipe"],
+    stdio: inheritOutput && !redactOutput ? "inherit" : [redactOutput ? "inherit" : "ignore", "pipe", "pipe"],
     ...(env ? { env } : {}),
   });
+
+  const stdout = inheritOutput && !redactOutput ? "" : (result.stdout ?? "");
+  const stderr = inheritOutput && !redactOutput ? "" : (result.stderr ?? "");
+  if (redactOutput) {
+    if (stdout) process.stdout.write(redactSensitiveUrls(stdout));
+    if (stderr) process.stderr.write(redactSensitiveUrls(stderr));
+  }
 
   return {
     exitCode: result.status,
     success: result.status === 0,
-    stdout: inheritOutput ? "" : (result.stdout ?? ""),
+    stdout: inheritOutput ? "" : stdout,
+    stderr: inheritOutput ? "" : stderr,
   };
 }
 
@@ -143,6 +159,67 @@ export function listLocalBranches(dir: string): string[] {
   const r = runGit(dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
   if (!r.success) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/** Decision-relevant state for one local branch. */
+export type LocalBranchInfo = {
+  name: string;
+  upstream: string | null;
+  ahead: number | null;
+  behind: number | null;
+};
+
+/** Enumerate local refs and each branch's exact configured upstream and divergence. */
+export function inspectLocalBranches(
+  dir: string,
+): { ok: true; branches: LocalBranchInfo[] } | { ok: false; diagnostic: string } {
+  const refs = runGit(dir, [
+    "for-each-ref",
+    "--sort=refname",
+    "--format=%(refname:short)\t%(upstream:short)",
+    "refs/heads",
+  ]);
+  if (!refs.success) return { ok: false, diagnostic: redactSensitiveUrls(refs.stderr.trim()) };
+
+  const branches = refs.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line): LocalBranchInfo => {
+      const [name, configuredUpstream = ""] = line.split("\t");
+      const upstream = configuredUpstream || null;
+      if (upstream === null) return { name, upstream, ahead: null, behind: null };
+      const divergence = runGit(dir, ["rev-list", "--left-right", "--count", `${name}...${upstream}`]);
+      const counts = divergence.success ? divergence.stdout.trim().split(/\s+/).map(Number) : [];
+      if (counts.length !== 2 || counts.some((count) => !Number.isFinite(count))) {
+        return { name, upstream, ahead: null, behind: null };
+      }
+      return { name, upstream, ahead: counts[0], behind: counts[1] };
+    });
+  return { ok: true, branches };
+}
+
+/** Enumerate one declared remote namespace, distinguishing failure from a successful empty result. */
+export function inspectRemoteBranches(
+  dir: string,
+  remote: string,
+): { ok: true; branches: string[] } | { ok: false; diagnostic: string } {
+  const r = runGit(dir, [
+    "for-each-ref",
+    "--sort=refname",
+    "--format=%(refname)",
+    `refs/remotes/${remote}`,
+  ]);
+  if (!r.success) return { ok: false, diagnostic: redactSensitiveUrls(r.stderr.trim()) };
+  const prefix = `refs/remotes/${remote}/`;
+  const branches = r.stdout
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && s !== `${prefix}HEAD`)
+    .map((s) => (s.startsWith(prefix) ? s.slice(prefix.length) : s))
+    .filter((s) => s !== "HEAD")
+    .sort();
+  return { ok: true, branches };
 }
 
 /** Remote branch short names under origin, with the "origin/" prefix stripped and origin/HEAD excluded. */

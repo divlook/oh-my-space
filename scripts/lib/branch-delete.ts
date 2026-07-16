@@ -18,6 +18,7 @@ import { gitlinkState, submoduleOperationInProgress } from "./status.js";
 import { resolveBaselines, type ProtectedReason } from "./branch-baseline.js";
 import { guardedConfirm, guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
+import { runBranchList } from "./branch-list.js";
 
 type BranchDeleteOptions = { force?: boolean };
 
@@ -32,8 +33,8 @@ function shq(arg: string): string {
 }
 
 /**
- * Bare `oms branch`: present the branch action selector interactively (even while `delete` is the
- * only action), or print help and exit 1 in a non-interactive shell (the `oms agent` group pattern).
+ * Bare `oms branch`: present the branch action selector interactively, or print help and exit 1 in
+ * a non-interactive shell (the `oms agent` group pattern).
  */
 export async function runBranch(command: Command): Promise<number> {
   if (!interactive()) {
@@ -42,12 +43,16 @@ export async function runBranch(command: Command): Promise<number> {
   }
   const action = await guardedSelect<string>({
     message: "Select a branch action",
-    options: [{ value: "delete", label: "delete a local branch in a submodule" }],
+    options: [
+      { value: "list", label: "list branches in a submodule" },
+      { value: "delete", label: "delete a local branch in a submodule" },
+    ],
   });
   if (isCancel(action)) {
     cancel("Cancelled.");
     return 1;
   }
+  if (action === "list") return runBranchList(undefined);
   if (action === "delete") return runBranchDelete(undefined, undefined, {});
   return 1;
 }

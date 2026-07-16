@@ -11,6 +11,13 @@ export type BaselineResolution =
   | { ok: true; protectedReasons: ProtectedReason[]; driftWarning: string | null }
   | { ok: false; reason: string };
 
+export type BaselineReport = {
+  state: "known" | "incomplete" | "unknown";
+  baselines: ProtectedReason[];
+  unmatched: string[];
+  warnings: string[];
+};
+
 /** One reliable version of `.gitmodules` to consult for the selected alias's recorded branch. */
 type GitmodulesSource = {
   label: string;
@@ -35,9 +42,10 @@ function countSectionHeaders(content: string, path: string): number {
   return content.split("\n").filter((line) => header.test(line)).length;
 }
 
-/** Collect every present, readable `.gitmodules` version, or a fail-closed reason for an unreadable one. */
-function collectSources(repoRoot: string): { sources: GitmodulesSource[] } | { error: string } {
+/** Collect every readable `.gitmodules` version and identify each source that could not be inspected. */
+function collectSources(repoRoot: string): { sources: GitmodulesSource[]; errors: string[] } {
   const sources: GitmodulesSource[] = [];
+  const errors: string[] = [];
 
   const worktreePath = join(repoRoot, ".gitmodules");
   if (existsSync(worktreePath)) {
@@ -48,16 +56,16 @@ function collectSources(repoRoot: string): { sources: GitmodulesSource[] } | { e
         rawContent: readFileSync(worktreePath, "utf8"),
       });
     } catch {
-      return { error: "the working tree .gitmodules could not be read (permission or I/O error)" };
+      errors.push("the working tree .gitmodules could not be read (permission or I/O error)");
     }
   }
 
   const staged = runGit(repoRoot, ["ls-files", "--stage", "--", ".gitmodules"]);
   if (!staged.success) {
-    return { error: "the index .gitmodules sources could not be listed; retry once Git is idle" };
+    errors.push("the index .gitmodules sources could not be listed; retry once Git is idle");
   }
   const stages = new Set<string>();
-  for (const line of staged.stdout.split("\n")) {
+  for (const line of staged.success ? staged.stdout.split("\n") : []) {
     const m = line.match(/^\d+ [0-9a-f]+ ([0-3])\t/);
     if (m) stages.add(m[1]);
   }
@@ -65,7 +73,8 @@ function collectSources(repoRoot: string): { sources: GitmodulesSource[] } | { e
   for (const stage of indexStages) {
     const show = runGit(repoRoot, ["show", `:${stage}:.gitmodules`]);
     if (!show.success) {
-      return { error: `index .gitmodules (stage ${stage}) was listed but could not be read; retry once Git is idle` };
+      errors.push(`index .gitmodules (stage ${stage}) was listed but could not be read; retry once Git is idle`);
+      continue;
     }
     sources.push({
       label: stage === "0" ? "index .gitmodules" : `index .gitmodules (stage ${stage})`,
@@ -76,21 +85,21 @@ function collectSources(repoRoot: string): { sources: GitmodulesSource[] } | { e
 
   const headEntry = runGit(repoRoot, ["ls-tree", "HEAD", "--", ".gitmodules"]);
   if (!headEntry.success) {
-    return { error: "HEAD .gitmodules presence could not be inspected; retry once Git is idle" };
-  }
-  if (headEntry.stdout.trim().length > 0) {
+    errors.push("HEAD .gitmodules presence could not be inspected; retry once Git is idle");
+  } else if (headEntry.stdout.trim().length > 0) {
     const show = runGit(repoRoot, ["show", "HEAD:.gitmodules"]);
     if (!show.success) {
-      return { error: "HEAD .gitmodules exists but could not be read; retry once Git is idle" };
+      errors.push("HEAD .gitmodules exists but could not be read; retry once Git is idle");
+    } else {
+      sources.push({
+        label: "HEAD .gitmodules",
+        configArgs: ["--blob", "HEAD:.gitmodules"],
+        rawContent: show.stdout,
+      });
     }
-    sources.push({
-      label: "HEAD .gitmodules",
-      configArgs: ["--blob", "HEAD:.gitmodules"],
-      rawContent: show.stdout,
-    });
   }
 
-  return { sources };
+  return { sources, errors };
 }
 
 /**
@@ -121,7 +130,7 @@ export function resolveBaselines(repoRoot: string, repo: Repo): BaselineResoluti
   }
 
   const collected = collectSources(repoRoot);
-  if ("error" in collected) return { ok: false, reason: collected.error };
+  if (collected.errors.length > 0) return { ok: false, reason: collected.errors[0] };
 
   const gitmodulesBranches = new Set<string>();
   for (const source of collected.sources) {
@@ -162,4 +171,82 @@ export function resolveBaselines(repoRoot: string, repo: Repo): BaselineResoluti
 
   const protectedReasons = [...reasons.entries()].map(([branch, reason]) => ({ branch, reason }));
   return { ok: true, protectedReasons, driftWarning };
+}
+
+/** Report every reliable baseline without blocking a read-only inventory on unreliable metadata. */
+export function reportBaselines(
+  repoRoot: string,
+  repo: Repo,
+  localBranches: string[],
+  originHeadReliable: boolean,
+): BaselineReport {
+  const path = submodulePath(repo.alias);
+  const reasons = new Map<string, string>();
+  const warnings: string[] = [];
+  const add = (branch: string, reason: string) => {
+    if (!reasons.has(branch)) reasons.set(branch, reason);
+  };
+
+  let manifestBaseline: string | null = null;
+  if (repo.branch) {
+    manifestBaseline = repo.branch;
+    add(repo.branch, "oms.yaml baseline");
+  } else if (!originHeadReliable) {
+    warnings.push("origin/HEAD is not reliable because origin could not be refreshed successfully");
+  } else {
+    const originHead = resolveOriginHead(aliasDir(repoRoot, repo.alias));
+    if (originHead === null) {
+      warnings.push("origin/HEAD could not be resolved after refreshing origin");
+    } else {
+      manifestBaseline = originHead;
+      add(originHead, "remote default (origin/HEAD)");
+    }
+  }
+
+  const collected = collectSources(repoRoot);
+  warnings.push(...collected.errors);
+  for (const source of collected.sources) {
+    if (countSectionHeaders(source.rawContent, path) > 1) {
+      warnings.push(`${source.label} has duplicate "${path}" submodule sections`);
+      continue;
+    }
+    if (source.rawContent.trim().length > 0 && !runGit(repoRoot, ["config", ...source.configArgs, "--list"]).success) {
+      warnings.push(`${source.label} has invalid Git config syntax`);
+      continue;
+    }
+    const paths = readGitConfigValues(repoRoot, source.configArgs, `submodule.${path}.path`);
+    if (!paths.ok) {
+      warnings.push(`${source.label} path values could not be read`);
+      continue;
+    }
+    if (paths.values.length > 1) {
+      warnings.push(`${source.label} has multiple "path" values for "${path}"`);
+      continue;
+    }
+    const branches = readGitConfigValues(repoRoot, source.configArgs, `submodule.${path}.branch`);
+    if (!branches.ok) {
+      warnings.push(`${source.label} branch values could not be read`);
+      continue;
+    }
+    if (branches.values.length > 1) {
+      warnings.push(`${source.label} has multiple "branch" values for "${path}"`);
+      continue;
+    }
+    if (branches.values.length === 1) add(branches.values[0], `${source.label} baseline`);
+  }
+
+  const gitmodulesBaselines = [...reasons.entries()]
+    .filter(([, reason]) => reason.includes(".gitmodules"))
+    .map(([branch]) => branch);
+  if (manifestBaseline !== null && gitmodulesBaselines.some((branch) => branch !== manifestBaseline)) {
+    warnings.push(`.gitmodules baseline metadata differs from ${repo.branch ? "oms.yaml" : "origin/HEAD"}`);
+  }
+
+  const baselines = [...reasons.entries()]
+    .map(([branch, reason]) => ({ branch, reason }))
+    .sort((a, b) => a.branch.localeCompare(b.branch));
+  const localSet = new Set(localBranches);
+  const unmatched = baselines.map(({ branch }) => branch).filter((branch) => !localSet.has(branch));
+  const state = baselines.length === 0 ? "unknown" : warnings.length > 0 ? "incomplete" : "known";
+  return { state, baselines, unmatched, warnings };
 }

@@ -73,6 +73,7 @@ export type GitResult = {
   exitCode: number | null;
   success: boolean;
   stdout: string;
+  stderr: string;
 };
 
 export type ManageCommand = "fetch" | "pull" | "push";

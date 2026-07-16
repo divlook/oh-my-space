@@ -6,6 +6,7 @@ import { readPackageVersion } from "./lib/env.js";
 import { assertPromptQueueDrained } from "./lib/prompt-adapter.js";
 import { runAgentInstall, runAgentUninstall } from "./lib/agent.js";
 import { runBranch, runBranchDelete } from "./lib/branch-delete.js";
+import { runBranchList } from "./lib/branch-list.js";
 import { runCheckout, runSwitch } from "./lib/branch-ops.js";
 import { runCommit, runRecord } from "./lib/commit.js";
 import { runDoctor } from "./lib/doctor.js";
@@ -176,10 +177,22 @@ program
 
 const branchCommand = program
   .command("branch")
-  .description("Manage submodule branches (interactive action selector; currently: delete).")
+  .description("Inspect or delete submodule branches (interactive action selector).")
   .addHelpText("after", exitHelp)
   .action(async () => {
     await exitWith(runBranch(branchCommand));
+  });
+
+branchCommand
+  .command("list")
+  .description("Prepare one submodule, refresh declared remotes, and list local and remote branches.")
+  .argument("[alias]", "declared source alias (the sole alias is selected automatically)")
+  .addHelpText(
+    "after",
+    `\nBehavior:\n  Initializes safe existing registration automatically; an unregistered alias requires an accepted sync.\n  Reconciles and fetches every oms.yaml remote with prune, retries once, then shows cached refs as stale.\n  Baseline state is known, incomplete, or unknown. Listing never switches or mutates a branch or root gitlink.\n  Exit 0 includes degraded remote results; exit 1 is selection/preparation refusal; exit 2 is initialization/local inspection failure.\n\nExamples:\n  $ oms branch list api\n  $ oms branch list\n${exitHelp}`,
+  )
+  .action(async (alias: string | undefined) => {
+    await exitWith(runBranchList(alias));
   });
 
 branchCommand

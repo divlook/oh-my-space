@@ -236,7 +236,7 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
       ]);
       if (lsRemote.exitCode === 2) {
         log.error(
-          `${alias}: branch "${repo.branch}" not found on ${repo.remotes.origin}. Push the branch upstream or fix the alias, then retry.`,
+          `${alias}: branch "${repo.branch}" not found on origin. Push the branch upstream or fix the alias, then retry.`,
         );
         return "failed";
       }
@@ -252,7 +252,7 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
       writeFileSync(gitmodules, "");
     }
 
-    log.step(`${alias}: git submodule add${repo.branch ? ` -b ${repo.branch}` : ""} ${repo.remotes.origin} ${path}`);
+    log.step(`${alias}: git submodule add${repo.branch ? ` -b ${repo.branch}` : ""} <origin> ${path}`);
     const args = ["submodule", "add", ...(repo.branch ? ["-b", repo.branch] : []), "--", repo.remotes.origin, path];
     const add = runGit(repoRoot, args, true);
     if (!add.success) {
