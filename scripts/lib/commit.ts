@@ -11,6 +11,7 @@ import {
 } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
 import { resolveCommandAlias } from "./prompts.js";
+import { recoveryPreflight } from "./root-tx.js";
 import { stagedRootPaths } from "./root-index.js";
 import {
   assertRootTopologySafe,
@@ -98,6 +99,13 @@ export async function runRecord(alias: string | undefined): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
+
+  // Complete or safely block any interrupted OMS finalization before recording a root pointer.
+  const recovered = recoveryPreflight(repoRoot);
+  if (!recovered.ok) {
+    log.error(recovered.reason);
+    return 2;
+  }
 
   const resolution = await resolveCommandAlias(repos, repoRoot, alias, "record");
   if (resolution.kind === "error") return 1;

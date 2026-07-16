@@ -81,6 +81,30 @@ oms record api                       # commit the moved oms/api pointer in your 
 
 Omit the alias or branch on `oms switch` and `oms checkout` to pick one interactively — synced submodules, and local or `origin/*` branches respectively.
 
+## Deleting a local branch
+
+`oms branch delete [alias] [branch]` removes one **local** branch inside a single initialized submodule. It is deliberately narrow and safe:
+
+```bash
+oms branch delete api feature/login        # safe delete (git branch -d)
+oms branch delete api feature/login --force # force delete (git branch -D)
+oms branch delete                           # pick alias, then branch, interactively
+oms branch                                  # interactive action selector (currently: delete)
+```
+
+- **Local only.** It never deletes a remote branch or a remote-tracking ref, never fetches or pushes, and never stages or commits the root gitlink. A missing local branch whose name exists on `origin` is reported as local-only.
+- **Protected branches.** The current branch and every resolved baseline are protected and cannot be deleted, even with `--force`. Baselines are the explicit `oms.yaml` `branch`, or the remote default (`origin/HEAD`) when `branch` is omitted, plus any branch recorded for the alias in a present, reliable `.gitmodules` version (working tree, index, or `HEAD`). Drift between these is reported and both are protected; a later `oms sync` reconciles the metadata. Unreadable, malformed, duplicate, or multi-valued baseline metadata fails closed with the offending source named.
+- **Safe by default, one force retry.** A safe `git branch -d` is tried first. If Git rejects it (an unmerged branch) and the branch still exists, an interactive prompt offers a single force retry (default No); a non-interactive shell prints the exact `oms branch delete <alias> <branch> --force` command instead. Before every force deletion OMS prints the branch tip's full OID and a POSIX-shell-safe `git -C oms/<alias> branch <branch> <oid>` recreation command, and re-checks the OID so a branch that moved concurrently aborts (exit 2) rather than losing commits.
+- **Preconditions.** Deletion is rejected while a merge/rebase/cherry-pick/revert/bisect/sequencer operation is in progress in the submodule, and for a detached HEAD unless it exactly matches the recorded root gitlink (which lets interrupted automatic initialization resume). Dirty submodule and root state do not block deletion. A registered-but-uninitialized alias named explicitly is initialized automatically (network access limited to that alias) and then revalidated.
+
+## Sync finalization and metadata reconciliation
+
+`oms sync` finalizes topology and OMS-managed `.gitmodules` metadata through **one** decision, and reconciles that metadata from `oms.yaml`:
+
+- **Authoritative manifest metadata.** For an initialized submodule, `oms.yaml` `remotes.origin` is authoritative: sync reconciles the local `origin` URL and the `.gitmodules` `url` to it, and writes an explicit `branch` (or removes the key when omitted). Sync validates the baseline after fetching — an explicit branch must exist on `origin`, and an omitted branch requires a resolvable `origin/HEAD` — and fails that alias otherwise **without** changing its metadata. Output names only the changed fields (`url`, `branch`), never URL values.
+- **One finalization.** Reconciled metadata follows the same commit-or-unstage decision as topology: `--commit` (or the interactive default-Yes prompt) records topology and metadata together in one path-limited commit that also includes the complete current working-tree `oms.yaml`; without a commit, the changes are left unstaged.
+- **Partial success and isolation.** A `--commit` that partially fails commits only the successful aliases through an owner-only temporary index, preserving unrelated staged paths, and exits non-zero with a summary. The temporary-index commit, a durable fsynced intent marker, and an atomically installed replacement index keep an interrupted commit recoverable: `sync`, `unsync`, and `record` run a shared recovery preflight that completes or safely blocks on leftover finalization state before mutating the root again.
+
 ## How `oms` uses Git submodules
 
 `oms` does not replace Git submodules. It adds a small command layer for the workflow details that make submodules awkward. Submodules already give you a reproducible pin (the parent records each source's exact commit), visibility (`git status` shows when a pointer moved), and history (the pointer travels with your commits). The friction is in everyday branch work, and that is what `oms` smooths over:
@@ -143,6 +167,7 @@ Skill firing is best-effort — an agent loads a skill only when it judges the s
 | `oms record [alias]` | workspace root or inside `oms/<alias>/` | Commits an existing root gitlink pointer update for one alias (`chore(oms): update <alias> submodule to <sha>`). | Root repo only, path-limited to `oms/<alias>`; refuses unrelated staged changes. Not for adds/removals — use `oms sync`/`oms unsync`. |
 | `oms switch [alias] [branch]` | workspace root | `git switch` to a LOCAL branch, creating it locally if it does not exist yet (no remote required). | `--from <ref>` sets the start point for a new branch. Omit alias/branch to pick interactively (or create a new branch). |
 | `oms checkout [alias] [branch]` | workspace root | `git fetch origin --prune`, then check out a REMOTE branch (`origin/*`) as a local tracking branch (or switch to an existing local counterpart). | Omit alias/branch to pick interactively. To create a brand-new local branch, use `oms switch`. |
+| `oms branch delete [alias] [branch]` | workspace root | Deletes one LOCAL branch inside one initialized submodule with `git branch -d` (safe) or `-D` (`--force`). | Local only — never deletes a remote or remote-tracking ref, never touches the root gitlink. Protects the current branch and every resolved baseline (see below). Omit alias/branch to pick interactively; a registered-but-uninitialized alias is initialized first. Exit 0 on success, 1 on input/precondition errors, 2 on a declined/failed/concurrent deletion. |
 | `oms fetch ...` | workspace root | `git fetch <remote> --prune` in each submodule. | `--remote <name>` (repeatable) picks the remote(s); omit to choose interactively, defaults to `origin`. |
 | `oms pull ...` | workspace root | `git pull --ff-only <remote>` on each submodule's current branch. | Submodule branch only — never stages or commits the root gitlink. Rejects a dirty submodule; prints an `oms record <alias>` hint when the pointer moves. `--remote <name>` selects a single remote (defaults to `origin`). |
 | `oms push <alias>...` | workspace root | `git push <remote> <branch>` (creating the remote branch on first push). | Submodule branch only — never stages or commits the root gitlink. `--commit`/`--record` are unsupported; record the root pointer with `oms record <alias>`. `--remote <name>` (repeatable) picks the remote(s); upstream is set only for `origin`. |
@@ -206,6 +231,7 @@ JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://
 
 Detailed migration steps are organized per version under [`docs/migrations/`](./docs/migrations/).
 
+- [0.11.x → 0.12.0](./docs/migrations/0.11.x-to-0.12.0.md) — adds `oms branch delete` and makes `oms sync` reconcile declarative `.gitmodules` metadata with stricter baseline validation and a durable finalization recovery preflight
 - [0.9.x → 0.10.0](./docs/migrations/0.9.x-to-0.10.0.md) — scopes each command to a single Git boundary and makes root pointer commits explicit via `oms record`
 - [0.7.x → 0.8.0](./docs/migrations/0.7.x-to-0.8.0.md) — splits `oms checkout` into `oms switch` (local branches) and `oms checkout` (remote branches)
 - [0.5.x → 0.6.0](./docs/migrations/0.5.x-to-0.6.0.md) — switches the data model from bare clone + worktrees back to git submodules

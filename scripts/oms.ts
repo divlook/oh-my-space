@@ -3,7 +3,9 @@ import { Command } from "commander";
 import { log } from "@clack/prompts";
 import { DATA_DIRNAME, MANIFEST_FILENAME } from "./lib/constants.js";
 import { readPackageVersion } from "./lib/env.js";
+import { assertPromptQueueDrained } from "./lib/prompt-adapter.js";
 import { runAgentInstall, runAgentUninstall } from "./lib/agent.js";
+import { runBranch, runBranchDelete } from "./lib/branch-delete.js";
 import { runCheckout, runSwitch } from "./lib/branch-ops.js";
 import { runCommit, runRecord } from "./lib/commit.js";
 import { runDoctor } from "./lib/doctor.js";
@@ -43,7 +45,10 @@ type SkillsOptions = { install?: boolean };
 
 async function exitWith(action: Promise<number>): Promise<void> {
   try {
-    process.exit(await action);
+    const code = await action;
+    // A guarded test queue must be fully consumed; leftover responses fail closed (exit 1).
+    assertPromptQueueDrained();
+    process.exit(code);
   } catch (e) {
     log.error(e instanceof Error ? e.message : String(e));
     process.exit(1);
@@ -59,6 +64,7 @@ const commandNames = new Set([
   "record",
   "switch",
   "checkout",
+  "branch",
   "fetch",
   "pull",
   "push",
@@ -166,6 +172,27 @@ program
   .addHelpText("after", exitHelp)
   .action(async (alias: string | undefined, branch: string | undefined) => {
     await exitWith(runCheckout(alias, branch));
+  });
+
+const branchCommand = program
+  .command("branch")
+  .description("Manage submodule branches (interactive action selector; currently: delete).")
+  .addHelpText("after", exitHelp)
+  .action(async () => {
+    await exitWith(runBranch(branchCommand));
+  });
+
+branchCommand
+  .command("delete")
+  .description(
+    "Delete a LOCAL branch inside one initialized submodule (never a remote branch or the root gitlink).",
+  )
+  .argument("[alias]", "registered source alias (omit to pick interactively)")
+  .argument("[branch]", "local branch name (omit to pick from deletable local branches)")
+  .option("-f, --force", "force-delete with git branch -D (still respects protected branches)")
+  .addHelpText("after", exitHelp)
+  .action(async (alias: string | undefined, branch: string | undefined, options: { force?: boolean }) => {
+    await exitWith(runBranchDelete(alias, branch, options));
   });
 
 program

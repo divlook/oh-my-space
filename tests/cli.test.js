@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1257,22 +1258,25 @@ test("sync --commit records pending add topology left by an earlier no-commit sy
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
 });
 
-test("sync --commit refuses to commit when unrelated root paths are staged", () => {
+test("sync --commit isolates unrelated staged root paths through the temporary index", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
   writeFileSync(join(cwd, "keep.txt"), "x");
   git(cwd, "add", "keep.txt");
 
+  // New behavior: the temp-index commit excludes unrelated staged paths and keeps them staged.
   const result = run(["sync", "api", "--commit"], { cwd });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 2, output);
-  assert.match(output, /unrelated staged changes/);
-  // No topology commit; the unrelated file stays staged and the topology is returned to unstaged.
-  assert.notEqual(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  assert.equal(result.status, 0, output);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  // keep.txt was not committed and remains staged; the topology paths were consumed by the commit.
   const staged = gitOut(cwd, "diff", "--cached", "--name-only");
   assert.match(staged, /keep\.txt/);
   assert.doesNotMatch(staged, /\.gitmodules/);
+  assert.doesNotMatch(staged, /oms\/api/);
+  // keep.txt is not in the commit.
+  assert.doesNotMatch(gitOut(cwd, "show", "--stat", "--pretty=format:", "HEAD"), /keep\.txt/);
 });
 
 test("multi-alias sync --commit creates one plural topology commit", () => {
@@ -1286,7 +1290,7 @@ test("multi-alias sync --commit creates one plural topology commit", () => {
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add submodules");
 });
 
-test("multi-alias sync --commit skips the topology commit when an alias fails", () => {
+test("multi-alias sync --commit finalizes the successful alias and excludes the failed one", () => {
   const a = initBareUpstream();
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
@@ -1298,11 +1302,12 @@ test("multi-alias sync --commit skips the topology commit when an alias fails", 
 
   const result = run(["sync", "api", "web", "--commit"], { cwd });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 2, output); // web failed
-  // No topology commit and api's topology is returned to unstaged for manual review.
-  assert.notEqual(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add submodules");
-  assert.notEqual(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
-  assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  assert.equal(result.status, 2, output); // web failed → overall non-zero
+  // The successful alias is committed (singular message); the failed alias is not in the commit.
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  const committed = gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD");
+  assert.match(committed, /oms\/api/);
+  assert.doesNotMatch(committed, /oms\/web/);
 });
 
 test("unsync --commit creates a removal topology commit", () => {
@@ -1508,7 +1513,7 @@ test("sync restore reconciles manifest metadata as unstaged .gitmodules edits", 
   const result = run(["sync", "api"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.match(output, /updated \.gitmodules metadata/);
+  assert.match(output, /reconciled \.gitmodules/);
   assert.match(readFileSync(join(cwd, ".gitmodules"), "utf8"), new RegExp(`url = file://${bare.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}/`));
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
   assert.match(gitOut(cwd, "diff", "--name-only"), /^\.gitmodules$/m);
@@ -2949,4 +2954,841 @@ test("each SKILL.md is schema-stable and portable", () => {
       assert.ok(body.includes("oms commit --help"), `${name}: a body naming -m must also cite oms commit --help`);
     }
   }
+});
+
+// ─── branch delete: guarded prompt queue + local branch deletion (0.12.0) ───
+
+/** Env with the guarded test-response queue active. */
+function queueEnv(responses, overrides = {}) {
+  return {
+    ...testEnv,
+    OMS_TEST_MODE: "1",
+    OMS_TEST_PROMPT_RESPONSES: JSON.stringify(responses),
+    ...overrides,
+  };
+}
+
+/** Whether a local branch ref exists in the given working-tree directory. */
+function localBranchExists(dir, branch) {
+  return spawnSync("git", ["-C", dir, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], {
+    env: testEnv,
+  }).status === 0;
+}
+
+/** Whether a remote-tracking ref origin/<branch> exists in the given directory. */
+function remoteBranchExists(dir, branch) {
+  return spawnSync("git", ["-C", dir, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`], {
+    env: testEnv,
+  }).status === 0;
+}
+
+/** Sync one alias and return the submodule working-tree path. */
+function syncedSubmodule(cwd, alias, bare, branch = "main") {
+  writeSources(cwd, sourceFor(alias, bare, branch));
+  assert.equal(run(["sync", alias, "--commit"], { cwd }).status, 0);
+  return join(cwd, "oms", alias);
+}
+
+test("branch is exposed with a delete subcommand", () => {
+  const help = run(["branch", "--help"]);
+  assert.equal(help.status, 0, help.stdout + help.stderr);
+  assert.match(help.stdout, /\bdelete\b/);
+  const dhelp = run(["branch", "delete", "--help"]);
+  assert.equal(dhelp.status, 0);
+  assert.match(dhelp.stdout, /--force/);
+});
+
+test("branch delete safely removes a merged local branch and reports its short SHA", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "branch", "feature/login");
+  const sha = gitOut(dir, "rev-parse", "--short", "feature/login");
+
+  const del = run(["branch", "delete", "api", "feature/login"], { cwd });
+  const out = del.stdout + del.stderr;
+  assert.equal(del.status, 0, out);
+  assert.match(out, /deleted local branch feature\/login/);
+  assert.match(out, new RegExp(sha));
+  assert.equal(localBranchExists(dir, "feature/login"), false);
+});
+
+test("branch delete keeps the deletion local: no remote ref removed, root pointer unchanged", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  // Bring dev down as a local tracking branch, switch back to main, then delete local dev.
+  assert.equal(run(["checkout", "api", "dev"], { cwd }).status, 0);
+  assert.equal(run(["switch", "api", "main"], { cwd }).status, 0);
+  const rootBefore = gitOut(cwd, "rev-parse", "HEAD");
+  const stagedBefore = gitOut(cwd, "diff", "--cached", "--name-only");
+
+  const del = run(["branch", "delete", "api", "dev"], { cwd });
+  assert.equal(del.status, 0, del.stdout + del.stderr);
+  assert.equal(localBranchExists(dir, "dev"), false);
+  // Remote-tracking ref and the actual origin branch survive.
+  assert.equal(remoteBranchExists(dir, "dev"), true);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), rootBefore);
+  assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), stagedBefore);
+});
+
+test("branch delete protects the current branch under -f and plain modes", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  for (const args of [["branch", "delete", "api", "main"], ["branch", "delete", "api", "main", "-f"]]) {
+    const del = run(args, { cwd });
+    const out = del.stdout + del.stderr;
+    assert.equal(del.status, 1, out);
+    assert.match(out, /protected/);
+  }
+});
+
+test("branch delete protects the explicit oms.yaml baseline", () => {
+  const bare = initBareUpstream({ branches: ["main", "develop"] });
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare, "develop");
+  // Bring develop local, switch to a scratch branch so develop is baseline-but-not-current.
+  assert.equal(run(["checkout", "api", "develop"], { cwd }).status, 0);
+  git(dir, "checkout", "-b", "scratch");
+  const del = run(["branch", "delete", "api", "develop"], { cwd });
+  assert.equal(del.status, 1, del.stdout + del.stderr);
+  assert.match(del.stdout + del.stderr, /protected/);
+});
+
+test("branch delete protects the remote default when oms.yaml omits branch", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  // No branch key in oms.yaml.
+  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n`);
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  const dir = join(cwd, "oms", "api");
+  git(dir, "remote", "set-head", "origin", "main");
+  git(dir, "checkout", "-b", "scratch");
+  const del = run(["branch", "delete", "api", "main"], { cwd });
+  assert.equal(del.status, 1, del.stdout + del.stderr);
+  assert.match(del.stdout + del.stderr, /remote default|protected/);
+});
+
+test("branch delete fails closed when an omitted baseline cannot be resolved", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n`);
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  const dir = join(cwd, "oms", "api");
+  // Remove any origin/HEAD so the remote default cannot be resolved.
+  spawnSync("git", ["-C", dir, "symbolic-ref", "-d", "refs/remotes/origin/HEAD"], { env: testEnv });
+  git(dir, "checkout", "-b", "scratch");
+  const del = run(["branch", "delete", "api", "scratch"], { cwd });
+  assert.equal(del.status, 1, del.stdout + del.stderr);
+  assert.match(del.stdout + del.stderr, /origin\/HEAD|declare "branch"/);
+});
+
+test("branch delete reports missing local branch, with local-only hint for a remote match", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  const missing = run(["branch", "delete", "api", "nope"], { cwd });
+  assert.equal(missing.status, 1, missing.stdout + missing.stderr);
+  assert.match(missing.stdout + missing.stderr, /not found/);
+  // dev exists on origin but not locally: local-only guidance.
+  const remoteOnly = run(["branch", "delete", "api", "dev"], { cwd });
+  assert.equal(remoteOnly.status, 1, remoteOnly.stdout + remoteOnly.stderr);
+  assert.match(remoteOnly.stdout + remoteOnly.stderr, /local branches only/);
+});
+
+test("branch delete -f skips safe deletion and removes an unmerged branch", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "checkout", "-b", "wip");
+  git(dir, "commit", "--allow-empty", "-m", "unmerged");
+  const oid = gitOut(dir, "rev-parse", "refs/heads/wip");
+  git(dir, "checkout", "main");
+
+  const del = run(["branch", "delete", "api", "wip", "--force"], { cwd });
+  const out = del.stdout + del.stderr;
+  assert.equal(del.status, 0, out);
+  assert.match(out, /force-deleted/);
+  assert.match(out, new RegExp(oid)); // full OID recovery line
+  assert.match(out, /git -C 'oms\/api' branch 'wip'/);
+  assert.equal(localBranchExists(dir, "wip"), false);
+});
+
+test("branch delete of an unmerged branch fails closed non-interactively with a shell-safe retry", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "checkout", "-b", "wip");
+  git(dir, "commit", "--allow-empty", "-m", "unmerged");
+  git(dir, "checkout", "main");
+
+  const del = run(["branch", "delete", "api", "wip"], { cwd });
+  const out = del.stdout + del.stderr;
+  assert.equal(del.status, 2, out);
+  assert.match(out, /oms branch delete 'api' 'wip' --force/);
+  assert.equal(localBranchExists(dir, "wip"), true);
+});
+
+test("branch delete offers one force retry that force-deletes when accepted", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "checkout", "-b", "wip");
+  git(dir, "commit", "--allow-empty", "-m", "unmerged");
+  git(dir, "checkout", "main");
+
+  const del = run(["branch", "delete", "api", "wip"], {
+    cwd,
+    env: queueEnv([{ type: "confirm", value: true }]),
+  });
+  assert.equal(del.status, 0, del.stdout + del.stderr);
+  assert.match(del.stdout + del.stderr, /force-deleted/);
+  assert.equal(localBranchExists(dir, "wip"), false);
+});
+
+test("branch delete keeps the branch when the force retry is declined (exit 2)", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "checkout", "-b", "wip");
+  git(dir, "commit", "--allow-empty", "-m", "unmerged");
+  git(dir, "checkout", "main");
+
+  const del = run(["branch", "delete", "api", "wip"], {
+    cwd,
+    env: queueEnv([{ type: "confirm", value: false }]),
+  });
+  assert.equal(del.status, 2, del.stdout + del.stderr);
+  assert.equal(localBranchExists(dir, "wip"), true);
+});
+
+test("branch delete drives alias and branch selection through the guarded queue", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "branch", "feature/pick");
+
+  const del = run(["branch", "delete"], {
+    cwd,
+    env: queueEnv([{ type: "select", value: "api" }, { type: "select", value: "feature/pick" }]),
+  });
+  assert.equal(del.status, 0, del.stdout + del.stderr);
+  assert.equal(localBranchExists(dir, "feature/pick"), false);
+});
+
+test("bare branch presents an action selector through the queue and cancels cleanly", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  const cancelled = run(["branch"], { cwd, env: queueEnv([{ type: "cancel" }]) });
+  assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
+});
+
+test("bare branch prints help and exits 1 in a non-interactive shell", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  const res = run(["branch"], { cwd });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  assert.match(res.stdout + res.stderr, /delete/);
+});
+
+test("branch delete exits 0 without a selector when only protected branches remain", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  const res = run(["branch", "delete", "api"], { cwd, env: queueEnv([]) });
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.match(res.stdout + res.stderr, /no deletable local branches/);
+});
+
+test("guarded queue fails closed on malformed JSON, wrong type, and unconsumed responses", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "branch", "feature/q");
+
+  const malformed = run(["branch", "delete", "api", "feature/q"], {
+    cwd,
+    env: queueEnv(undefined, { OMS_TEST_PROMPT_RESPONSES: "not json" }),
+  });
+  assert.equal(malformed.status, 1, malformed.stdout + malformed.stderr);
+  assert.match(malformed.stdout + malformed.stderr, /not valid JSON/);
+
+  // A confirm response cannot satisfy a select prompt.
+  const wrongType = run(["branch", "delete"], { cwd, env: queueEnv([{ type: "confirm", value: true }]) });
+  assert.equal(wrongType.status, 1, wrongType.stdout + wrongType.stderr);
+
+  // feature/q survived the malformed run; an extra queued response is left unconsumed.
+  const unconsumed = run(["branch", "delete", "api", "feature/q"], {
+    cwd,
+    env: queueEnv([{ type: "confirm", value: true }]),
+  });
+  assert.equal(unconsumed.status, 1, unconsumed.stdout + unconsumed.stderr);
+  assert.match(unconsumed.stdout + unconsumed.stderr, /unconsumed/);
+});
+
+test("injected responses are ignored without OMS_TEST_MODE", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  // Queue set but OMS_TEST_MODE absent: normal non-TTY behavior (omitted alias fails fast).
+  const res = run(["branch", "delete"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_PROMPT_RESPONSES: JSON.stringify([{ type: "select", value: "api" }]) },
+  });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  assert.match(res.stdout + res.stderr, /not a TTY/);
+});
+
+test("branch delete rejects an in-progress submodule operation and an unanchored detached HEAD", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "commit", "--allow-empty", "-m", "extra");
+  // Unanchored detached HEAD: detach onto a commit that differs from the recorded gitlink.
+  git(dir, "checkout", "--detach", "HEAD");
+  const detached = run(["branch", "delete", "api", "main"], { cwd });
+  assert.equal(detached.status, 1, detached.stdout + detached.stderr);
+  assert.match(detached.stdout + detached.stderr, /detached/);
+
+  // In-progress operation: fabricate a MERGE_HEAD marker in the submodule git dir.
+  git(dir, "checkout", "main");
+  const gitdir = gitOut(dir, "rev-parse", "--absolute-git-dir");
+  writeFileSync(join(gitdir, "MERGE_HEAD"), `${gitOut(dir, "rev-parse", "HEAD")}\n`);
+  const inProgress = run(["branch", "delete", "api", "main"], { cwd });
+  assert.equal(inProgress.status, 1, inProgress.stdout + inProgress.stderr);
+  assert.match(inProgress.stdout + inProgress.stderr, /in progress/);
+});
+
+test("branch delete rejects an unregistered alias with sync guidance", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  // Add a declared-but-unsynced alias.
+  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n    branch: main\n  - alias: ghost\n    remotes:\n      origin: file://${bare}\n    branch: main\n`);
+  const res = run(["branch", "delete", "ghost", "x"], { cwd });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  assert.match(res.stdout + res.stderr, /oms sync ghost/);
+});
+
+test("branch delete auto-initializes a registered-but-uninitialized alias, then revalidates", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "branch", "feature/reinit");
+  // Deinit keeps the gitlink and .gitmodules registration but removes the worktree .git.
+  assert.equal(spawnSync("git", ["-C", cwd, "submodule", "deinit", "-f", "oms/api"], { env: testEnv }).status, 0);
+  assert.equal(existsSync(join(dir, ".git")), false);
+
+  const del = run(["branch", "delete", "api", "feature/reinit"], { cwd });
+  assert.equal(del.status, 0, del.stdout + del.stderr);
+  assert.equal(existsSync(join(dir, ".git")), true);
+  assert.equal(localBranchExists(dir, "feature/reinit"), false);
+});
+
+test("branch delete warns on baseline drift and protects both recorded branches", () => {
+  const bare = initBareUpstream({ branches: ["main", "develop"] });
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare, "main");
+  // Drift .gitmodules to record develop while oms.yaml still says main.
+  git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.branch", "develop");
+  assert.equal(run(["checkout", "api", "develop"], { cwd }).status, 0);
+  git(dir, "checkout", "-b", "scratch");
+
+  // Deleting develop (a .gitmodules baseline) is blocked; the drift warning is emitted.
+  const blocked = run(["branch", "delete", "api", "develop"], { cwd });
+  assert.equal(blocked.status, 1, blocked.stdout + blocked.stderr);
+  assert.match(blocked.stdout + blocked.stderr, /drift|protected/);
+});
+
+test("branch delete fails closed on malformed .gitmodules and identifies the source", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "branch", "feature/m");
+  writeFileSync(join(cwd, ".gitmodules"), "[submodule \"oms/api\"\n  path = oms/api\n");
+  const res = run(["branch", "delete", "api", "feature/m"], { cwd });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  assert.match(res.stdout + res.stderr, /working tree \.gitmodules|invalid Git config/);
+});
+
+test("branch delete fails closed on a duplicate selected-alias section", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "branch", "feature/d");
+  const original = readFileSync(join(cwd, ".gitmodules"), "utf8");
+  writeFileSync(join(cwd, ".gitmodules"), `${original}\n[submodule "oms/api"]\n\tpath = oms/api\n\turl = file://${bare}\n`);
+  const res = run(["branch", "delete", "api", "feature/d"], { cwd });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  assert.match(res.stdout + res.stderr, /duplicate/);
+});
+
+test("branch delete --force exits 2 when Git rejects -D for a linked worktree checkout", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "branch", "feature/w");
+  // Check feature/w out in a linked worktree so Git refuses to delete it.
+  const wt = mkdtempSync(join(tmpdir(), "oms-linked-"));
+  git(dir, "worktree", "add", wt, "feature/w");
+  const res = run(["branch", "delete", "api", "feature/w", "--force"], { cwd });
+  assert.equal(res.status, 2, res.stdout + res.stderr);
+  assert.equal(localBranchExists(dir, "feature/w"), true);
+  rmSync(wt, { recursive: true, force: true });
+});
+
+// ─── sync metadata reconciliation (0.12.0) ───
+
+test("sync reconciles drifted .gitmodules url and branch from the manifest, redacting URLs", () => {
+  const bare = initBareUpstream({ branches: ["main", "develop"] });
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare, "main");
+  // Drift both managed fields away from the manifest.
+  git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.branch", "develop");
+  git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.url", "https://drifted.example/x.git");
+
+  const result = run(["sync", "api", "--commit"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /reconciled \.gitmodules/);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): reconcile api submodule metadata");
+  // Managed fields are restored from the manifest (origin = file://<bare>) in the committed .gitmodules.
+  const committed = gitOut(cwd, "show", "HEAD:.gitmodules");
+  assert.match(committed, /branch = main/);
+  assert.match(committed, new RegExp(`url = file://${bare.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  // No URL value is printed to the user.
+  assert.doesNotMatch(output, /drifted\.example/);
+  assert.doesNotMatch(output, new RegExp(bare.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("sync removes the .gitmodules branch key when the manifest omits branch", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare, "main"); // starts with branch = main
+  assert.match(gitOut(cwd, "config", "--file", ".gitmodules", "--get", "submodule.oms/api.branch"), /main/);
+
+  // Drop the branch key from the manifest; origin/HEAD resolves the baseline.
+  writeFileSync(join(cwd, "oms.yaml"), `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n`);
+  const result = run(["sync", "api", "--commit"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const committed = gitOut(cwd, "show", "HEAD:.gitmodules");
+  assert.doesNotMatch(committed, /branch =/);
+});
+
+test("sync fails when the explicit manifest branch is absent on origin and does not change .gitmodules", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare, "main");
+  writeFileSync(join(cwd, "oms.yaml"), `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n    branch: nope\n`);
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /not found on origin/);
+  // .gitmodules baseline is unchanged.
+  assert.match(gitOut(cwd, "config", "--file", ".gitmodules", "--get", "submodule.oms/api.branch"), /main/);
+});
+
+test("sync fails when an omitted baseline cannot resolve origin/HEAD", () => {
+  // Point the remote default at a nonexistent branch so origin/HEAD is dangling (unresolvable), then
+  // omit the manifest baseline: sync must fail closed instead of guessing a baseline.
+  const bare = initBareUpstream({ branches: ["main", "develop"] });
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare, "main");
+  writeFileSync(join(cwd, "oms.yaml"), `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n`);
+  spawnSync("git", ["--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/ghost"], { env: testEnv });
+  spawnSync("git", ["-C", dir, "symbolic-ref", "-d", "refs/remotes/origin/HEAD"], { env: testEnv });
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /origin\/HEAD|declare "branch"/);
+});
+
+test("sync leaves reconciled metadata unstaged without a commit", () => {
+  const bare = initBareUpstream({ branches: ["main", "develop"] });
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare, "main");
+  git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.branch", "develop");
+  const headBefore = gitOut(cwd, "rev-parse", "HEAD");
+
+  const result = run(["sync", "api"], { cwd }); // no --commit, non-interactive
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  // No new commit; the reconciled .gitmodules is a working-tree change, left unstaged.
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
+  assert.match(gitOut(cwd, "config", "--file", ".gitmodules", "--get", "submodule.oms/api.branch"), /main/);
+  assert.doesNotMatch(gitOut(cwd, "diff", "--cached", "--name-only"), /\.gitmodules/);
+});
+
+test("metadata reconciliation preserves the current working branch", () => {
+  const bare = initBareUpstream({ branches: ["main", "develop"] });
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare, "main");
+  assert.equal(run(["checkout", "api", "develop"], { cwd }).status, 0); // attach to develop
+  assert.equal(gitOut(dir, "branch", "--show-current"), "develop");
+  const recordedGitlink = gitOut(cwd, "rev-parse", "HEAD:oms/api");
+  git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.url", "https://drift.example/x.git");
+
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  // The submodule is still on develop; reconciliation never switches the working branch.
+  assert.equal(gitOut(dir, "branch", "--show-current"), "develop");
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD:oms/api"), recordedGitlink);
+});
+
+test("sync finalizes new topology and existing metadata reconciliation in one commit", () => {
+  const a = initBareUpstream({ branches: ["main", "develop"] });
+  const b = initBareUpstream();
+  const cwd = initGitWorkspace();
+  // api is already synced; web is new. api's .gitmodules branch is drifted.
+  syncedSubmodule(cwd, "api", a, "main");
+  git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.branch", "develop");
+  writeFileSync(
+    cwd + "/oms.yaml",
+    `repos:\n  - alias: api\n    remotes:\n      origin: file://${a}\n    branch: main\n  - alias: web\n    remotes:\n      origin: file://${b}\n    branch: main\n`,
+  );
+
+  const result = run(["sync", "api", "web", "--commit"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  // One commit carries the new web topology and the reconciled api metadata together.
+  const committed = gitOut(cwd, "show", "HEAD:.gitmodules");
+  assert.match(committed, /submodule "oms\/web"/);
+  assert.match(committed, /branch = main/); // api reconciled back to main
+  assert.doesNotMatch(committed, /branch = develop/);
+  const names = gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD");
+  assert.match(names, /oms\/web/);
+});
+
+test("sync restore reconciles .gitmodules metadata through the unified finalization", () => {
+  const bare = initBareUpstream({ branches: ["main", "develop"] });
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare, "main");
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0); // pending removal, not committed
+  // Change the manifest baseline to develop, then restore.
+  writeFileSync(cwd + "/oms.yaml", `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n    branch: develop\n`);
+
+  const result = run(["sync", "api", "--commit"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(join(cwd, "oms", "api")), true); // restored
+  assert.match(gitOut(cwd, "show", "HEAD:.gitmodules"), /branch = develop/);
+});
+
+test("an interrupted commit after HEAD advances is recovered by the next command's preflight", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  // Crash immediately after HEAD advances but before the real index is installed.
+  const crashed = run(["sync", "api", "--commit"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_CRASH_AT: "after-head-advance" },
+  });
+  assert.notEqual(crashed.status, 0, crashed.stdout + crashed.stderr);
+  // HEAD advanced to the commit; a committed recovery marker remains.
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
+
+  // The next root-mutating command completes the recovery and clears the state.
+  const recovered = run(["sync", "api"], { cwd });
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
+  // The gitlink and .gitmodules are committed and clean.
+  assert.doesNotMatch(gitOut(cwd, "status", "--porcelain"), /\.gitmodules|oms\/api/);
+});
+
+test("a malformed finalization marker blocks root-mutating commands", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  mkdirSync(join(cwd, ".git", "oms"), { recursive: true });
+  writeFileSync(join(cwd, ".git", "oms", "finalize.json"), "{ not valid");
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /malformed/i);
+});
+
+test("an orphaned finalization artifact without a marker blocks and is preserved", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  mkdirSync(join(cwd, ".git", "oms"), { recursive: true });
+  writeFileSync(join(cwd, ".git", "oms", "index.recovery"), "stale");
+
+  const result = run(["sync", "api"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /orphan/i);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "index.recovery")), true); // preserved
+});
+
+// ─── 7.8: durable finalization / recovery matrix ───
+
+test("an interruption before HEAD advances preserves the real index and is cleaned on the next run", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const headBefore = gitOut(cwd, "rev-parse", "HEAD");
+  const crashed = run(["sync", "api", "--commit"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_CRASH_AT: "after-marker-prepared" },
+  });
+  assert.notEqual(crashed.status, 0);
+  // HEAD did not advance; only a prepared marker remains.
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
+
+  // The next run cleans the uncommitted prepared state and finalizes normally.
+  const recovered = run(["sync", "api", "--commit"], { cwd });
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
+});
+
+test("a committed recovery whose index no longer matches is preserved and blocks", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const crashed = run(["sync", "api", "--commit"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_CRASH_AT: "after-head-advance" },
+  });
+  assert.notEqual(crashed.status, 0);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
+
+  // Change the real index so its hash no longer matches the recorded original.
+  writeFileSync(join(cwd, "unrelated.txt"), "x");
+  git(cwd, "add", "unrelated.txt");
+
+  const blocked = run(["sync", "api"], { cwd });
+  const output = blocked.stdout + blocked.stderr;
+  assert.notEqual(blocked.status, 0, output);
+  assert.match(output, /no longer matches|inspect/i);
+  // The marker is preserved, not silently discarded.
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
+});
+
+test("record completes a pending finalization recovery through the shared preflight", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const crashed = run(["sync", "api", "--commit"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_CRASH_AT: "after-head-advance" },
+  });
+  assert.notEqual(crashed.status, 0);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
+
+  // record runs the same recovery preflight before touching the root pointer.
+  const recovered = run(["record", "api"], { cwd });
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
+  assert.doesNotMatch(gitOut(cwd, "status", "--porcelain"), /\.gitmodules|oms\/api/);
+});
+
+test("every sync commit discloses and includes the complete working-tree oms.yaml", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const result = run(["sync", "api", "--commit"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /complete working-tree oms\.yaml/i);
+  // oms.yaml is part of the commit (it was untracked before).
+  assert.match(gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD"), /oms\.yaml/);
+});
+
+test("plain partial multi-alias sync does not prompt and leaves successful changes unstaged", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(
+    cwd,
+    `${sourceFor("api", a).trimEnd()}\n  - alias: web\n    remotes:\n      origin: file://${b}\n    branch: nope\n`,
+  );
+
+  // No --commit, non-interactive: web fails, api succeeds, nothing is committed or staged.
+  const result = run(["sync", "api", "web"], { cwd });
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.notEqual(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+});
+
+test("a temporary-commit failure before HEAD advances preserves the real index byte-for-byte", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0); // topology left unstaged
+
+  // Stage an unrelated path, capture the exact index bytes, then force a commit failure via a broken
+  // commit identity so commit-tree fails before HEAD advances.
+  writeFileSync(join(cwd, "keep.txt"), "x");
+  git(cwd, "add", "keep.txt");
+  const indexPath = join(cwd, ".git", "index");
+  const before = readFileSync(indexPath);
+  const headBefore = gitOut(cwd, "rev-parse", "HEAD");
+
+  const result = run(["sync", "api", "--commit"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_FAIL_AT: "commit-tree" },
+  });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
+  assert.deepEqual(readFileSync(indexPath), before);
+});
+
+test("an index-install failure after HEAD advances preserves recovery state for the next command", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const failed = run(["sync", "api", "--commit"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_FAIL_AT: "install-recovery-index" },
+  });
+  const output = failed.stdout + failed.stderr;
+  assert.equal(failed.status, 2, output);
+  assert.match(output, /commit .* was created.*recovery will retry/is);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
+
+  const recovered = run(["sync", "api"], { cwd });
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
+  assert.doesNotMatch(gitOut(cwd, "status", "--porcelain"), /\.gitmodules|oms\/api/);
+});
+
+test("an active finalization lock blocks a concurrent sync before shared state is changed", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  mkdirSync(join(cwd, ".git", "oms"), { recursive: true });
+  const owner = `${process.pid}:test`;
+  const blob = spawnSync("git", ["-C", cwd, "hash-object", "-w", "--stdin"], {
+    input: owner,
+    encoding: "utf8",
+    env: testEnv,
+  });
+  assert.equal(blob.status, 0, blob.stderr);
+  git(cwd, "update-ref", "refs/oms/finalize-lock", blob.stdout.trim());
+
+  const result = run(["sync", "api", "--commit"], { cwd });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /finalization lock is held/);
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
+  assert.equal(gitOut(cwd, "rev-parse", "refs/oms/finalize-lock"), blob.stdout.trim());
+
+  git(cwd, "update-ref", "-d", "refs/oms/finalize-lock", blob.stdout.trim());
+});
+
+test("a crash after index installation is recognized as completed recovery", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const crashed = run(["sync", "api", "--commit"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_CRASH_AT: "after-index-install" },
+  });
+  assert.notEqual(crashed.status, 0, crashed.stdout + crashed.stderr);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
+
+  const recovered = run(["sync", "api"], { cwd });
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
+  assert.doesNotMatch(gitOut(cwd, "status", "--porcelain"), /\.gitmodules|oms\/api/);
+});
+
+test("a crash after the real index rename cleans the retained recovery artifact", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const crashed = run(["sync", "api", "--commit"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_CRASH_AT: "after-index-rename" },
+  });
+  assert.notEqual(crashed.status, 0, crashed.stdout + crashed.stderr);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "index.recovery")), true);
+
+  const recovered = run(["sync", "api"], { cwd });
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
+  assert.equal(existsSync(join(cwd, ".git", "oms", "index.recovery")), false);
+});
+
+test("a dangling OMS state symlink blocks sync before topology mutation", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  symlinkSync(join(cwd, "missing-state-target"), join(cwd, ".git", "oms"));
+
+  const result = run(["sync", "api", "--commit"], { cwd });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /unsafe OMS state directory/);
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+});
+
+test("a structurally incomplete finalization marker is rejected as malformed", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  mkdirSync(join(cwd, ".git", "oms"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".git", "oms", "finalize.json"),
+    JSON.stringify({ state: "prepared", originalHead: gitOut(cwd, "rev-parse", "HEAD") }),
+  );
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /marker.*malformed/i);
+});
+
+test("unsync refuses an unmerged root .gitmodules before removing the submodule", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  const content = readFileSync(join(cwd, ".gitmodules"), "utf8");
+  const blob = spawnSync("git", ["-C", cwd, "hash-object", "-w", "--stdin"], {
+    input: content,
+    encoding: "utf8",
+    env: testEnv,
+  });
+  assert.equal(blob.status, 0, blob.stderr);
+  const oid = blob.stdout.trim();
+  const conflict = spawnSync("git", ["-C", cwd, "update-index", "--index-info"], {
+    input: [1, 2, 3].map((stage) => `100644 ${oid} ${stage}\t.gitmodules`).join("\n") + "\n",
+    encoding: "utf8",
+    env: testEnv,
+  });
+  assert.equal(conflict.status, 0, conflict.stderr);
+
+  const result = run(["unsync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /\.gitmodules is unmerged/);
+  assert.equal(existsSync(dir), true);
+});
+
+test("branch deletion fails closed when index baselines cannot be inspected", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  git(dir, "branch", "feature/keep");
+
+  const result = run(["branch", "delete", "api", "feature/keep"], {
+    cwd,
+    env: { ...testEnv, GIT_INDEX_FILE: cwd },
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /index \.gitmodules sources could not be listed/);
+  assert.equal(localBranchExists(dir, "feature/keep"), true);
 });

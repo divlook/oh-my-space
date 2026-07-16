@@ -114,22 +114,42 @@ export function isDirtyCounts(c: ChangeCounts): boolean {
   return c.staged > 0 || c.unstaged > 0 || c.untracked > 0;
 }
 
-/** Name of an in-progress Git operation (merge/rebase/cherry-pick/revert/bisect) in dir, or null when idle. */
-export function gitOperationInProgress(dir: string): string | null {
-  const markers: Array<[string, string]> = [
-    ["MERGE_HEAD", "merge"],
-    ["rebase-merge", "rebase"],
-    ["rebase-apply", "rebase"],
-    ["CHERRY_PICK_HEAD", "cherry-pick"],
-    ["REVERT_HEAD", "revert"],
-    ["BISECT_LOG", "bisect"],
-  ];
+/** Return the label of the first present marker in a repo's Git directory, or null when none exist. */
+function firstPresentOperation(dir: string, markers: Array<[string, string]>): string | null {
   for (const [name, label] of markers) {
     const p = runGit(dir, ["rev-parse", "--git-path", name]);
     if (!p.success) continue;
     if (existsSync(resolve(dir, p.stdout.trim()))) return label;
   }
   return null;
+}
+
+/** Name of an in-progress Git operation (merge/rebase/cherry-pick/revert/bisect) in dir, or null when idle. */
+export function gitOperationInProgress(dir: string): string | null {
+  return firstPresentOperation(dir, [
+    ["MERGE_HEAD", "merge"],
+    ["rebase-merge", "rebase"],
+    ["rebase-apply", "rebase"],
+    ["CHERRY_PICK_HEAD", "cherry-pick"],
+    ["REVERT_HEAD", "revert"],
+    ["BISECT_LOG", "bisect"],
+  ]);
+}
+
+/**
+ * In-progress Git operation inside a submodule that must block local branch deletion. Adds the
+ * multi-step `sequencer` directory to the base set so an interrupted cherry-pick/revert todo is caught.
+ */
+export function submoduleOperationInProgress(dir: string): string | null {
+  return firstPresentOperation(dir, [
+    ["MERGE_HEAD", "merge"],
+    ["rebase-merge", "rebase"],
+    ["rebase-apply", "rebase"],
+    ["CHERRY_PICK_HEAD", "cherry-pick"],
+    ["REVERT_HEAD", "revert"],
+    ["BISECT_LOG", "bisect"],
+    ["sequencer", "cherry-pick or revert"],
+  ]);
 }
 
 export type PinValue = "ok" | "moved" | "uninit" | "missing" | "conflict";

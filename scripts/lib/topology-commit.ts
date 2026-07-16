@@ -2,7 +2,8 @@ import { cancel, isCancel, log, select } from "@clack/prompts";
 import { runGit, shortSha, submodulePath } from "./git.js";
 import { stagedRootPaths } from "./root-index.js";
 import { gitlinkState, partialRemovalTopology, pendingAddTopology, pendingRemovalTopology } from "./status.js";
-import type { GitResult } from "./types.js";
+import { finalizeRootCommit } from "./root-tx.js";
+import type { AliasMetadataPlan } from "./gitmodules-reconcile.js";
 
 type TopologyKind = "add" | "remove";
 
@@ -22,13 +23,6 @@ function topologyCommitMessage(kind: TopologyKind, aliases: string[]): string {
 function unrelatedStagedTopologyPaths(repoRoot: string, aliases: string[]): string[] {
   const topo = new Set([".gitmodules", ...aliases.map(submodulePath)]);
   return stagedRootPaths(repoRoot).filter((p) => !topo.has(p));
-}
-
-/** Stage the topology paths (adds and removals) and create a path-limited root commit for them. */
-function commitTopologyPaths(repoRoot: string, aliases: string[], message: string): GitResult {
-  const paths = [".gitmodules", ...aliases.map(submodulePath)];
-  runGit(repoRoot, ["add", "-A", "--", ...paths]);
-  return runGit(repoRoot, ["commit", "-m", message, "--", ...paths], true);
 }
 
 /** Ask whether to create a root topology commit; defaults to Yes. Returns null on cancellation. */
@@ -60,27 +54,41 @@ export async function finalizeTopology(
   kind: TopologyKind,
   commit: boolean,
   allSucceeded: boolean,
+  metadataPlans: AliasMetadataPlan[] = [],
+  omsYamlBytes: Buffer | null = null,
+  metadataAliases: string[] = [],
 ): Promise<number> {
-  const pending: string[] = [];
+  const topoPending: string[] = [];
   const partial: string[] = [];
   for (const alias of requested) {
     const s = gitlinkState(repoRoot, alias);
     if (kind === "add") {
-      if (pendingAddTopology(s)) pending.push(alias);
+      if (pendingAddTopology(s)) topoPending.push(alias);
     } else if (partialRemovalTopology(s)) {
       partial.push(alias);
     } else if (pendingRemovalTopology(s)) {
-      pending.push(alias);
+      topoPending.push(alias);
     }
   }
+  // Metadata-only aliases (reconciled .gitmodules but no pending gitlink move) also drive finalization.
+  const metaOnly = metadataAliases.filter((a) => !topoPending.includes(a));
+  const pending = [...topoPending, ...metaOnly];
   if (pending.length === 0 && partial.length === 0) return 0;
   const involved = [...pending, ...partial];
+
+  // A topology change names the add/remove message; a metadata-only reconciliation uses its own.
+  const message =
+    topoPending.length > 0
+      ? topologyCommitMessage(kind, topoPending)
+      : pending.length === 1
+        ? `chore(oms): reconcile ${pending[0]} submodule metadata`
+        : "chore(oms): reconcile submodule metadata";
 
   // Decide whether a commit is created: explicit --commit, or an interactive accept (default Yes).
   let createCommit = commit;
   let declined = false;
   if (!commit && process.stdin.isTTY && allSucceeded && partial.length === 0) {
-    const confirmed = await confirmTopologyCommit(topologyCommitMessage(kind, pending));
+    const confirmed = await confirmTopologyCommit(message);
     if (confirmed === null) {
       unstageTopologyPaths(repoRoot, involved);
       return 1;
@@ -105,23 +113,57 @@ export async function finalizeTopology(
     unstageTopologyPaths(repoRoot, involved);
     return 2;
   }
-  if (!allSucceeded) {
+  // On partial failure an unsync (remove) commit is skipped entirely, while a sync (add) commit still
+  // finalizes the successful aliases in `pending` through the temporary index (failed aliases already
+  // have no pending topology and are excluded), and the caller surfaces the overall non-zero exit.
+  if (!allSucceeded && kind === "remove") {
     unstageTopologyPaths(repoRoot, involved);
     log.info(`Not all aliases succeeded; topology changes for ${pending.join(", ")} were left unstaged for manual review.`);
     return 0;
   }
-  const unrelated = unrelatedStagedTopologyPaths(repoRoot, pending);
-  if (unrelated.length > 0) {
-    log.error(
-      `Root repository has unrelated staged changes (${unrelated.join(", ")}). Commit or unstage them before the topology commit.`,
-    );
-    unstageTopologyPaths(repoRoot, pending);
-    return 2;
+  // A removal (unsync) commit still refuses unrelated staged paths; an add (sync) commit isolates them
+  // through the temporary index and preserves them staged, so only remove rejects here.
+  if (kind === "remove") {
+    const unrelated = unrelatedStagedTopologyPaths(repoRoot, pending);
+    if (unrelated.length > 0) {
+      log.error(
+        `Root repository has unrelated staged changes (${unrelated.join(", ")}). Commit or unstage them before the topology commit.`,
+      );
+      unstageTopologyPaths(repoRoot, pending);
+      return 2;
+    }
   }
-  const message = topologyCommitMessage(kind, pending);
-  if (!commitTopologyPaths(repoRoot, pending, message).success) {
-    log.error("Root topology commit failed; staged topology paths were left in place.");
-    return 2;
+  // Disclose that the commit consumes the complete working-tree oms.yaml (including any failed-alias or
+  // other manifest edits) and its prior staging, so the declarative source and derived metadata commit
+  // together. Fires when the manifest is untracked in HEAD or differs from it.
+  if (omsYamlBytes !== null) {
+    const trackedInHead = runGit(repoRoot, ["cat-file", "-e", "HEAD:oms.yaml"]).success;
+    const differs = !trackedInHead || runGit(repoRoot, ["diff", "--quiet", "HEAD", "--", "oms.yaml"]).exitCode !== 0;
+    if (differs) {
+      log.info("Including the complete working-tree oms.yaml in this commit (consuming any prior staging of it).");
+    }
+  }
+
+  const pendingSet = new Set(pending);
+  const fin = finalizeRootCommit({
+    repoRoot,
+    kind,
+    // Metadata-only aliases contribute only their .gitmodules section; pointer moves remain for record.
+    addAliases: kind === "add" ? topoPending : [],
+    removeAliases: kind === "remove" ? topoPending : [],
+    metadataPlans: metadataPlans.filter((p) => pendingSet.has(p.alias)),
+    message,
+    omsYamlBytes,
+  });
+  if (!fin.ok) {
+    const retry = kind === "remove" ? "oms unsync <alias> --commit" : "oms sync <alias> --commit";
+    if (fin.headAdvanced) {
+      log.error(`Root commit ${shortSha(repoRoot)} was created, but finalization failed: ${fin.reason}. Re-run "${retry}" to recover.`);
+      return fin.exitCode;
+    }
+    // The commit failed before HEAD advanced; the real index and working tree are unchanged.
+    log.error(`Root commit failed: ${fin.reason}. No changes were committed; re-run "${retry}" to retry.`);
+    return fin.exitCode;
   }
   log.success(`Recorded topology commit ${shortSha(repoRoot)}  ${message}`);
   return 0;
