@@ -362,23 +362,10 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 - **AND** does not treat expected topology edits as concurrent modification
 - **AND** finalizes successful topology and metadata together
 
-#### Scenario: Topology boundary detects concurrent edits
-- **WHEN** actual `.gitmodules` content after topology mutation differs from applying the selected aliases' expected topology delta to the pre-topology snapshot
-- **THEN** sync does not apply metadata or finalize a root commit
-- **AND** preserves the concurrent content and exits 2
-
-#### Scenario: Finalization boundary detects concurrent edits
-- **WHEN** root `HEAD`, real index, `oms.yaml`, `.gitmodules`, or a selected gitlink differs from the expected snapshot immediately before root finalization
-- **THEN** sync does not create the OMS commit
-- **AND** may revalidate once only before any root commit when the new state produces the same safe plan
-- **AND** otherwise preserves the concurrent state and exits 2
-
-#### Scenario: Working-tree manifest is captured and revalidated
+#### Scenario: Working-tree manifest is captured for finalization
 - **WHEN** sync plans a requested or accepted root commit
-- **THEN** it captures the exact working-tree `oms.yaml` bytes and hash during planning
-- **AND** revalidates them immediately before finalization and immediately before invoking Git commit
+- **THEN** it captures the exact working-tree `oms.yaml` bytes during planning
 - **AND** stages the captured bytes rather than re-reading the path
-- **AND** a detected change triggers at most one full revalidation before any root commit or exits 2 without committing user edits
 
 #### Scenario: Root commit fails after reconciliation
 - **WHEN** metadata reconciliation succeeds but the path-limited OMS commit fails
@@ -417,7 +404,7 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 #### Scenario: Real index changes before temporary commit
 - **WHEN** the real index differs from its planning snapshot before or after OMS acquires the index lock
 - **THEN** sync does not create the commit
-- **AND** revalidates once or exits 2 while preserving the changed index
+- **AND** exits 2 while preserving the changed index
 
 #### Scenario: Real index installation fails after commit
 - **WHEN** the temporary-index commit advances `HEAD`
