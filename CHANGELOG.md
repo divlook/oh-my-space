@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.13.0
+
+### Minor Changes
+
+- [#51](https://github.com/divlook/oh-my-space/pull/51) [`304c6f3`](https://github.com/divlook/oh-my-space/commit/304c6f3bec903012a6f51091014c96d446c319b0) Thanks [@divlook](https://github.com/divlook)! - Add `oms branch list` with automation-first submodule preparation, declared-remote refresh and degraded cached fallback, baseline certainty, and decision-ready local and remote branch details.
+
 ## 0.12.0
 
 ### Minor Changes
