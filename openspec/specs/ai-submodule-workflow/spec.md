@@ -487,7 +487,7 @@ The system SHALL provide `oms commit <alias> -m <message>` to create commits onl
 - **WHEN** `oms/api/` is in detached HEAD
 - **AND** the user runs `oms commit api -m "feat: add login flow"`
 - **THEN** the command fails
-- **AND** suggests `oms switch api <branch>`
+- **AND** suggests `oms branch switch api <branch>`
 - **AND** does not modify the root repository
 
 #### Scenario: Commit rejects in-progress Git operations
@@ -596,17 +596,44 @@ The system SHALL provide pointer-recording commands that commit only selected su
 - **AND** the selected `oms/api` gitlink remains staged
 
 ### Requirement: Interactive branch action selection
-The system SHALL provide an `oms branch` command group that exposes supported branch-management actions without moving the existing top-level `oms switch` and `oms checkout` commands.
+The system SHALL provide an `oms branch` command group that hosts every supported branch-management action as a subcommand — `list`, `switch`, `checkout`, and `delete` — and SHALL NOT expose top-level `oms switch` or `oms checkout` commands. `oms branch switch [alias] [branch]` SHALL provide the local-branch management behavior (switch to an existing local branch, or create a new one with no remote required) previously provided by top-level `oms switch`, and `oms branch checkout [alias] [branch]` SHALL provide the remote-tracking behavior (fetch origin, then check out an `origin/*` branch as a local tracking branch) previously provided by top-level `oms checkout`.
+
+#### Scenario: Interactive branch command offers every lifecycle action
+- **WHEN** the user runs `oms branch` in an interactive terminal
+- **THEN** the command presents `list`, `switch`, `checkout`, and `delete` actions in lifecycle order
 
 #### Scenario: Interactive branch command selects list
 - **WHEN** the user runs `oms branch` in an interactive terminal
-- **THEN** the command presents `list branches` and `delete a local branch`
-- **AND** selecting list continues into the `oms branch list` alias-resolution flow
+- **AND** selects list
+- **THEN** the command continues into the `oms branch list` alias-resolution flow
+
+#### Scenario: Interactive branch command selects switch
+- **WHEN** the user runs `oms branch` in an interactive terminal
+- **AND** selects switch
+- **THEN** the command continues into the `oms branch switch` local-branch interaction
+
+#### Scenario: Interactive branch command selects checkout
+- **WHEN** the user runs `oms branch` in an interactive terminal
+- **AND** selects checkout
+- **THEN** the command continues into the `oms branch checkout` remote-tracking interaction
 
 #### Scenario: Interactive branch command selects delete
 - **WHEN** the user runs `oms branch` in an interactive terminal
 - **AND** selects delete
 - **THEN** the command continues into the existing `oms branch delete` interaction
+
+#### Scenario: Branch switch subcommand preserves former top-level switch behavior
+- **WHEN** the user runs `oms branch switch api feature/login`
+- **THEN** the command behaves exactly as the former `oms switch api feature/login`, switching to or creating the local branch without requiring a remote
+
+#### Scenario: Branch checkout subcommand preserves former top-level checkout behavior
+- **WHEN** the user runs `oms branch checkout api dev`
+- **THEN** the command behaves exactly as the former `oms checkout api dev`, fetching origin and checking out `origin/dev` as a local tracking branch
+
+#### Scenario: Top-level switch and checkout commands are removed
+- **WHEN** the user runs `oms switch ...` or `oms checkout ...`
+- **THEN** the CLI reports an unknown command
+- **AND** exits with a non-zero status
 
 #### Scenario: Branch action selection is cancelled
 - **WHEN** the user cancels the action selector opened by `oms branch`
@@ -832,7 +859,7 @@ The system SHALL protect current and baseline branches, reject unsafe submodule 
 - **WHEN** the selected submodule is in detached HEAD
 - **AND** it differs from the root-recorded gitlink or no root gitlink exists
 - **THEN** the command exits 1 before deleting any branch
-- **AND** suggests attaching HEAD with `oms switch <alias> <branch>`
+- **AND** suggests attaching HEAD with `oms branch switch <alias> <branch>`
 
 #### Scenario: In-progress submodule Git operation rejects deletion
 - **WHEN** the selected submodule Git directory contains `MERGE_HEAD`, `rebase-merge`, `rebase-apply`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, or `sequencer`
@@ -1285,13 +1312,13 @@ The system SHALL keep `oms pull` and `oms push` focused only on synchronizing su
 #### Scenario: Push rejects detached submodule HEAD
 - **WHEN** `oms/api` is in detached HEAD
 - **AND** the user runs `oms push api`
-- **THEN** the command fails and suggests `oms switch api <branch>`
+- **THEN** the command fails and suggests `oms branch switch api <branch>`
 - **AND** the command does not stage or commit the root gitlink
 
 #### Scenario: Pull rejects detached submodule HEAD
 - **WHEN** `oms/api` is in detached HEAD
 - **AND** the user runs `oms pull api`
-- **THEN** the command fails and suggests `oms switch api <branch>`
+- **THEN** the command fails and suggests `oms branch switch api <branch>`
 - **AND** the command does not stage or commit the root gitlink
 
 #### Scenario: Multi-alias pull and push process aliases independently
@@ -1382,7 +1409,7 @@ The checks applicable to each command are:
 - `oms record` SHALL apply the conflicted-gitlink and in-progress-root-operation checks. The occupied-non-submodule-path check does not apply because `record` neither creates nor occupies `oms/<alias>`; its existing record-specific checks and message ordering are preserved.
 - `oms sync` already refuses on an occupied non-submodule path (its `!registered` branch) and on unsafe pending-removal restore states (conflicted gitlink or in-progress root operation while restoring). It still refuses in exactly the same states with the same exit codes; the only observable change is that a path which exists but cannot be read now reports a distinct "could not be read (permission or I/O error)" message — in both its pending-removal restore branch and its `!registered` fresh-add branch — instead of the previous "occupied" / "already exists" wording. It consumes the same shared spine primitives (`gitlinkState`, `gitOperationInProgress`, `readAliasDirEntries`) that the preflight composes.
 
-Commands that operate only inside an initialized submodule working tree (`oms commit`, `oms switch`, `oms checkout`, `oms fetch`, `oms pull`, `oms push`) are unaffected and remain gated only by their existing initialization precondition.
+Commands that operate only inside an initialized submodule working tree (`oms commit`, `oms branch switch`, `oms branch checkout`, `oms fetch`, `oms pull`, `oms push`) are unaffected and remain gated only by their existing initialization precondition.
 
 #### Scenario: Conflicted gitlink and in-progress root operations are refused consistently by unsync and record
 - **WHEN** the selected alias has a conflicted root gitlink or the root repository has an in-progress root Git operation

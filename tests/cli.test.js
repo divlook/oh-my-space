@@ -379,7 +379,7 @@ test("switch creates a brand-new local branch without any remote precondition", 
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
 
   // feature/new exists neither locally nor on origin — switch must still succeed locally.
-  const sw = run(["switch", "api", "feature/new"], { cwd });
+  const sw = run(["branch", "switch", "api", "feature/new"], { cwd });
   const output = sw.stdout + sw.stderr;
   assert.equal(sw.status, 0, output);
   assert.match(output, /created new local branch/);
@@ -401,10 +401,10 @@ test("switch onto an existing local branch just switches", () => {
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
 
   // Bring dev down as a local branch via checkout, switch back to main, then switch to dev.
-  assert.equal(run(["checkout", "api", "dev"], { cwd }).status, 0);
-  assert.equal(run(["switch", "api", "main"], { cwd }).status, 0);
+  assert.equal(run(["branch", "checkout", "api", "dev"], { cwd }).status, 0);
+  assert.equal(run(["branch", "switch", "api", "main"], { cwd }).status, 0);
 
-  const sw = run(["switch", "api", "dev"], { cwd });
+  const sw = run(["branch", "switch", "api", "dev"], { cwd });
   assert.equal(sw.status, 0, sw.stdout + sw.stderr);
   assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "dev");
 });
@@ -415,7 +415,7 @@ test("checkout switches onto an existing remote branch with tracking", () => {
   writeSources(cwd, sourceFor("api", bare));
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
 
-  const co = run(["checkout", "api", "dev"], { cwd });
+  const co = run(["branch", "checkout", "api", "dev"], { cwd });
   assert.equal(co.status, 0, co.stdout + co.stderr);
   assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "dev");
   assert.equal(
@@ -431,11 +431,11 @@ test("checkout refuses a branch absent on origin and points at switch", () => {
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
 
   // feature/new exists neither locally nor on origin — checkout is remote-only, so it must refuse.
-  const co = run(["checkout", "api", "feature/new"], { cwd });
+  const co = run(["branch", "checkout", "api", "feature/new"], { cwd });
   const output = co.stdout + co.stderr;
   assert.equal(co.status, 1, output);
   assert.match(output, /not found on origin/);
-  assert.match(output, /oms switch api feature\/new/);
+  assert.match(output, /oms branch switch api feature\/new/);
 });
 
 test("switch and checkout error without hanging when args are omitted in a non-TTY", () => {
@@ -445,16 +445,16 @@ test("switch and checkout error without hanging when args are omitted in a non-T
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
 
   // spawnSync gives a non-TTY stdin, so an omitted alias must fail fast rather than prompt.
-  const noAlias = run(["switch"], { cwd });
+  const noAlias = run(["branch", "switch"], { cwd });
   assert.equal(noAlias.status, 1, noAlias.stdout + noAlias.stderr);
   assert.match(noAlias.stdout + noAlias.stderr, /not a TTY/);
 
   // Alias given but branch omitted must also fail fast for both commands.
-  const noBranchSwitch = run(["switch", "api"], { cwd });
+  const noBranchSwitch = run(["branch", "switch", "api"], { cwd });
   assert.equal(noBranchSwitch.status, 1, noBranchSwitch.stdout + noBranchSwitch.stderr);
   assert.match(noBranchSwitch.stdout + noBranchSwitch.stderr, /not a TTY/);
 
-  const noBranchCheckout = run(["checkout", "api"], { cwd });
+  const noBranchCheckout = run(["branch", "checkout", "api"], { cwd });
   assert.equal(noBranchCheckout.status, 1, noBranchCheckout.stdout + noBranchCheckout.stderr);
   assert.match(noBranchCheckout.stdout + noBranchCheckout.stderr, /not a TTY/);
 });
@@ -469,7 +469,7 @@ test("push lazily creates the remote branch without staging the root pointer", (
   git(cwd, "commit", "-m", "add api");
 
   // New local branch + a commit, then push (the remote branch does not exist yet).
-  assert.equal(run(["switch", "api", "feature/x"], { cwd }).status, 0);
+  assert.equal(run(["branch", "switch", "api", "feature/x"], { cwd }).status, 0);
   const wt = join(cwd, "oms", "api");
   writeFileSync(join(wt, "new.txt"), "hi");
   git(wt, "add", "new.txt");
@@ -660,7 +660,7 @@ test("status --json represents a detached submodule HEAD explicitly", () => {
 test("status --json reports a missing tracking branch as null divergence", () => {
   const { cwd } = workspaceWithApi();
   // A brand-new local branch has no upstream.
-  assert.equal(run(["switch", "api", "feature/x"], { cwd }).status, 0);
+  assert.equal(run(["branch", "switch", "api", "feature/x"], { cwd }).status, 0);
   const repo = statusJson(cwd).repos[0];
   assert.equal(repo.trackingBranch, null);
   assert.equal(repo.ahead, null);
@@ -938,7 +938,7 @@ test("commit rejects a detached submodule HEAD without touching the root", () =>
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
   assert.match(output, /detached HEAD/);
-  assert.match(output, /oms switch api/);
+  assert.match(output, /oms branch switch api/);
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), rootHeadBefore);
 });
 
@@ -1677,7 +1677,7 @@ test("pull rejects a detached submodule HEAD", () => {
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
   assert.match(output, /detached HEAD/);
-  assert.match(output, /oms switch api/);
+  assert.match(output, /oms branch switch api/);
 });
 
 test("pull advances the submodule branch without staging and hints record", () => {
@@ -2989,17 +2989,39 @@ function syncedSubmodule(cwd, alias, bare, branch = "main") {
   return join(cwd, "oms", alias);
 }
 
-test("branch is exposed with list and delete subcommands", () => {
+test("branch is exposed with list, switch, checkout, and delete subcommands", () => {
   const help = run(["branch", "--help"]);
   assert.equal(help.status, 0, help.stdout + help.stderr);
   assert.match(help.stdout, /\blist\b/);
+  assert.match(help.stdout, /\bswitch\b/);
+  assert.match(help.stdout, /\bcheckout\b/);
   assert.match(help.stdout, /\bdelete\b/);
   const lhelp = run(["branch", "list", "--help"]);
   assert.equal(lhelp.status, 0);
   assert.match(lhelp.stdout, /stale|cached/);
+  const swhelp = run(["branch", "switch", "--help"]);
+  assert.equal(swhelp.status, 0);
+  assert.match(swhelp.stdout, /--from/);
+  const cohelp = run(["branch", "checkout", "--help"]);
+  assert.equal(cohelp.status, 0);
+  assert.match(cohelp.stdout, /REMOTE|origin/);
   const dhelp = run(["branch", "delete", "--help"]);
   assert.equal(dhelp.status, 0);
   assert.match(dhelp.stdout, /--force/);
+});
+
+test("top-level switch and checkout are removed and fail as unknown commands", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+
+  const sw = run(["switch", "api", "feature/x"], { cwd });
+  assert.equal(sw.status, 1, sw.stdout + sw.stderr);
+  assert.match(sw.stdout + sw.stderr, /unknown command/);
+
+  const co = run(["checkout", "api", "dev"], { cwd });
+  assert.equal(co.status, 1, co.stdout + co.stderr);
+  assert.match(co.stdout + co.stderr, /unknown command/);
 });
 
 test("branch delete safely removes a merged local branch and reports its short SHA", () => {
@@ -3022,8 +3044,8 @@ test("branch delete keeps the deletion local: no remote ref removed, root pointe
   const cwd = initGitWorkspace();
   const dir = syncedSubmodule(cwd, "api", bare);
   // Bring dev down as a local tracking branch, switch back to main, then delete local dev.
-  assert.equal(run(["checkout", "api", "dev"], { cwd }).status, 0);
-  assert.equal(run(["switch", "api", "main"], { cwd }).status, 0);
+  assert.equal(run(["branch", "checkout", "api", "dev"], { cwd }).status, 0);
+  assert.equal(run(["branch", "switch", "api", "main"], { cwd }).status, 0);
   const rootBefore = gitOut(cwd, "rev-parse", "HEAD");
   const stagedBefore = gitOut(cwd, "diff", "--cached", "--name-only");
 
@@ -3053,7 +3075,7 @@ test("branch delete protects the explicit oms.yaml baseline", () => {
   const cwd = initGitWorkspace();
   const dir = syncedSubmodule(cwd, "api", bare, "develop");
   // Bring develop local, switch to a scratch branch so develop is baseline-but-not-current.
-  assert.equal(run(["checkout", "api", "develop"], { cwd }).status, 0);
+  assert.equal(run(["branch", "checkout", "api", "develop"], { cwd }).status, 0);
   git(dir, "checkout", "-b", "scratch");
   const del = run(["branch", "delete", "api", "develop"], { cwd });
   assert.equal(del.status, 1, del.stdout + del.stderr);
@@ -3189,6 +3211,26 @@ test("bare branch presents an action selector through the queue and cancels clea
   assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
 });
 
+test("bare branch selector dispatches into the switch flow", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  // Selecting switch dispatches into runSwitch; its own alias resolution then reports the
+  // switch-specific non-TTY hint, proving the selector entered the switch flow.
+  const res = run(["branch"], { cwd, env: queueEnv([{ type: "select", value: "switch" }]) });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  assert.match(res.stdout + res.stderr, /oms branch switch <alias>/);
+});
+
+test("bare branch selector dispatches into the checkout flow", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  syncedSubmodule(cwd, "api", bare);
+  const res = run(["branch"], { cwd, env: queueEnv([{ type: "select", value: "checkout" }]) });
+  assert.equal(res.status, 1, res.stdout + res.stderr);
+  assert.match(res.stdout + res.stderr, /oms branch checkout <alias>/);
+});
+
 test("bare branch prints help and exits 1 in a non-interactive shell", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
@@ -3298,7 +3340,7 @@ test("branch delete warns on baseline drift and protects both recorded branches"
   const dir = syncedSubmodule(cwd, "api", bare, "main");
   // Drift .gitmodules to record develop while oms.yaml still says main.
   git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.branch", "develop");
-  assert.equal(run(["checkout", "api", "develop"], { cwd }).status, 0);
+  assert.equal(run(["branch", "checkout", "api", "develop"], { cwd }).status, 0);
   git(dir, "checkout", "-b", "scratch");
 
   // Deleting develop (a .gitmodules baseline) is blocked; the drift warning is emitted.
@@ -3856,7 +3898,7 @@ test("metadata reconciliation preserves the current working branch", () => {
   const bare = initBareUpstream({ branches: ["main", "develop"] });
   const cwd = initGitWorkspace();
   const dir = syncedSubmodule(cwd, "api", bare, "main");
-  assert.equal(run(["checkout", "api", "develop"], { cwd }).status, 0); // attach to develop
+  assert.equal(run(["branch", "checkout", "api", "develop"], { cwd }).status, 0); // attach to develop
   assert.equal(gitOut(dir, "branch", "--show-current"), "develop");
   const recordedGitlink = gitOut(cwd, "rev-parse", "HEAD:oms/api");
   git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.url", "https://drift.example/x.git");

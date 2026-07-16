@@ -1,6 +1,6 @@
 ---
 name: oms-branch
-description: Use when discovering, starting, switching, or deleting a branch inside an `oms/<alias>/` submodule — `oms branch list` to inspect choices, `oms switch` for local branches, `oms checkout` for remote branches, and `oms branch delete` for safe local deletion.
+description: Use when discovering, starting, switching, or deleting a branch inside an `oms/<alias>/` submodule — `oms branch list` to inspect choices, `oms branch switch` for local branches, `oms branch checkout` for remote branches, and `oms branch delete` for safe local deletion.
 ---
 
 # Choose the right branch command inside a submodule
@@ -17,12 +17,12 @@ Branching happens inside a submodule (`oms/<alias>/`), which is its own Git repo
 ## Switch versus checkout
 
 - Run `oms branch list <alias>` to discover local and declared-remote branch choices before selecting an operation. It prepares safe existing registration and refreshes declared remotes automatically.
-- `oms switch <alias> <branch>` starts or moves to a LOCAL branch, creating it locally if it does not exist yet. No remote is required. Use this to begin new work.
-- `oms checkout <alias> <branch>` fetches `origin` and checks out an existing REMOTE branch (`origin/*`) as a local tracking branch. Use this to continue work that already exists on the remote.
+- `oms branch switch <alias> <branch>` starts or moves to a LOCAL branch, creating it locally if it does not exist yet. No remote is required. Use this to begin new work.
+- `oms branch checkout <alias> <branch>` fetches `origin` and checks out an existing REMOTE branch (`origin/*`) as a local tracking branch. Use this to continue work that already exists on the remote.
 
 ## Avoid detached HEAD
 
-Both commands attach HEAD to a branch. Prefer them over a raw `git checkout <sha>` inside the submodule, which detaches HEAD. If `oms status --json` shows a submodule with no branch (detached), attach one with `oms switch` before committing.
+Both commands attach HEAD to a branch. Prefer them over a raw `git checkout <sha>` inside the submodule, which detaches HEAD. If `oms status --json` shows a submodule with no branch (detached), attach one with `oms branch switch` before committing.
 
 ## Delete a LOCAL branch
 
@@ -31,4 +31,4 @@ Both commands attach HEAD to a branch. Prefer them over a raw `git checkout <sha
 - Omit the alias or branch to choose interactively; protected branches (current and baseline) are shown but not selectable.
 - Do not `cd` into `oms/<alias>/` and run raw `git branch -d/-D`; the command resolves and protects baseline branches for you.
 
-These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer branch inventory fields, preparation, freshness, and exit behavior to `oms branch list --help`; defer remaining flag detail to `oms switch --help`, `oms checkout --help`, and `oms branch delete --help`.
+These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer branch inventory fields, preparation, freshness, and exit behavior to `oms branch list --help`; defer remaining flag detail to `oms branch switch --help`, `oms branch checkout --help`, and `oms branch delete --help`.

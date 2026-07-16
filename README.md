@@ -75,7 +75,7 @@ oms/
 Start a branch, commit inside the submodule, push it, then record the pointer move in your project history. Each command stays in a single Git scope:
 
 ```bash
-oms switch api feature/login         # local branch, no remote needed
+oms branch switch api feature/login  # local branch, no remote needed
 oms commit api -m "feat: add login"  # commit inside oms/api (submodule only)
 oms push api                         # creates origin/feature/login (submodule branch only)
 oms record api                       # commit the moved oms/api pointer in your project history
@@ -83,7 +83,7 @@ oms record api                       # commit the moved oms/api pointer in your 
 
 `oms commit` and `oms push` stay inside the submodule and never touch the root gitlink; `oms record` is the only command that commits an existing root pointer update. After a successful `oms commit`/`oms pull`/`oms push`, `oms` prints an `oms record <alias>` hint when the pointer has moved. Run `oms status --json` for a machine-readable view of which scope changed.
 
-Omit the alias or branch on `oms switch` and `oms checkout` to pick one interactively — synced submodules, and local or `origin/*` branches respectively.
+Omit the alias or branch on `oms branch switch` and `oms branch checkout` to pick one interactively — synced submodules, and local or `origin/*` branches respectively.
 
 ## Listing branches
 
@@ -92,7 +92,7 @@ Omit the alias or branch on `oms switch` and `oms checkout` to pick one interact
 ```bash
 oms branch list api
 oms branch list
-oms branch # choose list or delete interactively
+oms branch # choose list, switch, checkout, or delete interactively
 ```
 
 Before listing, OMS safely initializes an existing registered submodule when needed, reconciles every remote declared for that alias in `oms.yaml`, and runs `git fetch <remote> --prune` sequentially in manifest order. A failed fetch is retried once. If both attempts fail, cached refs remain visible as `stale`; a failed remote without usable refs is `unavailable`. These degraded states still exit 0 when local refs can be inspected. Extra local remotes are not fetched or included in the remote inventory, although an actual configured upstream on one of them remains visible for its local branch.
@@ -113,7 +113,7 @@ When `branch` is omitted from `oms.yaml`, a successful origin fetch refreshes `o
 oms branch delete api feature/login        # safe delete (git branch -d)
 oms branch delete api feature/login --force # force delete (git branch -D)
 oms branch delete                           # pick alias, then branch, interactively
-oms branch                                  # interactive list/delete action selector
+oms branch                                  # interactive list/switch/checkout/delete action selector
 ```
 
 - **Local only.** It never deletes a remote branch or a remote-tracking ref, never fetches or pushes, and never stages or commits the root gitlink. A missing local branch whose name exists on `origin` is reported as local-only.
@@ -133,7 +133,7 @@ oms branch                                  # interactive list/delete action sel
 
 `oms` does not replace Git submodules. It adds a small command layer for the workflow details that make submodules awkward. Submodules already give you a reproducible pin (the parent records each source's exact commit), visibility (`git status` shows when a pointer moved), and history (the pointer travels with your commits). The friction is in everyday branch work, and that is what `oms` smooths over:
 
-- **Start branches locally.** `oms switch <alias> <branch>` starts a local branch right away, even before it exists on the remote. `oms checkout <alias> <branch>` fetches origin and checks out an existing remote branch as a tracking branch. The remote branch is created lazily on your first `oms push`.
+- **Start branches locally.** `oms branch switch <alias> <branch>` starts a local branch right away, even before it exists on the remote. `oms branch checkout <alias> <branch>` fetches origin and checks out an existing remote branch as a tracking branch. The remote branch is created lazily on your first `oms push`.
 - **Stay on a branch.** `oms sync` attaches the baseline branch at the pinned commit instead of leaving a detached HEAD, so everyday submodule work never strands you off a branch.
 - **Keep pointer moves visible, commit them explicitly.** `oms pull` and `oms push` synchronize only the submodule branch — they never stage or commit the root gitlink. The moved pointer shows up in `git status`, `oms status` flags when a submodule has drifted from the recorded pointer, and `oms record <alias>` commits that pointer update in the parent repo.
 
@@ -173,7 +173,7 @@ The three skills are named by the Git domain each manages:
 | --- | --- | --- |
 | `oms-workspace` | Scope-ambiguous Git work in the workspace — committing from the root, a moved `oms status` pointer, a push, or adding/removing a repo with `oms sync`/`oms unsync`. | Establishes workspace state and root-versus-submodule scope before acting, and separates repo add/remove topology from recording a moved pointer. |
 | `oms-pointer` | After `oms commit` or `oms pull` moves a submodule's commit. | Records the moved root pointer with `oms record`, so a submodule change is not left without a recorded pointer and the root pointer is not committed by mistake. |
-| `oms-branch` | Starting or switching a branch inside a submodule. | Chooses `oms switch` (new local branch) versus `oms checkout` (track a remote branch) and avoids detached HEAD. |
+| `oms-branch` | Starting or switching a branch inside a submodule. | Chooses `oms branch switch` (new local branch) versus `oms branch checkout` (track a remote branch) and avoids detached HEAD. |
 
 Skill firing is best-effort — an agent loads a skill only when it judges the skill's description relevant — so the skills complement, rather than replace, `oms <command> --help` and the always-on marker block inside `oms/`. Each skill defers exact `oms status --json` field semantics to `oms status --help`, the version-matched authoritative source that ships with the installed CLI.
 
@@ -189,8 +189,8 @@ Skill firing is best-effort — an agent loads a skill only when it judges the s
 | `oms status [alias...]` / `--all` | anywhere under root | Prints branch, pointer state (`ok`/`moved`/`uninit`/`missing`/`conflict`), dirtiness, and ahead/behind for each submodule. | `moved` means the working commit differs from the recorded pointer — record it with `oms record`. `--json` prints one machine-readable object on stdout for tooling and agents. |
 | `oms commit [alias]` | workspace root or inside `oms/<alias>/` | Commits source changes inside the selected submodule only; never the root gitlink. | `-m <message>` is required (repeatable). Commits existing staged changes as-is, otherwise stages all with `git add -A`. Infers the alias from the current `oms/<alias>/` directory. |
 | `oms record [alias]` | workspace root or inside `oms/<alias>/` | Commits an existing root gitlink pointer update for one alias (`chore(oms): update <alias> submodule to <sha>`). | Root repo only, path-limited to `oms/<alias>`; refuses unrelated staged changes. Not for adds/removals — use `oms sync`/`oms unsync`. |
-| `oms switch [alias] [branch]` | workspace root | `git switch` to a LOCAL branch, creating it locally if it does not exist yet (no remote required). | `--from <ref>` sets the start point for a new branch. Omit alias/branch to pick interactively (or create a new branch). |
-| `oms checkout [alias] [branch]` | workspace root | `git fetch origin --prune`, then check out a REMOTE branch (`origin/*`) as a local tracking branch (or switch to an existing local counterpart). | Omit alias/branch to pick interactively. To create a brand-new local branch, use `oms switch`. |
+| `oms branch switch [alias] [branch]` | workspace root | `git switch` to a LOCAL branch, creating it locally if it does not exist yet (no remote required). | `--from <ref>` sets the start point for a new branch. Omit alias/branch to pick interactively (or create a new branch). |
+| `oms branch checkout [alias] [branch]` | workspace root | `git fetch origin --prune`, then check out a REMOTE branch (`origin/*`) as a local tracking branch (or switch to an existing local counterpart). | Omit alias/branch to pick interactively. To create a brand-new local branch, use `oms branch switch`. |
 | `oms branch list [alias]` | workspace root | Safely prepares one declared submodule, refreshes all declared remotes, and lists local and remote-tracking branches. | Shows baseline certainty, current/baseline flags, exact upstream divergence, detached HEAD, and per-remote `fresh`/`stale`/`unavailable` state. Never switches a branch or changes a root gitlink outside an explicitly accepted `oms sync`. |
 | `oms branch delete [alias] [branch]` | workspace root | Deletes one LOCAL branch inside one initialized submodule with `git branch -d` (safe) or `-D` (`--force`). | Local only — never deletes a remote or remote-tracking ref, never touches the root gitlink. Protects the current branch and every resolved baseline (see below). Omit alias/branch to pick interactively; a registered-but-uninitialized alias is initialized first. Exit 0 on success, 1 on input/precondition errors, 2 on a declined/failed/concurrent deletion. |
 | `oms fetch ...` | workspace root | `git fetch <remote> --prune` in each submodule. | `--remote <name>` (repeatable) picks the remote(s); omit to choose interactively, defaults to `origin`. |
@@ -256,6 +256,7 @@ JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://
 
 Detailed migration steps are organized per version under [`docs/migrations/`](./docs/migrations/).
 
+- [0.13.x → 0.14.0](./docs/migrations/0.13.x-to-0.14.0.md) — relocates `oms switch` / `oms checkout` under the `oms branch` group as `oms branch switch` / `oms branch checkout` (top-level commands removed, no aliases)
 - [0.11.x → 0.12.0](./docs/migrations/0.11.x-to-0.12.0.md) — adds `oms branch delete` and makes `oms sync` reconcile declarative `.gitmodules` metadata with stricter baseline validation and a durable finalization recovery preflight
 - [0.9.x → 0.10.0](./docs/migrations/0.9.x-to-0.10.0.md) — scopes each command to a single Git boundary and makes root pointer commits explicit via `oms record`
 - [0.7.x → 0.8.0](./docs/migrations/0.7.x-to-0.8.0.md) — splits `oms checkout` into `oms switch` (local branches) and `oms checkout` (remote branches)

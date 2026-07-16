@@ -71,7 +71,7 @@ export async function resolveInitializedAlias(
 
   const initialized = repos.filter((r) => submoduleInitialized(repoRoot, r.alias));
   if (initialized.length === 0) {
-    log.error(`No synced submodules to ${actionLabel}. Run "oms sync" first.`);
+    log.error(`No synced submodules available for "oms ${actionLabel}". Run "oms sync" first.`);
     return null;
   }
   if (!process.stdin.isTTY) {
@@ -79,7 +79,7 @@ export async function resolveInitializedAlias(
     return null;
   }
   const choice = await select({
-    message: `Select a source repo to ${actionLabel}`,
+    message: `Select a source repo for "oms ${actionLabel}"`,
     options: initialized.map((r) => ({
       value: r.alias,
       label: r.alias,

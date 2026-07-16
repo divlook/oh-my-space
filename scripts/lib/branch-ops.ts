@@ -25,7 +25,7 @@ export async function runSwitch(
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
 
-  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "switch");
+  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "branch switch");
   if (!repo) return 1;
   const dir = aliasDir(repoRoot, repo.alias);
 
@@ -44,7 +44,7 @@ export async function runSwitch(
     return 0;
   }
 
-  // Brand-new local branch: no remote precondition, no upstream tracking (use "oms checkout" for that).
+  // Brand-new local branch: no remote precondition, no upstream tracking (use "oms branch checkout" for that).
   const args = ["switch", "-c", target, ...(options.from ? [options.from] : [])];
   log.step(`${repo.alias}: git ${args.join(" ")}`);
   const r = runSub(repoRoot, repo.alias, args, true);
@@ -56,14 +56,14 @@ export async function runSwitch(
 /**
  * REMOTE branch exploration: fetch origin, then check out a remote branch as a local tracking
  * branch (or switch to an existing local counterpart). Omitting alias and/or branch prompts for
- * them interactively. Creating brand-new local branches is "oms switch"'s job.
+ * them interactively. Creating brand-new local branches is "oms branch switch"'s job.
  */
 export async function runCheckout(alias: string | undefined, branch: string | undefined): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
 
-  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "checkout");
+  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "branch checkout");
   if (!repo) return 1;
   const dir = aliasDir(repoRoot, repo.alias);
 
@@ -94,7 +94,7 @@ export async function runCheckout(alias: string | undefined, branch: string | un
   }
 
   log.error(
-    `${repo.alias}: "${target}" not found on origin. To create a new local branch, run "oms switch ${repo.alias} ${target}".`,
+    `${repo.alias}: "${target}" not found on origin. To create a new local branch, run "oms branch switch ${repo.alias} ${target}".`,
   );
   return 1;
 }

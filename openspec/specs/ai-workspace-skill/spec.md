@@ -66,10 +66,10 @@ The `oms-branch` skill SHALL guide branch selection and detached HEAD avoidance 
 
 #### Scenario: Branch skill distinguishes switch from checkout
 - **WHEN** an agent loads the `oms-branch` skill
-- **THEN** the skill instructs using `oms switch` to start a new local branch
-- **AND** instructs using `oms checkout` to track an existing remote branch
+- **THEN** the skill instructs using `oms branch switch` to start a new local branch
+- **AND** instructs using `oms branch checkout` to track an existing remote branch
 - **AND** instructs avoiding detached HEAD
-- **AND** defers flag detail to `oms switch --help` and `oms checkout --help`
+- **AND** defers flag detail to `oms branch switch --help` and `oms branch checkout --help`
 
 ### Requirement: Skills are self-sufficient and schema-stable
 Each published skill SHALL carry the scope-guardrail kernel verbatim and avoid coupling to volatile detail, because skill firing is best-effort rather than guaranteed.
