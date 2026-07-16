@@ -54,7 +54,7 @@ export async function runCommit(alias: string | undefined, options: CommitOption
     return 1;
   }
   if (currentBranch(dir) === null) {
-    log.error(`${selected}: detached HEAD. Run "oms switch ${selected} <branch>" before committing.`);
+    log.error(`${selected}: detached HEAD. Run "oms branch switch ${selected} <branch>" before committing.`);
     return 1;
   }
 

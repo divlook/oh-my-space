@@ -31,7 +31,7 @@ function pullRepo(repo: Repo, repoRoot: string, remote: string): OperationResult
   const branch = currentBranch(aliasDir(repoRoot, repo.alias));
   if (!branch) {
     log.error(
-      `${repo.alias}: detached HEAD. Run "oms switch ${repo.alias} <branch>" before pulling.`,
+      `${repo.alias}: detached HEAD. Run "oms branch switch ${repo.alias} <branch>" before pulling.`,
     );
     return "failed";
   }
@@ -61,7 +61,7 @@ function pushRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationRes
   const branch = currentBranch(aliasDir(repoRoot, repo.alias));
   if (!branch) {
     log.error(
-      `${repo.alias}: detached HEAD. Run "oms switch ${repo.alias} <branch>" before pushing.`,
+      `${repo.alias}: detached HEAD. Run "oms branch switch ${repo.alias} <branch>" before pushing.`,
     );
     return "failed";
   }

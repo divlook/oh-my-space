@@ -63,8 +63,6 @@ const commandNames = new Set([
   "status",
   "commit",
   "record",
-  "switch",
-  "checkout",
   "branch",
   "fetch",
   "pull",
@@ -150,7 +148,15 @@ program
     await exitWith(runRecord(alias));
   });
 
-program
+const branchCommand = program
+  .command("branch")
+  .description("Inspect, switch, checkout, or delete submodule branches (interactive action selector).")
+  .addHelpText("after", exitHelp)
+  .action(async () => {
+    await exitWith(runBranch(branchCommand));
+  });
+
+branchCommand
   .command("switch")
   .description(
     "Switch a submodule to a LOCAL branch, creating it locally if it does not exist yet (no remote required).",
@@ -163,7 +169,7 @@ program
     await exitWith(runSwitch(alias, branch, options));
   });
 
-program
+branchCommand
   .command("checkout")
   .description(
     "Fetch origin, then check out a REMOTE branch (origin/*) as a local tracking branch.",
@@ -173,14 +179,6 @@ program
   .addHelpText("after", exitHelp)
   .action(async (alias: string | undefined, branch: string | undefined) => {
     await exitWith(runCheckout(alias, branch));
-  });
-
-const branchCommand = program
-  .command("branch")
-  .description("Inspect or delete submodule branches (interactive action selector).")
-  .addHelpText("after", exitHelp)
-  .action(async () => {
-    await exitWith(runBranch(branchCommand));
   });
 
 branchCommand

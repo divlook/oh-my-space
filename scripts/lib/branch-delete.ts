@@ -19,6 +19,7 @@ import { resolveBaselines, type ProtectedReason } from "./branch-baseline.js";
 import { guardedConfirm, guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
 import { runBranchList } from "./branch-list.js";
+import { runCheckout, runSwitch } from "./branch-ops.js";
 
 type BranchDeleteOptions = { force?: boolean };
 
@@ -45,6 +46,8 @@ export async function runBranch(command: Command): Promise<number> {
     message: "Select a branch action",
     options: [
       { value: "list", label: "list branches in a submodule" },
+      { value: "switch", label: "switch to or create a local branch in a submodule" },
+      { value: "checkout", label: "check out a remote branch in a submodule" },
       { value: "delete", label: "delete a local branch in a submodule" },
     ],
   });
@@ -53,6 +56,8 @@ export async function runBranch(command: Command): Promise<number> {
     return 1;
   }
   if (action === "list") return runBranchList(undefined);
+  if (action === "switch") return runSwitch(undefined, undefined, {});
+  if (action === "checkout") return runCheckout(undefined, undefined);
   if (action === "delete") return runBranchDelete(undefined, undefined, {});
   return 1;
 }
@@ -135,7 +140,7 @@ function checkSubmodulePreconditions(repoRoot: string, repo: Repo): { ok: true }
     if (!anchored) {
       return {
         ok: false,
-        reason: `${repo.alias}: submodule HEAD is detached and not anchored to the recorded gitlink. Attach it with "oms switch ${repo.alias} <branch>" first.`,
+        reason: `${repo.alias}: submodule HEAD is detached and not anchored to the recorded gitlink. Attach it with "oms branch switch ${repo.alias} <branch>" first.`,
       };
     }
   }

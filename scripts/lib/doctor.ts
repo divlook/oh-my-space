@@ -84,7 +84,7 @@ export async function runDoctor(): Promise<number> {
     const dir = aliasDir(repoRoot, repo.alias);
     const branch = currentBranch(dir);
     if (!branch) {
-      log.warn(`${repo.alias}: detached HEAD. Run "oms switch ${repo.alias} <branch>" to get on a branch.`);
+      log.warn(`${repo.alias}: detached HEAD. Run "oms branch switch ${repo.alias} <branch>" to get on a branch.`);
       warnings++;
     } else {
       log.success(`${repo.alias}: submodule OK (branch=${branch})`);
