@@ -21,7 +21,7 @@ OMS automates routine, deterministic preparation and bounded recovery whenever i
 
 - [Node.js](https://nodejs.org) `>=20.19.0` to run `oms`.
 - git `>=2.40` for `git switch` and the submodule commands `oms` relies on.
-- Run `oms` from a Git repository. For a new workspace, run `git init` first, since sources are tracked as submodules of it.
+- Submodule commands require `oms.yaml` at the root Git top-level. `oms init` can scaffold outside Git, but run `git init` at that same workspace root before syncing sources.
 
 ## Install
 
@@ -69,6 +69,14 @@ oms/
 ```
 
 `oms.yaml` is your declaration, `.gitmodules` and each `oms/<alias>` gitlink are tracked in your project history, and every directory under `oms/` is a normal checked-out repository you can branch, edit, and commit in.
+
+## Command locations and workspace discovery
+
+Workspace-aware commands search from the current directory toward the filesystem root and use the nearest `oms.yaml`. The first `oms.yaml` entry encountered is authoritative. It must be a regular file, or a symbolic link whose target is a regular file. A directory, broken link, link to a non-file target, or invalid nearest manifest causes the command to fail; OMS does not skip it and fall back to an outer workspace.
+
+You can run workspace-aware commands at the workspace root or below it. When the current directory is inside `oms/<alias>/` for an alias declared by the selected manifest, `oms status --json` reports that alias and commands such as `oms commit` and `oms record` can infer it. An alias supplied on the command line always takes precedence over the inferred current alias. Arbitrary descendants and undeclared `oms/<name>/` paths can discover the workspace but do not become a current alias.
+
+Commands that inspect or change submodule state require the selected manifest directory to be the root Git top-level. A nested `oms.yaml` below an enclosing Git root is rejected before `.gitmodules`, the root index, `oms/`, or the manifest can change. Repair that layout by either moving `oms.yaml` to the enclosing Git root or initializing a separate Git repository at the intended nested workspace root. `oms sync --list` is manifest-only and remains available before Git initialization.
 
 ## Typical branch flow
 
@@ -183,12 +191,12 @@ Skill firing is best-effort — an agent loads a skill only when it judges the s
 
 | Command | Runs in | Does | Notes |
 | --- | --- | --- | --- |
-| `oms init` | current directory | Writes a starter `oms.yaml`. | Refuses if `oms.yaml` exists; use `--force`. Does not gitignore `oms/`. |
-| `oms doctor` | project root or child path | Checks `oms.yaml`, git availability, that the workspace is a git repo, and each alias's submodule state. | Returns exit 2 if any warning is raised. |
+| `oms init` | current directory | Writes a starter `oms.yaml`. | The directory must be outside Git or the root Git top-level. A nested Git-work-tree directory is rejected before writes, even with `--force`. Otherwise refuses an existing manifest unless `--force` is used. Does not gitignore `oms/`. |
+| `oms doctor` | workspace root or child path | Checks the nearest `oms.yaml`, Git root identity, and each alias's submodule state. | Diagnoses a nested manifest directly instead of treating it as a valid root. Returns exit 2 if any warning is raised. |
 | `oms sync <alias>` / `--all` | workspace root | Registers missing repos with `git submodule add`, initializes registered-but-uninitialized ones, fetches, and attaches the baseline branch. | Reproduces the recorded pointer on a fresh clone. Topology changes (`.gitmodules`, `oms/<alias>`) are left unstaged by default; commit them via the prompt or `--commit` (`chore(oms): add ...`). |
 | `oms status [alias...]` / `--all` | anywhere under root | Prints branch, pointer state (`ok`/`moved`/`uninit`/`missing`/`conflict`), dirtiness, and ahead/behind for each submodule. | `moved` means the working commit differs from the recorded pointer — record it with `oms record`. `--json` prints one machine-readable object on stdout for tooling and agents. |
-| `oms commit [alias]` | workspace root or inside `oms/<alias>/` | Commits source changes inside the selected submodule only; never the root gitlink. | `-m <message>` is required (repeatable). Commits existing staged changes as-is, otherwise stages all with `git add -A`. Infers the alias from the current `oms/<alias>/` directory. |
-| `oms record [alias]` | workspace root or inside `oms/<alias>/` | Commits an existing root gitlink pointer update for one alias (`chore(oms): update <alias> submodule to <sha>`). | Root repo only, path-limited to `oms/<alias>`; refuses unrelated staged changes. Not for adds/removals — use `oms sync`/`oms unsync`. |
+| `oms commit [alias]` | workspace root or inside `oms/<alias>/` | Commits source changes inside the selected submodule only; never the root gitlink. | `-m <message>` is required (repeatable). Commits existing staged changes as-is, otherwise stages all with `git add -A`. Infers a configured alias from the current `oms/<alias>/` directory; an explicit alias wins. |
+| `oms record [alias]` | workspace root or inside `oms/<alias>/` | Commits an existing root gitlink pointer update for one alias (`chore(oms): update <alias> submodule to <sha>`). | Root repo only, path-limited to `oms/<alias>`; refuses unrelated staged changes. An explicit alias wins over current-path inference. Not for adds/removals — use `oms sync`/`oms unsync`. |
 | `oms branch switch [alias] [branch]` | workspace root | `git switch` to a LOCAL branch, creating it locally if it does not exist yet (no remote required). | `--from <ref>` sets the start point for a new branch. Omit alias/branch to pick interactively (or create a new branch). |
 | `oms branch checkout [alias] [branch]` | workspace root | `git fetch origin --prune`, then check out a REMOTE branch (`origin/*`) as a local tracking branch (or switch to an existing local counterpart). | Omit alias/branch to pick interactively. To create a brand-new local branch, use `oms branch switch`. |
 | `oms branch list [alias]` | workspace root | Safely prepares one declared submodule, refreshes all declared remotes, and lists local and remote-tracking branches. | Shows baseline certainty, current/baseline flags, exact upstream divergence, detached HEAD, and per-remote `fresh`/`stale`/`unavailable` state. Never switches a branch or changes a root gitlink outside an explicitly accepted `oms sync`. |

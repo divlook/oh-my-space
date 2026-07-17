@@ -15,6 +15,7 @@ import {
   agentUninstallHelp,
   commitHelp,
   exitHelp,
+  initHelp,
   pullHelp,
   pushHelp,
   recordHelp,
@@ -22,6 +23,7 @@ import {
   statusHelp,
   syncHelp,
   unsyncHelp,
+  workspaceContextHelp,
 } from "./lib/help.js";
 import { runInit } from "./lib/init.js";
 import { runManage } from "./lib/manage-ops.js";
@@ -83,13 +85,13 @@ program
     `Manage source repositories listed in ${MANIFEST_FILENAME} as git submodules under ${DATA_DIRNAME}/<alias>/.`,
   )
   .version(readPackageVersion())
-  .addHelpText("after", exitHelp);
+  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`);
 
 program
   .command("init")
   .description(`Create a starter ${MANIFEST_FILENAME} in the current directory.`)
   .option("--force", `overwrite an existing ${MANIFEST_FILENAME}`)
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${initHelp}${exitHelp}`)
   .action(async (options: { force?: boolean }) => {
     await exitWith(runInit(options));
   });
@@ -99,7 +101,7 @@ program
   .description(
     `Check ${MANIFEST_FILENAME}, git availability, and the submodule state of each registered alias.`,
   )
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async () => {
     await exitWith(runDoctor());
   });
@@ -113,7 +115,7 @@ program
   .option("--all", "sync every registered source repo")
   .option("--list", "print registered repos")
   .option("--commit", "create the root topology commit (chore(oms): add ...) without prompting")
-  .addHelpText("after", `${syncHelp}${exitHelp}`)
+  .addHelpText("after", `${syncHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SyncCommitOptions) => {
     await exitWith(runSync(aliases, options));
   });
@@ -124,7 +126,7 @@ program
   .argument("[aliases...]", "repo aliases to inspect (omit for all)")
   .option("--all", "inspect every registered source repo")
   .option("--json", "print machine-readable workspace state (one JSON object on stdout)")
-  .addHelpText("after", `${statusHelp}${exitHelp}`)
+  .addHelpText("after", `${statusHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: StatusOptions) => {
     await exitWith(runStatus(aliases, options));
   });
@@ -134,7 +136,7 @@ program
   .description("Commit source changes inside the selected submodule only (never the root gitlink).")
   .argument("[alias]", "registered source alias (omit to infer from the current oms/<alias>/ directory)")
   .option("-m, --message <message>", "commit message (repeatable; required only to create a commit)", collectRepeatable, [])
-  .addHelpText("after", `${commitHelp}${exitHelp}`)
+  .addHelpText("after", `${commitHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, options: CommitOptions) => {
     await exitWith(runCommit(alias, options));
   });
@@ -143,7 +145,7 @@ program
   .command("record")
   .description("Commit an existing root gitlink pointer update for the selected submodule (root repo only).")
   .argument("[alias]", "registered source alias (omit to infer from the current oms/<alias>/ directory)")
-  .addHelpText("after", `${recordHelp}${exitHelp}`)
+  .addHelpText("after", `${recordHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined) => {
     await exitWith(runRecord(alias));
   });
@@ -151,7 +153,7 @@ program
 const branchCommand = program
   .command("branch")
   .description("Inspect, switch, checkout, or delete submodule branches (interactive action selector).")
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async () => {
     await exitWith(runBranch(branchCommand));
   });
@@ -164,7 +166,7 @@ branchCommand
   .argument("[alias]", "registered source alias (omit to pick interactively)")
   .argument("[branch]", "local branch name (omit to pick from local branches or create one)")
   .option("--from <ref>", "start point for a new branch (default: current HEAD)")
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, branch: string | undefined, options: CheckoutOptions) => {
     await exitWith(runSwitch(alias, branch, options));
   });
@@ -176,7 +178,7 @@ branchCommand
   )
   .argument("[alias]", "registered source alias (omit to pick interactively)")
   .argument("[branch]", "remote branch name (omit to pick from origin/* branches)")
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, branch: string | undefined) => {
     await exitWith(runCheckout(alias, branch));
   });
@@ -187,7 +189,7 @@ branchCommand
   .argument("[alias]", "declared source alias (the sole alias is selected automatically)")
   .addHelpText(
     "after",
-    `\nBehavior:\n  Initializes safe existing registration automatically; an unregistered alias requires an accepted sync.\n  Reconciles and fetches every oms.yaml remote with prune, retries once, then shows cached refs as stale.\n  Baseline state is known, incomplete, or unknown. Listing never switches or mutates a branch or root gitlink.\n  Exit 0 includes degraded remote results; exit 1 is selection/preparation refusal; exit 2 is initialization/local inspection failure.\n\nExamples:\n  $ oms branch list api\n  $ oms branch list\n${exitHelp}`,
+    `\nBehavior:\n  Initializes safe existing registration automatically; an unregistered alias requires an accepted sync.\n  Reconciles and fetches every oms.yaml remote with prune, retries once, then shows cached refs as stale.\n  Baseline state is known, incomplete, or unknown. Listing never switches or mutates a branch or root gitlink.\n  Exit 0 includes degraded remote results; exit 1 is selection/preparation refusal; exit 2 is initialization/local inspection failure.\n\nExamples:\n  $ oms branch list api\n  $ oms branch list\n${workspaceContextHelp}${exitHelp}`,
   )
   .action(async (alias: string | undefined) => {
     await exitWith(runBranchList(alias));
@@ -201,7 +203,7 @@ branchCommand
   .argument("[alias]", "registered source alias (omit to pick interactively)")
   .argument("[branch]", "local branch name (omit to pick from deletable local branches)")
   .option("-f, --force", "force-delete with git branch -D (still respects protected branches)")
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, branch: string | undefined, options: { force?: boolean }) => {
     await exitWith(runBranchDelete(alias, branch, options));
   });
@@ -212,7 +214,7 @@ program
   .argument("[aliases...]", "repo aliases to fetch (omit for interactive multi-select)")
   .option("--all", "fetch every registered source repo")
   .option("--remote <name>", "remote to fetch (repeatable; omit to choose interactively)", collectRepeatable, [])
-  .addHelpText("after", exitHelp)
+  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
     await exitWith(runManage("fetch", aliases, options));
   });
@@ -225,7 +227,7 @@ program
   .argument("[aliases...]", "repo aliases to pull (omit for interactive multi-select)")
   .option("--all", "pull every registered source repo")
   .option("--remote <name>", "remote to pull from (single; omit to choose interactively)", collectRepeatable, [])
-  .addHelpText("after", `${pullHelp}${exitHelp}`)
+  .addHelpText("after", `${pullHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
     await exitWith(runManage("pull", aliases, options));
   });
@@ -239,7 +241,7 @@ program
   .option("--commit", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--record", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRepeatable, [])
-  .addHelpText("after", `${pushHelp}${exitHelp}`)
+  .addHelpText("after", `${pushHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: PushOptions & RemoteOptions) => {
     await exitWith(runManage("push", aliases, options));
   });
@@ -253,7 +255,7 @@ program
   .option("--all", "unsync every registered source repo")
   .option("--force", "discard uncommitted changes in the submodule")
   .option("--commit", "create the root topology commit (chore(oms): remove ...) without prompting")
-  .addHelpText("after", `${unsyncHelp}${exitHelp}`)
+  .addHelpText("after", `${unsyncHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: UnsyncOptions) => {
     await exitWith(runUnsync(aliases, options));
   });

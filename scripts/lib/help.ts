@@ -1,5 +1,16 @@
 export const exitHelp = "\nExit codes: 0 ok | 1 usage/config error | 2 one or more git operations failed.";
 
+export const workspaceContextHelp = `
+Workspace discovery uses the nearest oms.yaml from the current directory upward. An invalid nearest
+candidate is an error; OMS never falls back to a more distant manifest. Commands that inspect or change
+submodules require that manifest directory to be the root Git top-level. Move a nested manifest to the
+Git root, or initialize a separate Git repository at the intended workspace root.
+`;
+export const initHelp = `
+The current directory must be outside a Git work tree or be its root top-level. Init refuses a child of
+an existing Git work tree before changing any file, including with --force.
+`;
+
 // Per-command help: each new or changed command states its purpose, scope boundary, and an example.
 export const statusHelp = `
 Machine-readable mode prints exactly one JSON object on stdout. The schemaVersion 1 payload has seven
@@ -15,6 +26,7 @@ Examples:
 export const commitHelp = `
 Scope: commits inside the selected oms/<alias>/ submodule only — never the root gitlink. Existing staged
 changes are committed as-is (staged-first); otherwise all changes are staged with git add -A.
+An explicit alias takes precedence over an alias inferred from the current configured oms/<alias>/ path.
 Examples:
   $ oms commit api -m "feat: add login"   # commit submodule source changes
   $ oms commit -m "fix: typo"             # infer the alias from the current oms/<alias>/ directory
@@ -22,6 +34,7 @@ Examples:
 export const recordHelp = `
 Scope: commits an existing root gitlink pointer update for one alias in the ROOT repository only
 (chore(oms): update <alias> submodule to <sha>). It never adds or removes a submodule registration.
+An explicit alias takes precedence over an alias inferred from the current configured oms/<alias>/ path.
 Example:
   $ oms record api
 `;
