@@ -8,7 +8,7 @@ import {
 } from "./constants.js";
 import {
   currentBranch,
-  isGitRepo,
+  inspectWorkspaceGitIdentity,
   isRegisteredSubmodule,
   parseGitVersion,
   isGitVersionSupported,
@@ -29,7 +29,7 @@ export async function runDoctor(): Promise<number> {
   const { repos, repoRoot } = loaded;
   if (abortOnLegacyRenameAt(repoRoot)) return 1;
 
-  log.success(`Workspace root: ${repoRoot}`);
+  log.success(`Workspace manifest directory: ${repoRoot}`);
   log.success(`${MANIFEST_FILENAME}: ${repos.length} repo(s) configured`);
 
   const git = spawnSync("git", ["--version"], {
@@ -57,12 +57,28 @@ export async function runDoctor(): Promise<number> {
     warnings++;
   }
 
-  if (!isGitRepo(repoRoot)) {
+  const identity = inspectWorkspaceGitIdentity(repoRoot);
+  if (identity.kind === "no-work-tree") {
     log.warn(
       `workspace is not a git repository. oms manages sources as submodules; run "git init" at ${repoRoot}.`,
     );
-    warnings++;
+    return 2;
   }
+  if (identity.kind === "mismatch") {
+    log.error(
+      `Workspace manifest directory ${repoRoot} does not match the root Git top-level ${identity.gitTopLevel}. ` +
+        `Move ${MANIFEST_FILENAME} to ${identity.gitTopLevel}, or initialize a separate Git repository at ${repoRoot}.`,
+    );
+    return 1;
+  }
+  if (identity.kind === "indeterminate") {
+    log.error(
+      `Could not verify that workspace ${repoRoot} is the root Git top-level: ${identity.reason}. ` +
+        "Retry after the workspace path and Git repository are accessible.",
+    );
+    return 1;
+  }
+  log.success(`Workspace root: ${repoRoot}`);
 
   if (abortOnLegacyWorktree(repoRoot, repos)) return 1;
 

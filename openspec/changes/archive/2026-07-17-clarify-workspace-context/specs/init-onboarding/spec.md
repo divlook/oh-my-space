@@ -1,34 +1,4 @@
-# init-onboarding Specification
-
-## Purpose
-
-Define how `oms init` onboards new workspaces by surfacing optional AI-setup guidance after scaffolding, without changing init's success result or installing anything itself.
-
-## Requirements
-
-### Requirement: Init surfaces optional AI-setup guidance
-After successfully scaffolding `oms.yaml`, `oms init` SHALL print optional guidance that points to both AI-setup commands — `oms agent install` and `oms skills` — without installing anything itself. The guidance SHALL be output-only and SHALL NOT change `oms init`'s success result, which remains `oms.yaml` creation.
-
-#### Scenario: Init points to both AI-setup commands
-- **WHEN** `oms init` creates `oms.yaml`
-- **THEN** the output includes guidance to run `oms agent install`
-- **AND** the output includes guidance to run `oms skills` (the entry point for installing the workspace skills)
-- **AND** `oms init` exits 0
-
-#### Scenario: Init installs nothing while printing the guidance
-- **WHEN** `oms init` creates `oms.yaml`
-- **THEN** the command does not create `oms/AGENTS.md` or `oms/CLAUDE.md`
-- **AND** the command does not run the skills installer
-
-#### Scenario: Guidance is identical in a non-interactive shell
-- **WHEN** `oms init` runs in a non-interactive shell
-- **THEN** the command does not prompt
-- **AND** the output still includes guidance to run `oms agent install` and `oms skills`
-
-#### Scenario: Force re-init prints the same guidance
-- **WHEN** `oms init --force` overwrites an existing `oms.yaml`
-- **THEN** the output includes the same AI-setup guidance
-- **AND** the command still reports that `oms.yaml` was created
+## ADDED Requirements
 
 ### Requirement: Init validates its Git workspace target before writing
 Before creating or overwriting `oms.yaml`, `oms init` SHALL determine whether the current directory is inside an existing Git work tree. It SHALL proceed when the current directory is the canonical Git top-level or is outside any Git work tree, and SHALL reject a current directory below an existing Git top-level before creating, overwriting, or modifying workspace files. If Git inspection or filesystem canonicalization cannot determine the target's Git-root relationship, `oms init` SHALL fail before any write.

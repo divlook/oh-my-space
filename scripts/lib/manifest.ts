@@ -18,8 +18,8 @@ import {
 import { docUrl } from "./env.js";
 import {
   aliasDir,
-  findWorkspaceRoot,
-  isGitRepo,
+  inspectWorkspaceGitIdentity,
+  resolveWorkspaceManifest,
 } from "./git.js";
 import type { Repo, WorkspaceOptions } from "./types.js";
 
@@ -139,6 +139,7 @@ export function abortOnLegacyRenameAt(repoRoot: string): boolean {
  * could belong to an unrelated tool. Returns true if a hint was emitted.
  */
 export function emitLegacyRenameHintWalkUp(options: WorkspaceOptions = {}): boolean {
+  if (resolveWorkspaceManifest(options).kind !== "missing") return false;
   let current = resolve(options.cwd ?? process.cwd());
   while (true) {
     if (existsSync(join(current, LEGACY_MANIFEST))) {
@@ -166,24 +167,56 @@ export function abortOnLegacyWorktree(repoRoot: string, repos: Repo[]): boolean 
 }
 
 export function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repoRoot: string } | null {
-  const repoRoot = findWorkspaceRoot(options);
-  if (!repoRoot) {
+  const resolution = resolveWorkspaceManifest(options);
+  if (resolution.kind === "missing") {
     log.error(
       `Could not find ${MANIFEST_FILENAME} in the current directory or its parents. Create a ${MANIFEST_FILENAME} in this project, then retry.`,
     );
     return null;
   }
+  if (resolution.kind === "invalid") {
+    log.error(
+      `Found ${MANIFEST_FILENAME} at ${resolution.manifestPath}, but ${resolution.reason}. ` +
+        "Replace that entry with a regular file; OMS will not fall back to an ancestor manifest.",
+    );
+    return null;
+  }
 
   try {
-    const manifestPath = join(repoRoot, MANIFEST_FILENAME);
-    return { repos: validateSources(parseYaml(readFileSync(manifestPath, "utf8"))), repoRoot };
+    return {
+      repos: validateSources(parseYaml(readFileSync(resolution.manifestPath, "utf8"))),
+      repoRoot: resolution.repoRoot,
+    };
   } catch (e) {
     log.error(e instanceof Error ? e.message : String(e));
     return null;
   }
 }
 
-/** Shared preamble: load manifest, emit legacy hints, and confirm the workspace is a git repo. */
+export function emitWorkspaceGitIdentityError(repoRoot: string): boolean {
+  const identity = inspectWorkspaceGitIdentity(repoRoot);
+  if (identity.kind === "match") return false;
+  if (identity.kind === "no-work-tree") {
+    log.error(
+      `${repoRoot} is not a git repository. oh-my-space manages sources as git submodules; run "git init" at the workspace root first.`,
+    );
+    return true;
+  }
+  if (identity.kind === "mismatch") {
+    log.error(
+      `Workspace manifest directory ${repoRoot} does not match the root Git top-level ${identity.gitTopLevel}. ` +
+        `Move ${MANIFEST_FILENAME} to ${identity.gitTopLevel}, or initialize a separate Git repository at ${repoRoot}.`,
+    );
+    return true;
+  }
+  log.error(
+    `Could not verify that workspace ${repoRoot} is the root Git top-level: ${identity.reason}. ` +
+      "Retry after the workspace path and Git repository are accessible.",
+  );
+  return true;
+}
+
+/** Shared preamble: load the manifest and validate the root submodule repository identity. */
 export function loadForSubmodules(): { repos: Repo[]; repoRoot: string } | null {
   const loaded = loadRepos();
   if (!loaded) {
@@ -192,12 +225,7 @@ export function loadForSubmodules(): { repos: Repo[]; repoRoot: string } | null 
   }
   const { repoRoot, repos } = loaded;
   if (abortOnLegacyRenameAt(repoRoot)) return null;
-  if (!isGitRepo(repoRoot)) {
-    log.error(
-      `${repoRoot} is not a git repository. oh-my-space 0.6.0 manages sources as git submodules; run "git init" at the workspace root first.`,
-    );
-    return null;
-  }
+  if (emitWorkspaceGitIdentityError(repoRoot)) return null;
   if (abortOnLegacyWorktree(repoRoot, repos)) return null;
   return loaded;
 }

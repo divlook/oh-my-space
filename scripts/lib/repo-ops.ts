@@ -9,7 +9,6 @@ import {
   currentBranch,
   hasRegisteredSubmodules,
   isDirty,
-  isGitRepo,
   isRegisteredSubmodule,
   remoteBranchExists,
   resolveOriginHead,
@@ -22,6 +21,7 @@ import {
   abortOnLegacyRenameAt,
   abortOnLegacyWorktree,
   emitLegacyRenameHintWalkUp,
+  emitWorkspaceGitIdentityError,
   loadForSubmodules,
   loadRepos,
 } from "./manifest.js";
@@ -394,12 +394,7 @@ export async function runSync(aliases: string[], options: SyncCommitOptions): Pr
     return 0;
   }
 
-  if (!isGitRepo(repoRoot)) {
-    log.error(
-      `${repoRoot} is not a git repository. oh-my-space 0.6.0 manages sources as git submodules; run "git init" at the workspace root first.`,
-    );
-    return 1;
-  }
+  if (emitWorkspaceGitIdentityError(repoRoot)) return 1;
   if (abortOnLegacyWorktree(repoRoot, repos)) return 1;
 
   const picked = await selectRepos(repos, aliases, options, "sync");

@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import semver from "semver";
@@ -143,6 +143,23 @@ function sourceFor(alias, bare, branch = "main", extraRemotes = {}) {
   return `repos:\n  - alias: ${alias}\n    remotes:\n${remoteLines.join("\n")}\n    branch: ${branch}\n`;
 }
 
+function gitTopLevelStubEnv(mode) {
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  const response = mode === "failure"
+    ? 'echo "simulated top-level inspection failure" >&2; exit 2'
+    : mode === "localized-no-work-tree"
+      ? 'if [ "$LC_ALL" = "C" ]; then echo "fatal: not a git repository" >&2; else echo "localized diagnostic" >&2; fi; exit 128'
+      : 'echo "/path/that/does/not/exist"; exit 0';
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then ${response}; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+  return { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` };
+}
+
 // --- help / scaffolding / validation (no git operations) ---
 
 test("help is exposed as oms with the submodule commands", () => {
@@ -162,6 +179,24 @@ test("help is exposed as oms with the submodule commands", () => {
   assert.match(result.stdout, /\bupdate\b/);
   assert.doesNotMatch(result.stdout, /\bworktree\b/);
   assert.doesNotMatch(result.stdout, /\bmigrate\b/);
+});
+
+test("submodule command help explains workspace root requirements", () => {
+  for (const args of [
+    ["branch", "--help"],
+    ["branch", "switch", "--help"],
+    ["branch", "checkout", "--help"],
+    ["branch", "list", "--help"],
+    ["branch", "delete", "--help"],
+    ["fetch", "--help"],
+    ["pull", "--help"],
+    ["push", "--help"],
+    ["unsync", "--help"],
+  ]) {
+    const result = run(args);
+    assert.equal(result.status, 0, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /root Git top-level/, args.join(" "));
+  }
 });
 
 test("init scaffolds oms.yaml with the schema comment and does not gitignore oms/", () => {
@@ -210,6 +245,83 @@ test("init --force overwrites", () => {
   const result = run(["init", "--force"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(readFileSync(join(cwd, "oms.yaml"), "utf8"), /alias: example/);
+});
+
+test("init succeeds at a Git top-level", () => {
+  const cwd = initGitWorkspace();
+  const result = run(["init"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(join(cwd, "oms.yaml")), true);
+  assert.doesNotMatch(result.stdout + result.stderr, /run "git init" here/);
+});
+
+test("init preserves trailing spaces in the Git top-level path", () => {
+  const parent = tempWorkspace();
+  const cwd = join(parent, "workspace ");
+  mkdirSync(cwd);
+  execFileSync("git", ["init", "-b", "main", cwd], { stdio: "ignore", env: testEnv });
+  configIdentity(cwd);
+  git(cwd, "commit", "--allow-empty", "-m", "init");
+
+  const result = run(["init"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(join(cwd, "oms.yaml")), true);
+});
+
+test("init preserves a trailing carriage return in a POSIX Git top-level path", {
+  skip: process.platform === "win32",
+}, () => {
+  const parent = tempWorkspace();
+  const cwd = join(parent, "workspace\r");
+  mkdirSync(cwd);
+  execFileSync("git", ["init", "-b", "main", cwd], { stdio: "ignore", env: testEnv });
+  configIdentity(cwd);
+  git(cwd, "commit", "--allow-empty", "-m", "init");
+
+  const result = run(["init"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(join(cwd, "oms.yaml")), true);
+});
+
+test("init recognizes a localized no-work-tree diagnostic", () => {
+  const cwd = tempWorkspace();
+  const result = run(["init"], { cwd, env: gitTopLevelStubEnv("localized-no-work-tree") });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(join(cwd, "oms.yaml")), true);
+});
+
+test("init rejects a nested Git target before writes even with --force", () => {
+  const root = initGitWorkspace();
+  const cwd = join(root, "nested");
+  mkdirSync(cwd);
+  const originalManifest = "original manifest\n";
+  const originalGitignore = "node_modules/\n# managed by oms\noms/\n";
+  writeFileSync(join(cwd, "oms.yaml"), originalManifest);
+  writeFileSync(join(cwd, ".gitignore"), originalGitignore);
+
+  for (const args of [["init"], ["init", "--force"]]) {
+    const result = run(args, { cwd });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 1, output);
+    assert.match(output, /below the root Git top-level/);
+    assert.match(output, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(readFileSync(join(cwd, "oms.yaml"), "utf8"), originalManifest);
+    assert.equal(readFileSync(join(cwd, ".gitignore"), "utf8"), originalGitignore);
+    assert.equal(existsSync(join(cwd, "oms")), false);
+  }
+});
+
+test("init fails before writes when target identity is indeterminate", () => {
+  for (const env of [gitTopLevelStubEnv("failure"), gitTopLevelStubEnv("missing-path")]) {
+    const cwd = tempWorkspace();
+    writeFileSync(join(cwd, ".gitignore"), "oms/\n");
+    const result = run(["init", "--force"], { cwd, env });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 1, output);
+    assert.match(output, /Could not verify/);
+    assert.equal(existsSync(join(cwd, "oms.yaml")), false);
+    assert.equal(readFileSync(join(cwd, ".gitignore"), "utf8"), "oms/\n");
+  }
 });
 
 test("init points to both AI-setup commands without installing anything", () => {
@@ -262,6 +374,69 @@ test("sync --list loads oms.yaml from a parent workspace (no git repo needed)", 
   assert.match(result.stdout, /main/);
 });
 
+test("workspace discovery selects the nearest valid oms.yaml", () => {
+  const outer = tempWorkspace();
+  const inner = join(outer, "nested");
+  mkdirSync(inner);
+  writeSources(outer, sourceFor("outer", "/tmp/outer"));
+  writeSources(inner, sourceFor("inner", "/tmp/inner"));
+
+  const result = run(["sync", "--list"], { cwd: inner });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /inner/);
+  assert.doesNotMatch(result.stdout, /outer/);
+});
+
+test("workspace discovery accepts an oms.yaml symlink to a regular file", () => {
+  const cwd = tempWorkspace();
+  const manifest = join(cwd, "manifest-target.yaml");
+  writeFileSync(manifest, sourceFor("linked", "/tmp/linked"));
+  symlinkSync(manifest, join(cwd, "oms.yaml"));
+
+  const result = run(["sync", "--list"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /linked/);
+});
+
+for (const [name, createCandidate] of [
+  ["directory", (path) => mkdirSync(path)],
+  ["broken symbolic link", (path) => symlinkSync(join(dirname(path), "missing.yaml"), path)],
+  ["symbolic link to a directory", (path) => {
+    const target = join(dirname(path), "manifest-dir");
+    mkdirSync(target);
+    symlinkSync(target, path);
+  }],
+]) {
+  test(`workspace discovery rejects a nearest ${name} candidate without ancestor fallback`, () => {
+    const outer = tempWorkspace();
+    const inner = join(outer, "nested");
+    mkdirSync(inner);
+    writeSources(outer, sourceFor("outer", "/tmp/outer"));
+    createCandidate(join(inner, "oms.yaml"));
+
+    const result = run(["sync", "--list"], { cwd: inner });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 1, output);
+    assert.match(output, /regular file|broken symbolic link/);
+    assert.match(output, /will not fall back/);
+    assert.doesNotMatch(result.stdout, /outer/);
+  });
+}
+
+test("workspace loading rejects an invalid nearest manifest without ancestor fallback", () => {
+  const outer = tempWorkspace();
+  const inner = join(outer, "nested");
+  mkdirSync(inner);
+  writeSources(outer, sourceFor("outer", "/tmp/outer"));
+  writeSources(inner, "repos: []\n");
+
+  const result = run(["sync", "--list"], { cwd: inner });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /must have at least one item/);
+  assert.doesNotMatch(result.stdout, /outer/);
+});
+
 test("missing oms.yaml fails with creation guidance", () => {
   const cwd = tempWorkspace();
   const result = run(["sync", "--list"], { cwd });
@@ -293,6 +468,81 @@ test("sync outside a git repository fails with git init guidance", () => {
   assert.equal(result.status, 1, output);
   assert.match(output, /not a git repository/);
   assert.equal(existsSync(join(cwd, "oms")), false);
+});
+
+const sharedPreflightCommands = [
+  ["status"],
+  ["commit", "sample", "-m", "test"],
+  ["record", "sample"],
+  ["branch", "switch", "sample", "main"],
+  ["branch", "checkout", "sample", "main"],
+  ["branch", "list", "sample"],
+  ["branch", "delete", "sample", "feature"],
+  ["fetch", "sample"],
+  ["pull", "sample"],
+  ["push", "sample"],
+  ["unsync", "sample"],
+];
+
+test("submodule commands reject a nested manifest before root or workspace side effects", () => {
+  const root = initGitWorkspace();
+  const nested = join(root, "nested");
+  mkdirSync(nested);
+  writeSources(nested);
+  const rootStatus = gitOut(root, "status", "--porcelain");
+
+  for (const args of [["sync", "sample"], ...sharedPreflightCommands]) {
+    const result = run(args, { cwd: nested });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 1, `${args.join(" ")}\n${output}`);
+    assert.match(output, /does not match the root Git top-level/, args.join(" "));
+    assert.match(output, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(existsSync(join(root, ".gitmodules")), false);
+    assert.equal(existsSync(join(nested, "oms")), false);
+    assert.equal(gitOut(root, "status", "--porcelain"), rootStatus);
+  }
+});
+
+test("submodule commands accept canonical-equivalent workspace paths", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const linkParent = tempWorkspace();
+  const linked = join(linkParent, "workspace");
+  symlinkSync(cwd, linked);
+
+  const result = run(["status"], { cwd: linked });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.doesNotMatch(result.stdout + result.stderr, /does not match the root Git top-level/);
+});
+
+test("submodule commands fail closed when Git top-level inspection is indeterminate", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const rootStatus = gitOut(cwd, "status", "--porcelain");
+
+  for (const env of [gitTopLevelStubEnv("failure"), gitTopLevelStubEnv("missing-path")]) {
+    const result = run(["sync", "sample"], { cwd, env });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 1, output);
+    assert.match(output, /Could not verify/);
+    assert.equal(existsSync(join(cwd, ".gitmodules")), false);
+    assert.equal(existsSync(join(cwd, "oms")), false);
+    assert.equal(gitOut(cwd, "status", "--porcelain"), rootStatus);
+  }
+});
+
+test("shared submodule commands fail without side effects outside a Git work tree", () => {
+  const cwd = tempWorkspace();
+  writeSources(cwd);
+
+  for (const args of sharedPreflightCommands) {
+    const result = run(args, { cwd });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 1, `${args.join(" ")}\n${output}`);
+    assert.match(output, /not a git repository/);
+    assert.equal(existsSync(join(cwd, ".gitmodules")), false);
+    assert.equal(existsSync(join(cwd, "oms")), false);
+  }
 });
 
 test("unsync rejects an unknown alias", () => {
@@ -648,6 +898,25 @@ test("status --json current alias inference respects path segment boundaries", (
   assert.equal(statusJson(join(cwd, "oms", "api-extra")).currentAlias, null);
 });
 
+test("status --json keeps its schema and path representation through a symlinked cwd", () => {
+  const { cwd } = workspaceWithApi();
+  const linkParent = tempWorkspace();
+  const linked = join(linkParent, "workspace");
+  symlinkSync(cwd, linked);
+
+  const data = statusJson(linked);
+  assert.deepEqual(Object.keys(data).sort(), [
+    "currentAlias",
+    "errors",
+    "repos",
+    "root",
+    "schemaVersion",
+    "toolVersion",
+    "workspaceRoot",
+  ]);
+  assert.equal(data.workspaceRoot, realpathSync(cwd));
+});
+
 test("status --json represents a detached submodule HEAD explicitly", () => {
   const { cwd } = workspaceWithApi();
   git(join(cwd, "oms", "api"), "checkout", "--detach");
@@ -976,6 +1245,26 @@ test("commit infers the alias from the current submodule directory", () => {
   const result = run(["commit", "-m", "feat: inferred"], { cwd: wt });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(gitOut(wt, "log", "-1", "--pretty=%s"), "feat: inferred");
+});
+
+test("commit gives an explicit alias precedence over the current submodule context", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(
+    cwd,
+    `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n    branch: main\n  - alias: web\n    remotes:\n      origin: file://${bare}\n    branch: main\n`,
+  );
+  assert.equal(run(["sync", "api", "web"], { cwd }).status, 0);
+  git(cwd, "add", "-A");
+  git(cwd, "commit", "-m", "add submodules");
+  writeFileSync(join(cwd, "oms", "web", "web.txt"), "web");
+
+  const result = run(["commit", "web", "-m", "feat: explicit web"], {
+    cwd: join(cwd, "oms", "api"),
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "web"), "log", "-1", "--pretty=%s"), "feat: explicit web");
+  assert.notEqual(gitOut(join(cwd, "oms", "api"), "log", "-1", "--pretty=%s"), "feat: explicit web");
 });
 
 test("commit infers the alias before preconditions and fails when uninitialized", () => {
@@ -2102,10 +2391,25 @@ test("doctor reports workspace, manifest count, git, and warns when not a git re
   const result = run(["doctor"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
-  assert.match(output, /Workspace root:/);
+  assert.match(output, /Workspace manifest directory:/);
+  assert.doesNotMatch(output, /Workspace root:/);
   assert.match(output, /oms\.yaml: 1 repo\(s\) configured/);
   assert.match(output, /git:/);
   assert.match(output, /not a git repository/);
+});
+
+test("doctor diagnoses a nested manifest without reporting a valid workspace root", () => {
+  const root = initGitWorkspace();
+  const cwd = join(root, "nested");
+  mkdirSync(cwd);
+  writeSources(cwd);
+
+  const result = run(["doctor"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /does not match the root Git top-level/);
+  assert.match(output, /Workspace manifest directory:/);
+  assert.doesNotMatch(output, /Workspace root:/);
 });
 
 test("doctor reports a healthy submodule after sync", () => {
