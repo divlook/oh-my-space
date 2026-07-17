@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.14.1
+
+### Patch Changes
+
+- [#55](https://github.com/divlook/oh-my-space/pull/55) [`8bf0a58`](https://github.com/divlook/oh-my-space/commit/8bf0a58b74385e475cb958ce1d12a5b4e8116f17) Thanks [@divlook](https://github.com/divlook)! - Use the nearest `oms.yaml` without falling back past an invalid candidate, and reject submodule operations when that manifest is below a different Git top-level. Move a nested manifest to the enclosing Git root or initialize a separate repository at the intended workspace root before retrying.
+
 ## 0.14.0
 
 ### Minor Changes
