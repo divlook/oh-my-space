@@ -1,6 +1,6 @@
 ---
 name: oms-branch
-description: Use when discovering, starting, switching, or deleting a branch inside an `oms/<alias>/` submodule — `oms branch list` to inspect choices, `oms branch switch` for local branches, `oms branch checkout` for remote branches, and `oms branch delete` for safe local deletion.
+description: Use when discovering, starting, switching, or deleting branches in an OMS submodule alias or worktree-mode managed alias/name target, including concurrent checkout creation.
 ---
 
 # Choose the right branch command inside a submodule
@@ -9,16 +9,18 @@ Branching happens inside a submodule (`oms/<alias>/`), which is its own Git repo
 
 ## Scope guardrail (applies before any Git work)
 
-- Run `oms status --json` before Git work involving `oms/` to read root versus submodule state.
-- Treat each `oms/<alias>/` directory as a separate Git repository.
-- Use `oms` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
-- Do not create root commits for existing submodule pointer updates unless the user explicitly runs `oms record <alias>`.
+- Run `oms status --json` before Git work involving `.oms/` or `oms/`; require schemaVersion 2 and use `oms status --help` if another version appears.
+- Read `mode`, `currentTarget`, the root relation, and each repository discriminator before choosing a Git scope.
+- Treat root operations, alias-scoped repository operations, and worktree-mode `alias/name` checkout operations as different scopes; never guess.
+- In submodule mode, record an existing pointer only when the user explicitly runs `oms record <alias>`; worktree mode has no root pointer record.
+- Check `oms <command> --help` for exact mode-specific targets, flags, and recovery behavior.
 
 ## Switch versus checkout
 
 - Run `oms branch list <alias>` to discover local and declared-remote branch choices before selecting an operation. It prepares safe existing registration and refreshes declared remotes automatically.
 - `oms branch switch <alias> <branch>` starts or moves to a LOCAL branch, creating it locally if it does not exist yet. No remote is required. Use this to begin new work.
 - `oms branch checkout <alias> <branch>` fetches `origin` and checks out an existing REMOTE branch (`origin/*`) as a local tracking branch. Use this to continue work that already exists on the remote.
+- In worktree mode, use `oms worktree add <alias> <branch>` for a concurrent attached checkout. Use `alias/name` for switch or checkout on an existing managed worktree; branch list and delete remain alias-scoped.
 
 ## Avoid detached HEAD
 
@@ -31,4 +33,4 @@ Both commands attach HEAD to a branch. Prefer them over a raw `git checkout <sha
 - Omit the alias or branch to choose interactively; protected branches (current and baseline) are shown but not selectable.
 - Do not `cd` into `oms/<alias>/` and run raw `git branch -d/-D`; the command resolves and protects baseline branches for you.
 
-These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer branch inventory fields, preparation, freshness, and exit behavior to `oms branch list --help`; defer remaining flag detail to `oms branch switch --help`, `oms branch checkout --help`, and `oms branch delete --help`.
+These instructions require `oms status --json` schemaVersion 2. If another version appears, stop and use `oms status --help`. Defer exact fields, flags, freshness, and recovery to command help.

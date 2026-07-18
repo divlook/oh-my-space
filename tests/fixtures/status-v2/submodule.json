@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 2,
+  "toolVersion": "0.0.0-golden",
+  "mode": "submodule",
+  "workspaceRoot": "/workspace",
+  "currentAlias": null,
+  "currentWorktree": null,
+  "currentTarget": null,
+  "root": {
+    "path": "/workspace",
+    "relation": "same",
+    "branch": "main",
+    "head": "0000000",
+    "detached": false,
+    "dirty": false,
+    "changes": { "staged": 0, "unstaged": 0, "untracked": 0 },
+    "submodulePointers": { "moved": [], "staged": [], "split": [], "conflict": [] }
+  },
+  "repos": [],
+  "errors": []
+}

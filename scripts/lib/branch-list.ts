@@ -15,12 +15,15 @@ import {
   submoduleInitialized,
   submodulePath,
 } from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
+import { loadForSubmodules, loadForWorktrees } from "./manifest.js";
 import { guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
 import { runSync } from "./repo-ops.js";
 import { assertRootTopologySafe, gitlinkState } from "./status.js";
 import { ensureRemotes } from "./submodule-config.js";
 import type { Repo } from "./types.js";
+import { commonRepoPath } from "./worktree-paths.js";
+import { inspectWorktreeInventory } from "./worktree-inspection.js";
+import { readWorkspaceOwnership } from "./workspace-mutation.js";
 
 type AliasRegistration = "initialized" | "registered-uninitialized" | "partially registered" | "unregistered";
 type RemoteState = "fresh" | "stale" | "unavailable";
@@ -324,4 +327,69 @@ export async function runBranchList(aliasArg: string | undefined): Promise<numbe
   );
   renderInventory(repo, current, detachedOid, local.branches, refreshed.remotes, baseline);
   return 0;
+}
+
+type WorktreeBranchCheckout = { branch: string; location: string };
+
+function worktreeBranchCheckouts(workspaceRoot: string, alias: string, common: string): WorktreeBranchCheckout[] {
+  const ownership = readWorkspaceOwnership(workspaceRoot);
+  if (!ownership) throw new Error("workspace ownership is missing");
+  return inspectWorktreeInventory(workspaceRoot, alias, ownership.workspaceId).worktrees.flatMap((entry) =>
+    entry.branch ? [{ branch: entry.branch, location: entry.target ?? entry.path }] : []);
+}
+
+function readWorktreeRefs(common: string, prefix: string): Array<{ name: string; oid: string }> {
+  const result = runGit(common, [
+    "for-each-ref",
+    "--format=%(refname)%09%(objectname:short)%09%(symref)",
+    prefix,
+  ]);
+  if (!result.success) throw new Error(`could not inspect ${prefix}`);
+  return result.stdout.split("\n").filter(Boolean).flatMap((line) => {
+    const [refname, oid, symref] = line.split("\t");
+    if (!refname || !oid || symref) return [];
+    return [{ name: refname.replace(prefix, ""), oid }];
+  });
+}
+
+/** List existing common-repository refs and checkout locations without refresh or mutation. */
+export async function runWorktreeBranchList(aliasArg: string | undefined): Promise<number> {
+  const loaded = loadForWorktrees();
+  if (!loaded) return 1;
+  let repo: Repo | undefined;
+  if (aliasArg) repo = loaded.repos.find(({ alias }) => alias === aliasArg);
+  else if (loaded.repos.length === 1) [repo] = loaded.repos;
+  if (!repo) {
+    log.error(aliasArg
+      ? `Unknown alias "${aliasArg}". Use "oms sync --list" to list aliases declared in oms.yaml.`
+      : 'No alias given. Pass an alias: "oms branch list <alias>".');
+    return 1;
+  }
+
+  const common = commonRepoPath(loaded.repoRoot, repo.alias);
+  if (!existsSync(common)) {
+    log.error(`${repo.alias}: common repository is missing; run "oms sync ${repo.alias}" first`);
+    return 1;
+  }
+  try {
+    const local = readWorktreeRefs(common, "refs/heads/");
+    const checkouts = worktreeBranchCheckouts(loaded.repoRoot, repo.alias, common);
+    const lines = [`Branch inventory: ${repo.alias}`, "", "LOCAL", "NAME\tOID\tCHECKED-OUT-AT"];
+    if (local.length === 0) lines.push("(empty)");
+    for (const branch of local) {
+      const locations = checkouts.filter(({ branch: name }) => name === branch.name).map(({ location }) => location);
+      lines.push(`${branch.name}\t${branch.oid}\t${locations.join(",")}`);
+    }
+    lines.push("", "REMOTE", "REMOTE\tBRANCH\tOID");
+    for (const remote of Object.keys(repo.remotes)) {
+      const refs = readWorktreeRefs(common, `refs/remotes/${remote}/`);
+      if (refs.length === 0) lines.push(`${remote}\t(empty)\t`);
+      else for (const ref of refs) lines.push(`${remote}\t${ref.name}\t${ref.oid}`);
+    }
+    process.stdout.write(`${lines.join("\n")}\n`);
+    return 0;
+  } catch (error) {
+    log.error(`${repo.alias}: ${error instanceof Error ? error.message : String(error)}`);
+    return 2;
+  }
 }

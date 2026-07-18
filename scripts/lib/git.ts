@@ -7,8 +7,14 @@ import type { GitResult, WorkspaceOptions } from "./types.js";
 /** Remove credentials from URLs while retaining useful host, path, and failure context. */
 export function redactSensitiveUrls(value: string): string {
   return value
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f][^\r\n]*/g, "[control][redacted]")
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi, "$1[redacted]@")
-    .replace(/([?&](?:(?:access|auth|bearer|id|oauth|refresh)?[_-]?token|(?:api|private)?[_-]?key|auth(?:orization)?|(?:client|consumer)?[_-]?secret|credential|jwt|pass(?:word|wd)?|signature)=)[^&\s]+/gi, "$1[redacted]");
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/]+?%40/gi, "$1[redacted]%40")
+    .replace(/((?:proxy-)?authorization\s*[:=]\s*)(?:basic|bearer)?\s*[^\s,;]+/gi, "$1[redacted]")
+    .replace(/((?:extraheader|header)(?:=|\s+)[^\r\n]*?(?:authorization|cookie)\s*:\s*)[^\r\n]+/gi, "$1[redacted]")
+    .replace(/([?&](?:(?:access|auth|bearer|id|oauth|refresh)?[_-]?token|(?:api|private)?[_-]?key|auth(?:orization)?|(?:client|consumer)?[_-]?secret|credential|jwt|pass(?:word|wd)?|signature)=)[^&#\s]+/gi, "$1[redacted]")
+    .replace(/([?&][^=&#\s]+)=([^&#\s]+)/g, "$1=[redacted]")
+    .replace(/#[^\s]*/g, "#[redacted]");
 }
 
 export function runGit(cwd: string, args: string[], inheritOutput = false, env?: NodeJS.ProcessEnv): GitResult {
@@ -17,7 +23,7 @@ export function runGit(cwd: string, args: string[], inheritOutput = false, env?:
     cwd,
     encoding: "utf8",
     stdio: inheritOutput && !redactOutput ? "inherit" : [redactOutput ? "inherit" : "ignore", "pipe", "pipe"],
-    ...(env ? { env } : {}),
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", ...env },
   });
 
   const stdout = inheritOutput && !redactOutput ? "" : (result.stdout ?? "");
@@ -50,6 +56,27 @@ export function isGitVersionSupported(v: { major: number; minor: number }): bool
   if (v.major > MIN_GIT_MAJOR) return true;
   if (v.major < MIN_GIT_MAJOR) return false;
   return v.minor >= MIN_GIT_MINOR;
+}
+
+export function inspectGitVersion():
+  | { ok: true; version: { major: number; minor: number }; raw: string }
+  | { ok: false; reason: string } {
+  const result = spawnSync("git", ["--version"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+  });
+  if (result.status !== 0) return { ok: false, reason: "git is not installed or could not be executed" };
+  const raw = result.stdout.trim();
+  const version = parseGitVersion(raw);
+  if (!version) return { ok: false, reason: `could not parse Git version from "${raw}"` };
+  if (!isGitVersionSupported(version)) {
+    return {
+      ok: false,
+      reason: `Git ${MIN_GIT_MAJOR}.${MIN_GIT_MINOR} or newer is required because portable relative worktree metadata is unavailable in older releases`,
+    };
+  }
+  return { ok: true, version, raw };
 }
 
 export type WorkspaceManifestResolution =

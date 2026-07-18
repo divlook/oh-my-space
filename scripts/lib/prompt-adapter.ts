@@ -1,4 +1,9 @@
-import { confirm as clackConfirm, isCancel as clackIsCancel, select as clackSelect } from "@clack/prompts";
+import {
+  confirm as clackConfirm,
+  isCancel as clackIsCancel,
+  select as clackSelect,
+  text as clackText,
+} from "@clack/prompts";
 import { isTestMode } from "./env.js";
 
 /**
@@ -20,11 +25,12 @@ export function isCancel(value: unknown): value is symbol {
 /** A misconfigured test queue; thrown to force a fail-closed exit 1 without opening a real prompt. */
 export class PromptQueueError extends Error {}
 
-type PromptType = "select" | "confirm";
+type PromptType = "select" | "confirm" | "text";
 
 type ResponseEntry =
   | { type: "select"; value: string }
   | { type: "confirm"; value: boolean }
+  | { type: "text"; value: string }
   | { type: "cancel" };
 
 let initialized = false;
@@ -51,6 +57,12 @@ function validateEntry(entry: unknown, index: number): ResponseEntry {
       throw new PromptQueueError(`${ENV_NAME}[${index}] confirm "value" must be a boolean.`);
     }
     return { type: "confirm", value: e.value };
+  }
+  if (e.type === "text") {
+    if (typeof e.value !== "string") {
+      throw new PromptQueueError(`${ENV_NAME}[${index}] text "value" must be a string.`);
+    }
+    return { type: "text", value: e.value };
   }
   throw new PromptQueueError(`${ENV_NAME}[${index}] has unknown type ${JSON.stringify(e.type)}.`);
 }
@@ -140,6 +152,17 @@ export async function guardedConfirm(
     return injected.cancelled ? PROMPT_CANCEL : (injected.value as boolean);
   }
   return clackConfirm(options);
+}
+
+/** A text prompt guarded by the response queue; returns the value or a cancel symbol. */
+export async function guardedText(
+  options: Parameters<typeof clackText>[0],
+): Promise<string | symbol> {
+  const injected = consume("text");
+  if (injected.injected) {
+    return injected.cancelled ? PROMPT_CANCEL : (injected.value as string);
+  }
+  return clackText(options);
 }
 
 /** Reset queue state; test-only hook for in-process reuse (the CLI parses env once per process). */

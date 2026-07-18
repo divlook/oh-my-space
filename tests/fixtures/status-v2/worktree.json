@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 2,
+  "toolVersion": "0.0.0-golden",
+  "mode": "worktree",
+  "workspaceRoot": "/workspace",
+  "currentAlias": "api",
+  "currentWorktree": "main",
+  "currentTarget": "api/main",
+  "root": null,
+  "repos": [
+    {
+      "mode": "worktree",
+      "alias": "api",
+      "commonPath": ".oms/repos/api.git",
+      "absoluteCommonPath": "/workspace/.oms/repos/api.git",
+      "ready": true,
+      "remotes": [{ "name": "origin" }],
+      "worktrees": [
+        {
+          "managed": true,
+          "name": "main",
+          "target": "api/main",
+          "path": "/workspace/oms/api/main",
+          "relativePath": "oms/api/main",
+          "branch": "main",
+          "head": "0000000",
+          "detached": false,
+          "trackingBranch": "origin/main",
+          "ahead": 0,
+          "behind": 0,
+          "dirty": false,
+          "changes": { "staged": 0, "unstaged": 0, "untracked": 0 },
+          "locked": false,
+          "operation": null,
+          "error": null
+        },
+        {
+          "managed": false,
+          "name": null,
+          "target": null,
+          "path": "/external/api",
+          "relativePath": null,
+          "branch": null,
+          "head": null,
+          "detached": false,
+          "trackingBranch": null,
+          "ahead": null,
+          "behind": null,
+          "dirty": false,
+          "changes": { "staged": 0, "unstaged": 0, "untracked": 0 },
+          "locked": true,
+          "operation": null,
+          "error": "worktree path is stale"
+        }
+      ],
+      "error": "one or more worktrees could not be inspected"
+    }
+  ],
+  "errors": [
+    {
+      "scope": "worktree",
+      "alias": "api",
+      "target": null,
+      "message": "worktree path is stale"
+    }
+  ]
+}

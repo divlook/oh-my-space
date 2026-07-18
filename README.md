@@ -2,9 +2,18 @@
 
 [![npm version](https://img.shields.io/npm/v/oh-my-space.svg)](https://www.npmjs.com/package/oh-my-space)
 
-`oh-my-space` is a small CLI for managing multi-repo workspaces with Git submodules.
+`oh-my-space` is a small CLI for managing multi-repo workspaces with Git submodule and worktree modes.
 
-Declare external repositories in `oms.yaml` and sync them into `oms/<alias>/`. Your parent project records each repo's exact commit while you work with normal branch, pull, and push flows.
+Declare repositories once in `oms.yaml`. Choose submodule mode when parent history must pin exact source commits, or worktree mode when you need concurrent named branch checkouts without parent-history pins.
+
+## Choose a mode
+
+| Mode | Best for | Layout | Parent history |
+| --- | --- | --- | --- |
+| `submodule` (default) | Reproducible source revisions | `oms/<alias>` plus `.gitmodules` | Pins an exact gitlink commit |
+| `worktree` | Concurrent branch development | `.oms/repos/<alias>.git` plus `oms/<alias>/<name>` | Does not pin checkout commits |
+
+One mode applies to every alias. Worktree state is local: cloning or checking out the parent repository does not recreate exact worktree revisions.
 
 ## When to use it
 
@@ -20,8 +29,8 @@ OMS automates routine, deterministic preparation and bounded recovery whenever i
 ## Requirements
 
 - [Node.js](https://nodejs.org) `>=20.19.0` to run `oms`.
-- git `>=2.40` for `git switch` and the submodule commands `oms` relies on.
-- Submodule commands require `oms.yaml` at the root Git top-level. `oms init` can scaffold outside Git, but run `git init` at that same workspace root before syncing sources.
+- Git `>=2.48`; OMS uses relative linked-worktree metadata so a complete workspace can move safely.
+- Submodule topology requires `oms.yaml` at the root Git top-level. Worktree mode also supports plain directories and workspaces nested below an enclosing Git root.
 
 ## Install
 
@@ -35,6 +44,8 @@ bun install -g oh-my-space
 ```
 
 ## Quick start
+
+### Submodule mode
 
 Run `oms init` to scaffold a starter `oms.yaml` in your project root, then edit it down to the repositories you need. A minimal one-repo config looks like this:
 
@@ -56,7 +67,25 @@ oms sync --all   # add/initialize every declared repo on its baseline branch
 oms status       # branch / pointer / dirty / ahead-behind per submodule
 ```
 
+Commit and push source work, then run `oms record <alias>` to record the moved parent pointer.
+
+### Worktree mode
+
+```bash
+oms init --mode worktree
+# edit oms.yaml, then:
+oms sync --all
+oms worktree add api feature/login
+oms worktree list api
+oms commit api/feature-login -m "feat: add login"
+oms push api/feature-login
+```
+
+Worktree mode uses `alias/name` targets and never uses `oms record`.
+
 ## Layout
+
+### Submodule layout
 
 A workspace with two declared repositories, `api` and `web`, looks like this:
 
@@ -70,17 +99,35 @@ oms/
 
 `oms.yaml` is your declaration, `.gitmodules` and each `oms/<alias>` gitlink are tracked in your project history, and every directory under `oms/` is a normal checked-out repository you can branch, edit, and commit in.
 
+### Worktree layout
+
+```text
+oms.yaml
+.oms/
+└── repos/
+    ├── api.git/        # bare common repository
+    └── web.git/
+oms/
+├── api/
+│   ├── main/           # managed target api/main
+│   └── feature-login/  # managed target api/feature-login
+└── web/
+    └── main/
+```
+
+Generated common repositories and checkouts are local and excluded from an enclosing parent repository. They follow branches and are not reproducibility pins.
+
 ## Command locations and workspace discovery
 
 Workspace-aware commands search from the current directory toward the filesystem root and use the nearest `oms.yaml`. The first `oms.yaml` entry encountered is authoritative. It must be a regular file, or a symbolic link whose target is a regular file. A directory, broken link, link to a non-file target, or invalid nearest manifest causes the command to fail; OMS does not skip it and fall back to an outer workspace.
 
-You can run workspace-aware commands at the workspace root or below it. When the current directory is inside `oms/<alias>/` for an alias declared by the selected manifest, `oms status --json` reports that alias and commands such as `oms commit` and `oms record` can infer it. An alias supplied on the command line always takes precedence over the inferred current alias. Arbitrary descendants and undeclared `oms/<name>/` paths can discover the workspace but do not become a current alias.
+You can run workspace-aware commands at the workspace root or below it. In submodule mode, a directory below `oms/<alias>/` resolves that alias. In worktree mode, only an ownership-verified checkout below `oms/<alias>/<name>/` resolves the managed `alias/name` target. An explicit alias or target always wins; arbitrary descendants and external worktrees never become managed targets.
 
-Commands that inspect or change submodule state require the selected manifest directory to be the root Git top-level. A nested `oms.yaml` below an enclosing Git root is rejected before `.gitmodules`, the root index, `oms/`, or the manifest can change. Repair that layout by either moving `oms.yaml` to the enclosing Git root or initializing a separate Git repository at the intended nested workspace root. `oms sync --list` is manifest-only and remains available before Git initialization.
+Submodule topology commands require the selected manifest directory to be the root Git top-level. Worktree mode supports a plain directory, a Git root, or a workspace nested below an enclosing Git root; that repository is context only and does not own worktree topology. `oms sync --list` is manifest-only and remains available before Git initialization.
 
 ## Typical branch flow
 
-Start a branch, commit inside the submodule, push it, then record the pointer move in your project history. Each command stays in a single Git scope:
+In submodule mode, start a branch, commit and push inside the submodule, then record the pointer move:
 
 ```bash
 oms branch switch api feature/login  # local branch, no remote needed
@@ -91,11 +138,19 @@ oms record api                       # commit the moved oms/api pointer in your 
 
 `oms commit` and `oms push` stay inside the submodule and never touch the root gitlink; `oms record` is the only command that commits an existing root pointer update. After a successful `oms commit`/`oms pull`/`oms push`, `oms` prints an `oms record <alias>` hint when the pointer has moved. Run `oms status --json` for a machine-readable view of which scope changed.
 
+In worktree mode, create or select a named attached checkout and address source operations by `alias/name`. There is no parent gitlink and `oms record` is unavailable:
+
+```bash
+oms worktree add api feature/login --name login
+oms commit api/login -m "feat: add login"
+oms push api/login
+```
+
 Omit the alias or branch on `oms branch switch` and `oms branch checkout` to pick one interactively — synced submodules, and local or `origin/*` branches respectively.
 
 ## Listing branches
 
-`oms branch list [alias]` produces a current branch inventory for one declared submodule. Use an explicit alias, omit it to select the sole declaration automatically, or choose among multiple aliases interactively:
+`oms branch list [alias]` produces a current branch inventory for one declared repository. Use an explicit alias, omit it to select the sole declaration automatically, or choose among multiple aliases interactively:
 
 ```bash
 oms branch list api
@@ -103,7 +158,7 @@ oms branch list
 oms branch # choose list, switch, checkout, or delete interactively
 ```
 
-Before listing, OMS safely initializes an existing registered submodule when needed, reconciles every remote declared for that alias in `oms.yaml`, and runs `git fetch <remote> --prune` sequentially in manifest order. A failed fetch is retried once. If both attempts fail, cached refs remain visible as `stale`; a failed remote without usable refs is `unavailable`. These degraded states still exit 0 when local refs can be inspected. Extra local remotes are not fetched or included in the remote inventory, although an actual configured upstream on one of them remains visible for its local branch.
+In submodule mode, listing may initialize an existing registration, reconcile declared remotes, and fetch, so it takes the workspace mutation lock. In worktree mode, listing is a lock-free inspection of existing common local and remote-tracking refs and reports every managed or external checkout location; it never initializes, reconciles, or fetches.
 
 The output identifies the selected alias and detached HEAD when applicable, then prints:
 
@@ -115,7 +170,7 @@ When `branch` is omitted from `oms.yaml`, a successful origin fetch refreshes `o
 
 ## Deleting a local branch
 
-`oms branch delete [alias] [branch]` removes one **local** branch inside a single initialized submodule. It is deliberately narrow and safe:
+`oms branch delete [alias] [branch]` removes one **local** branch in the alias repository. In submodule mode that repository is the initialized submodule; in worktree mode it is the owned common repository. It is deliberately narrow and safe:
 
 ```bash
 oms branch delete api feature/login        # safe delete (git branch -d)
@@ -125,7 +180,7 @@ oms branch                                  # interactive list/switch/checkout/d
 ```
 
 - **Local only.** It never deletes a remote branch or a remote-tracking ref, never fetches or pushes, and never stages or commits the root gitlink. A missing local branch whose name exists on `origin` is reported as local-only.
-- **Protected branches.** The current branch and every resolved baseline are protected and cannot be deleted, even with `--force`. Baselines are the explicit `oms.yaml` `branch`, or the remote default (`origin/HEAD`) when `branch` is omitted, plus any branch recorded for the alias in a present, reliable `.gitmodules` version (working tree, index, or `HEAD`). Drift between these is reported and both are protected; a later `oms sync` reconciles the metadata. Unreadable, malformed, duplicate, or multi-valued baseline metadata fails closed with the offending source named.
+- **Protected branches.** Every branch checked out by a managed or external worktree and every resolved baseline is protected even with `--force`. Submodule mode also protects reliable `.gitmodules` baseline metadata.
 - **Safe by default, one force retry.** A safe `git branch -d` is tried first. If Git rejects it (an unmerged branch) and the branch still exists, an interactive prompt offers a single force retry (default No); a non-interactive shell prints the exact `oms branch delete <alias> <branch> --force` command instead. Before every force deletion OMS prints the branch tip's full OID and a POSIX-shell-safe `git -C oms/<alias> branch <branch> <oid>` recreation command, and re-checks the OID so a branch that moved concurrently aborts (exit 2) rather than losing commits.
 - **Preconditions.** Deletion is rejected while a merge/rebase/cherry-pick/revert/bisect/sequencer operation is in progress in the submodule, and for a detached HEAD unless it exactly matches the recorded root gitlink (which lets interrupted automatic initialization resume). Dirty submodule and root state do not block deletion. A registered-but-uninitialized alias named explicitly is initialized automatically (network access limited to that alias) and then revalidated.
 
@@ -153,7 +208,7 @@ Submodules must **not** be gitignored, since the `oms/<alias>` gitlink is what r
 
 When an AI coding agent works in a workspace, the main risk is operating in the wrong Git scope — the root repository versus an `oms/<alias>/` submodule. Two features make that boundary explicit:
 
-- **`oms status --json`** prints exactly one machine-readable JSON object on stdout (schema-versioned) describing the workspace root, the current alias, root submodule pointers, and each submodule's branch, dirtiness, and ahead/behind state. An agent can inspect it before deciding where to branch or commit.
+- **`oms status --json`** prints exactly one schema-version 2 object on stdout. It reports workspace mode and current target, an optional enclosing root, and mode-discriminated submodule or common-repository/worktree entries. [`oms.status.schema.json`](./oms.status.schema.json) is the normative contract.
 - **`oms agent install`** writes a concise, marker-delimited instruction block into `oms/AGENTS.md` and/or `oms/CLAUDE.md`:
 
   ```bash
@@ -191,20 +246,21 @@ Skill firing is best-effort — an agent loads a skill only when it judges the s
 
 | Command | Runs in | Does | Notes |
 | --- | --- | --- | --- |
-| `oms init` | current directory | Writes a starter `oms.yaml`. | The directory must be outside Git or the root Git top-level. A nested Git-work-tree directory is rejected before writes, even with `--force`. Otherwise refuses an existing manifest unless `--force` is used. Does not gitignore `oms/`. |
-| `oms doctor` | workspace root or child path | Checks the nearest `oms.yaml`, Git root identity, and each alias's submodule state. | Diagnoses a nested manifest directly instead of treating it as a valid root. Returns exit 2 if any warning is raised. |
-| `oms sync <alias>` / `--all` | workspace root | Registers missing repos with `git submodule add`, initializes registered-but-uninitialized ones, fetches, and attaches the baseline branch. | Reproduces the recorded pointer on a fresh clone. Topology changes (`.gitmodules`, `oms/<alias>`) are left unstaged by default; commit them via the prompt or `--commit` (`chore(oms): add ...`). |
-| `oms status [alias...]` / `--all` | anywhere under root | Prints branch, pointer state (`ok`/`moved`/`uninit`/`missing`/`conflict`), dirtiness, and ahead/behind for each submodule. | `moved` means the working commit differs from the recorded pointer — record it with `oms record`. `--json` prints one machine-readable object on stdout for tooling and agents. |
-| `oms commit [alias]` | workspace root or inside `oms/<alias>/` | Commits source changes inside the selected submodule only; never the root gitlink. | `-m <message>` is required (repeatable). Commits existing staged changes as-is, otherwise stages all with `git add -A`. Infers a configured alias from the current `oms/<alias>/` directory; an explicit alias wins. |
-| `oms record [alias]` | workspace root or inside `oms/<alias>/` | Commits an existing root gitlink pointer update for one alias (`chore(oms): update <alias> submodule to <sha>`). | Root repo only, path-limited to `oms/<alias>`; refuses unrelated staged changes. An explicit alias wins over current-path inference. Not for adds/removals — use `oms sync`/`oms unsync`. |
+| `oms init` | current directory | Writes a starter `oms.yaml`. | Defaults to submodule mode; `--mode worktree` also permits a nested or plain directory. |
+| `oms doctor` | workspace root or child path | Read-only mode-aware ownership, lock, transition, endpoint, repository, worktree, exclude, orphan, and topology diagnostics. | Returns exit 2 if any warning is raised and never repairs or prunes. |
+| `oms sync <alias>` / `--all` | workspace root | Provisions submodules or owned common repositories and first worktrees, then refreshes declared remotes. | Worktree sync never advances local branches or recreates intentionally removed checkouts. |
+| `oms status [alias|alias/name]` / `--all` | anywhere under root | Prints mode-aware repository and checkout state. | `--json` emits status schema v2; worktree mode accepts compound target filters. |
+| `oms worktree add|list|move|remove` | worktree workspace | Manages named attached checkouts or lists managed and external registrations. | Mutation commands use `alias/name`; list is read-only. |
+| `oms commit [alias|alias/name]` | workspace root or selected checkout | Commits source changes inside one selected repository checkout. | Worktree mode never creates or hints at a root pointer record. |
+| `oms record [alias]` | submodule workspace | Commits an existing root gitlink pointer update. | Rejected in worktree mode because no parent pointer exists. |
 | `oms branch switch [alias] [branch]` | workspace root | `git switch` to a LOCAL branch, creating it locally if it does not exist yet (no remote required). | `--from <ref>` sets the start point for a new branch. Omit alias/branch to pick interactively (or create a new branch). |
 | `oms branch checkout [alias] [branch]` | workspace root | `git fetch origin --prune`, then check out a REMOTE branch (`origin/*`) as a local tracking branch (or switch to an existing local counterpart). | Omit alias/branch to pick interactively. To create a brand-new local branch, use `oms branch switch`. |
-| `oms branch list [alias]` | workspace root | Safely prepares one declared submodule, refreshes all declared remotes, and lists local and remote-tracking branches. | Shows baseline certainty, current/baseline flags, exact upstream divergence, detached HEAD, and per-remote `fresh`/`stale`/`unavailable` state. Never switches a branch or changes a root gitlink outside an explicitly accepted `oms sync`. |
-| `oms branch delete [alias] [branch]` | workspace root | Deletes one LOCAL branch inside one initialized submodule with `git branch -d` (safe) or `-D` (`--force`). | Local only — never deletes a remote or remote-tracking ref, never touches the root gitlink. Protects the current branch and every resolved baseline (see below). Omit alias/branch to pick interactively; a registered-but-uninitialized alias is initialized first. Exit 0 on success, 1 on input/precondition errors, 2 on a declined/failed/concurrent deletion. |
-| `oms fetch ...` | workspace root | `git fetch <remote> --prune` in each submodule. | `--remote <name>` (repeatable) picks the remote(s); omit to choose interactively, defaults to `origin`. |
-| `oms pull ...` | workspace root | `git pull --ff-only <remote>` on each submodule's current branch. | Submodule branch only — never stages or commits the root gitlink. Rejects a dirty submodule; prints an `oms record <alias>` hint when the pointer moves. `--remote <name>` selects a single remote (defaults to `origin`). |
-| `oms push <alias>...` | workspace root | `git push <remote> <branch>` (creating the remote branch on first push). | Submodule branch only — never stages or commits the root gitlink. `--commit`/`--record` are unsupported; record the root pointer with `oms record <alias>`. `--remote <name>` (repeatable) picks the remote(s); upstream is set only for `origin`. |
-| `oms unsync <alias>` / `--all` | workspace root | `git submodule deinit` + `git rm` for the alias; drops an empty `.gitmodules`. | Keeps the `oms.yaml` entry. Use `--force` to discard uncommitted changes. Removal topology is left unstaged by default; commit via the prompt or `--commit` (`chore(oms): remove ...`). |
+| `oms branch list [alias]` | workspace root | Lists alias-scoped local and remote-tracking branches. | Worktree mode is lock-free and includes managed/external checkout locations; submodule mode may refresh under the mutation lock. |
+| `oms branch delete [alias] [branch]` | workspace root | Deletes one local branch with safe or forced Git semantics. | Protects baselines and every managed/external checked-out branch. |
+| `oms fetch ...` | workspace root | Refreshes declared remotes at alias scope. | Worktree mode defaults to every declared remote and aggregates operational failures as exit 2. |
+| `oms pull ...` | workspace root or selected checkout | Fast-forwards one selected checkout, or every managed worktree with `--all`. | Worktree `--all` excludes external worktrees and aggregates operational failure before safety refusal. |
+| `oms push ...` | workspace root or selected checkout | Pushes the selected checkout branch to declared remotes. | Worktree mode uses a declared upstream first and never changes a root pointer. |
+| `oms unsync <alias>` / `--all` | workspace root | Removes owned submodule or worktree topology after mode-specific publication and safety checks. | Worktree mode blocks external or locked registrations even with force and preserves explicit orphan state unless named directly. |
 | `oms agent install` / `uninstall` | workspace root | Manages a marker-delimited OMS instruction block in `oms/AGENTS.md` and/or `oms/CLAUDE.md` (root-repo files). | `--target agents\|claude\|both` (omit to choose interactively). Does not stage files. See [AI agent workflow](#ai-agent-workflow). |
 | `oms skills` | anywhere (`--install` resolves to root) | Prints the `npx skills add divlook/oh-my-space/skills` commands (project scope and `-g` global) to install the workspace skills. | `--install` delegates to `npx skills add`, forwarding extra args (`-g`, `--skill <name>`, `--list`). Run outside a workspace without `-g`, it errors and points to the global install. See [Workspace skills](#workspace-skills). |
 | `oms update` | anywhere | Checks the npm registry and safely updates the installed `oms` CLI only when it detects a confident global install. | Use `--check` for a non-mutating check. Use `--yes` to skip the confirmation prompt for confident global updates. Project-local, temporary runner, development, and unknown installs print guidance only. |
@@ -255,7 +311,8 @@ Rules:
   - Remaining characters: ASCII lowercase letters, digits, `-`, `_`, `@`.
   - Not allowed: uppercase letters, `/`, `\`, `.`, whitespace.
   - Pattern: `/^[a-z0-9][a-z0-9_@-]*$/`.
-- `remotes` is required and must include an `origin` entry. Each value is a clonable git URL. `origin` becomes the submodule's primary remote, and additional remotes are configured on `oms sync`.
+- `mode` is optional and defaults to `submodule`; `worktree` applies to every repository in the workspace.
+- `remotes` is required and must include `origin`. In worktree mode, credential-bearing URL components, query/fragment components, and executable transports are rejected; use a credential helper or SSH agent.
 - `branch` is optional. When omitted, the remote's default branch is used as the baseline.
 
 JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json` for YAML LSPs).
@@ -263,6 +320,8 @@ JSON schema: [`oms.schema.json`](./oms.schema.json) (also reachable at `https://
 ## Migration guides
 
 Detailed migration steps are organized per version under [`docs/migrations/`](./docs/migrations/).
+
+- [Worktree mode and status v2](./docs/migrations/worktree-mode-and-status-v2.md) — covers Git 2.48, status schema v2, explicit mode transitions, and rollback limits
 
 - [0.13.x → 0.14.0](./docs/migrations/0.13.x-to-0.14.0.md) — relocates `oms switch` / `oms checkout` under the `oms branch` group as `oms branch switch` / `oms branch checkout` (top-level commands removed, no aliases)
 - [0.11.x → 0.12.0](./docs/migrations/0.11.x-to-0.12.0.md) — adds `oms branch delete` and makes `oms sync` reconcile declarative `.gitmodules` metadata with stricter baseline validation and a durable finalization recovery preflight

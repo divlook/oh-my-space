@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, readdirSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { log } from "@clack/prompts";
 import { DATA_DIRNAME } from "./constants.js";
 import { dim, normalizePath, pad, readPackageVersion, uniqueAliases } from "./env.js";
@@ -8,14 +8,27 @@ import {
   currentBranch,
   isDirty,
   isRegisteredSubmodule,
+  inspectWorkspaceGitIdentity,
   registeredSubmodulePaths,
   runGit,
   shortSha,
   submoduleInitialized,
   submodulePath,
 } from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
-import type { Repo, StatusOptions } from "./types.js";
+import { loadForSubmodules, loadRepos } from "./manifest.js";
+import type {
+  Repo,
+  StatusError,
+  StatusOptions,
+  StatusRoot,
+  StatusV2,
+  SubmoduleStatusRepo,
+  WorktreeStatusEntry,
+  WorktreeStatusRepo,
+} from "./types.js";
+import { commonRepoPath, enclosingGitRelation, parseManagedTarget } from "./worktree-paths.js";
+import { inspectWorktreeInventory, inspectWorktreeState } from "./worktree-inspection.js";
+import { readWorkspaceOwnership } from "./workspace-mutation.js";
 
 type StatusRow = {
   alias: string;
@@ -99,7 +112,7 @@ export function changeCounts(dir: string, excludePaths: Set<string>): ChangeCoun
     const path = entry.slice(3);
     // A staged rename/copy emits "<XY> <dest>\0<src>\0"; consume the trailing source token.
     if (x === "R" || x === "C") i++;
-    if (excludePaths.has(path)) continue;
+    if ([...excludePaths].some((excluded) => path === excluded || path.startsWith(`${excluded}/`))) continue;
     if (x === "?" && y === "?") {
       counts.untracked++;
       continue;
@@ -378,60 +391,18 @@ export function inferAliasFromCwd(repoRoot: string, repos: Repo[], cwd: string =
   return null;
 }
 
-/** Machine-readable per-repo status entry. The stable schemaVersion 1 contract is specified by the ai-submodule-workflow capability and summarized by oms status --help. */
-type JsonRepoStatus = {
-  alias: string;
-  path: string;
-  absolutePath: string;
-  configured: boolean;
-  initialized: boolean;
-  branch: string | null;
-  head: string | null;
-  detached: boolean;
-  trackingBranch: string | null;
-  pin: PinValue;
-  dirty: boolean;
-  changes: ChangeCounts;
-  ahead: number | null;
-  behind: number | null;
-  error: string | null;
-};
-
-type JsonRootStatus = {
-  branch: string | null;
-  head: string | null;
-  detached: boolean;
-  dirty: boolean;
-  changes: ChangeCounts;
-  submodulePointers: {
-    moved: string[];
-    staged: string[];
-    split: string[];
-    conflict: string[];
-  };
-};
-
-type JsonStatus = {
-  schemaVersion: 1;
-  toolVersion: string;
-  workspaceRoot: string;
-  currentAlias: string | null;
-  root: JsonRootStatus;
-  repos: JsonRepoStatus[];
-  errors: string[];
-};
-
 /**
  * Build one repo's JSON status. Never throws: an initialized repo whose HEAD cannot be read keeps the
  * normal entry shape with null scalars, safe-default structured fields, and a concise `error` message.
  */
-function buildRepoStatus(repoRoot: string, repo: Repo): JsonRepoStatus {
+function buildRepoStatus(repoRoot: string, repo: Repo): SubmoduleStatusRepo {
   const state = gitlinkState(repoRoot, repo.alias);
   const common = {
+    mode: "submodule" as const,
     alias: repo.alias,
     path: submodulePath(repo.alias),
     absolutePath: aliasDir(repoRoot, repo.alias),
-    configured: true,
+    configured: true as const,
     pin: state.pin,
   };
   const safeDefaults = {
@@ -479,7 +450,7 @@ function buildRepoStatus(repoRoot: string, repo: Repo): JsonRepoStatus {
  * Build the root JSON status. root.changes always excludes every configured submodule gitlink path so
  * pointer movement is reported only through submodulePointers, whose arrays cover the selected repos.
  */
-function buildRootStatus(repoRoot: string, configuredRepos: Repo[], selectedRepos: Repo[]): JsonRootStatus {
+function buildRootStatus(repoRoot: string, configuredRepos: Repo[], selectedRepos: Repo[]): StatusRoot {
   const { branch, head, detached } = headState(repoRoot);
   const excludePaths = new Set<string>([
     ...registeredSubmodulePaths(repoRoot),
@@ -494,18 +465,23 @@ function buildRootStatus(repoRoot: string, configuredRepos: Repo[], selectedRepo
     if (s.staged) pointers.staged.push(repo.alias);
     if (s.split) pointers.split.push(repo.alias);
   }
-  return { branch, head, detached, dirty: isDirtyCounts(changes), changes, submodulePointers: pointers };
+  return { path: repoRoot, relation: "same", branch, head, detached, dirty: isDirtyCounts(changes), changes, submodulePointers: pointers };
 }
 
 /** Emit exactly one two-space pretty JSON object on stdout. Exits non-zero if any repo read failed. */
 function printStatusJson(repoRoot: string, configuredRepos: Repo[], selectedRepos: Repo[]): number {
   const repos = selectedRepos.map((repo) => buildRepoStatus(repoRoot, repo));
-  const errors = repos.filter((r) => r.error !== null).map((r) => r.error as string);
-  const payload: JsonStatus = {
-    schemaVersion: 1,
+  const errors: StatusError[] = repos.filter((repo) => repo.error !== null).map((repo) => ({
+    scope: "repo", alias: repo.alias, target: null, message: repo.error as string,
+  }));
+  const payload: StatusV2 = {
+    schemaVersion: 2,
     toolVersion: readPackageVersion(),
+    mode: "submodule",
     workspaceRoot: repoRoot,
     currentAlias: inferAliasFromCwd(repoRoot, configuredRepos),
+    currentWorktree: null,
+    currentTarget: null,
     root: buildRootStatus(repoRoot, configuredRepos, selectedRepos),
     repos,
     errors,
@@ -514,7 +490,224 @@ function printStatusJson(repoRoot: string, configuredRepos: Repo[], selectedRepo
   return errors.length > 0 ? 2 : 0;
 }
 
+function worktreeRootStatus(workspaceRoot: string, repos: Repo[]): StatusRoot | null {
+  const identity = inspectWorkspaceGitIdentity(workspaceRoot);
+  if (identity.kind === "no-work-tree") return null;
+  if (identity.kind === "indeterminate") throw new Error(`Could not inspect enclosing Git repository: ${identity.reason}`);
+  const root = identity.gitTopLevel;
+  const relation = enclosingGitRelation(workspaceRoot, root);
+  if (!relation) throw new Error("Enclosing Git repository relationship is invalid");
+  const workspaceRelative = normalizePath(relative(root, workspaceRoot));
+  const prefix = workspaceRelative ? `${workspaceRelative}/` : "";
+  const excludes = new Set([
+    `${prefix}.oms`,
+    `${prefix}.oms-mutation.lock`,
+    `${prefix}.oms-mode-switch.json`,
+    ...repos.map((repo) => `${prefix}oms/${repo.alias}`),
+  ]);
+  const { branch, head, detached } = headState(root);
+  const changes = changeCounts(root, excludes);
+  return { path: root, relation, branch, head, detached, dirty: isDirtyCounts(changes), changes };
+}
+
+function worktreeContext(workspaceRoot: string, repos: WorktreeStatusRepo[]): { alias: string | null; name: string | null } {
+  let cwd: string;
+  try {
+    cwd = realpathSync(process.cwd());
+  } catch {
+    return { alias: null, name: null };
+  }
+  for (const repo of repos) {
+    for (const entry of repo.worktrees) {
+      if (!entry.managed || !entry.name) continue;
+      const rel = relative(entry.path, cwd);
+      if (rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) {
+        return { alias: repo.alias, name: entry.name };
+      }
+    }
+  }
+  const rel = normalizePath(relative(workspaceRoot, cwd)).split("/").filter(Boolean);
+  return rel[0] === DATA_DIRNAME && repos.some((repo) => repo.alias === rel[1])
+    ? { alias: rel[1], name: null }
+    : { alias: null, name: null };
+}
+
+function safeWorktreeEntry(
+  workspaceRoot: string,
+  entry: ReturnType<typeof inspectWorktreeInventory>["worktrees"][number],
+): WorktreeStatusEntry {
+  const identity = entry.managed && entry.name && entry.target
+    ? { managed: true as const, name: entry.name, target: entry.target, relativePath: normalizePath(relative(workspaceRoot, entry.path)) }
+    : { managed: false as const, name: null, target: null, relativePath: null };
+  const base = {
+    ...identity,
+    path: entry.path,
+    branch: entry.branch,
+    head: entry.head ? entry.head.slice(0, 7) : null,
+    detached: entry.branch === null && entry.head !== null,
+    trackingBranch: null,
+    ahead: null,
+    behind: null,
+    dirty: false,
+    changes: { staged: 0, unstaged: 0, untracked: 0 },
+    locked: entry.locked,
+    operation: null,
+    error: null,
+  } satisfies WorktreeStatusEntry;
+  if (entry.stale || entry.ownershipError) return { ...base, error: entry.ownershipError ?? "worktree path is stale" };
+  try {
+    const state = inspectWorktreeState(entry.path);
+    return {
+      ...base,
+      branch: state.branch,
+      head: state.head?.slice(0, 7) ?? null,
+      detached: state.detached,
+      trackingBranch: state.trackingBranch,
+      ahead: state.ahead,
+      behind: state.behind,
+      dirty: state.dirty,
+      changes: state.changes,
+      operation: state.operation,
+    };
+  } catch (error) {
+    return { ...base, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function buildWorktreeRepoStatus(workspaceRoot: string, repo: Repo, workspaceId: string): WorktreeStatusRepo {
+  const common = commonRepoPath(workspaceRoot, repo.alias);
+  const base = {
+    mode: "worktree" as const,
+    alias: repo.alias,
+    commonPath: `.oms/repos/${repo.alias}.git`,
+    absoluteCommonPath: common,
+    remotes: Object.keys(repo.remotes).map((name) => ({ name })),
+  };
+  if (!existsSync(common)) return { ...base, ready: false, worktrees: [], error: null };
+  try {
+    const inventory = inspectWorktreeInventory(workspaceRoot, repo.alias, workspaceId);
+    return { ...base, ready: true, worktrees: inventory.worktrees.map((entry) => safeWorktreeEntry(workspaceRoot, entry)), error: null };
+  } catch (error) {
+    return { ...base, ready: false, worktrees: [], error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function printWorktreeStatusJson(workspaceRoot: string, configured: Repo[], selected: Array<{ repo: Repo; name: string | null }>): number {
+  const ownership = readWorkspaceOwnership(workspaceRoot);
+  const repos = selected.map(({ repo, name }) => {
+    const status = ownership
+      ? buildWorktreeRepoStatus(workspaceRoot, repo, ownership.workspaceId)
+      : {
+          mode: "worktree" as const, alias: repo.alias, commonPath: `.oms/repos/${repo.alias}.git`,
+          absoluteCommonPath: commonRepoPath(workspaceRoot, repo.alias), ready: false,
+          remotes: Object.keys(repo.remotes).map((remote) => ({ name: remote })), worktrees: [],
+          error: "workspace ownership is missing",
+        };
+    return name ? { ...status, worktrees: status.worktrees.filter((entry) => entry.managed && entry.name === name) } : status;
+  });
+  const errors: StatusError[] = [];
+  for (const repo of repos) {
+    if (repo.error) errors.push({ scope: "repo", alias: repo.alias, target: null, message: repo.error });
+    for (const entry of repo.worktrees) {
+      if (entry.error) errors.push({ scope: "worktree", alias: repo.alias, target: entry.target, message: entry.error });
+    }
+  }
+  let root: StatusRoot | null = null;
+  try {
+    root = worktreeRootStatus(workspaceRoot, configured);
+  } catch (error) {
+    errors.push({ scope: "root", alias: null, target: null, message: error instanceof Error ? error.message : String(error) });
+  }
+  const context = worktreeContext(workspaceRoot, repos);
+  const payload: StatusV2 = {
+    schemaVersion: 2,
+    toolVersion: readPackageVersion(),
+    mode: "worktree",
+    workspaceRoot,
+    currentAlias: context.alias,
+    currentWorktree: context.name,
+    currentTarget: context.alias && context.name ? `${context.alias}/${context.name}` : null,
+    root,
+    repos,
+    errors,
+  };
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  return errors.length > 0 ? 2 : 0;
+}
+
 export async function runStatus(aliases: string[], options: StatusOptions): Promise<number> {
+  const discovered = loadRepos();
+  if (!discovered) return 1;
+  if (discovered.mode === "worktree") {
+    const selected: Array<{ repo: Repo; name: string | null }> = [];
+    const values = options.all || aliases.length === 0 ? discovered.repos.map((repo) => repo.alias) : uniqueAliases(aliases);
+    for (const value of values) {
+      let alias = value;
+      let name: string | null = null;
+      if (value.includes("/")) {
+        try {
+          const target = parseManagedTarget(value);
+          alias = target.alias;
+          name = target.name;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (options.json) process.stderr.write(`${message}\n`); else log.error(message);
+          return 1;
+        }
+      }
+      const repo = discovered.repos.find((candidate) => candidate.alias === alias);
+      if (!repo) {
+        const message = `Unknown alias "${alias}".`;
+        if (options.json) process.stderr.write(`${message}\n`); else log.error(message);
+        return 1;
+      }
+      if (name) {
+        const ownership = readWorkspaceOwnership(discovered.repoRoot);
+        let confirmed = false;
+        let inspectionFailed = false;
+        try {
+          confirmed = ownership !== null && existsSync(commonRepoPath(discovered.repoRoot, alias))
+            && inspectWorktreeInventory(discovered.repoRoot, alias, ownership.workspaceId).worktrees
+              .some((entry) => entry.managed && entry.name === name);
+        } catch {
+          // A broken common repository is a partial-inspection failure, not an unknown target;
+          // let the structured status path report it (JSON errors[] + exit 2, or a human error row).
+          inspectionFailed = true;
+        }
+        if (!confirmed && !inspectionFailed) {
+          const message = `Unknown managed target "${value}".`;
+          if (options.json) process.stderr.write(`${message}\n`); else log.error(message);
+          return 1;
+        }
+      }
+      selected.push({ repo, name });
+    }
+    if (options.json) return printWorktreeStatusJson(discovered.repoRoot, discovered.repos, selected);
+    const ownership = readWorkspaceOwnership(discovered.repoRoot);
+    console.log(dim("TARGET  BRANCH  DIRTY  AHEAD  BEHIND  STATE"));
+    let partialFailure = false;
+    for (const { repo, name } of selected) {
+      const status = ownership ? buildWorktreeRepoStatus(discovered.repoRoot, repo, ownership.workspaceId) : null;
+      if (status?.error) {
+        // Distinguish a broken/unreadable common repository from a genuinely empty one.
+        console.log(`${repo.alias}  (inspection failed: ${status.error})`);
+        partialFailure = true;
+        continue;
+      }
+      const entries = status?.worktrees.filter((entry) => !name || entry.name === name) ?? [];
+      if (entries.length === 0) {
+        console.log(`${repo.alias}  (no worktrees)`);
+        continue;
+      }
+      for (const entry of entries) {
+        const state = [entry.managed ? null : "external", entry.locked ? "locked" : null, entry.error ? "error" : null]
+          .filter(Boolean).join(",");
+        console.log(`${entry.target ?? `${repo.alias}/(external)`}  ${entry.branch ?? "(detached)"}  ${entry.dirty ? "yes" : ""}  ${entry.ahead ?? ""}  ${entry.behind ?? ""}  ${state}`);
+      }
+    }
+    return partialFailure ? 2 : 0;
+  }
+
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
@@ -523,6 +716,11 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
   if (options.all || aliases.length === 0) {
     selected = repos;
   } else {
+    if (aliases.some((alias) => alias.includes("/"))) {
+      const msg = "Submodule-mode status accepts repository aliases, not alias/name targets.";
+      if (options.json) process.stderr.write(`${msg}\n`); else log.error(msg);
+      return 1;
+    }
     const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
     if (unknown.length > 0) {
       const msg = `Unknown alias(es): ${unknown.join(", ")}. Use "oms sync --list" to see available aliases.`;

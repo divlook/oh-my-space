@@ -1,7 +1,7 @@
 {
   "name": "oh-my-space",
   "version": "0.14.1",
-  "description": "Manage multi-repo workspaces with Git submodules.",
+  "description": "Manage multi-repo workspaces with Git submodule and worktree modes.",
   "license": "MIT",
   "homepage": "https://github.com/divlook/oh-my-space",
   "repository": {
@@ -18,6 +18,8 @@
     "cli",
     "git-submodule",
     "submodule",
+    "git-worktree",
+    "worktree",
     "workspace",
     "multi-repo",
     "monorepo",
@@ -58,6 +60,7 @@
     "@clack/prompts": "^1.4.0",
     "@types/node": "^20.19.0",
     "@types/semver": "^7.7.1",
+    "ajv": "^8.20.0",
     "commander": "^14.0.3",
     "esbuild": "^0.28.1",
     "semver": "^7.8.4",

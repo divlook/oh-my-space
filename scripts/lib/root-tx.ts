@@ -282,7 +282,12 @@ function hashObject(repoRoot: string, content: Buffer): string | null {
 
 /** Run git with buffered stdin (for hash-object --stdin); mirrors runGit's result shape. */
 function runGitWithInput(cwd: string, args: string[], input: Buffer): GitResult {
-  const result = spawnSync("git", args, { cwd, input, encoding: "buffer" });
+  const result = spawnSync("git", args, {
+    cwd,
+    input,
+    encoding: "buffer",
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+  });
   return {
     exitCode: result.status,
     success: result.status === 0,

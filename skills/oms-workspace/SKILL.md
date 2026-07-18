@@ -1,26 +1,27 @@
 ---
 name: oms-workspace
-description: Use for Git work in a workspace containing an `oms.yaml` (source repos vendored as submodules under `oms/`) whenever the repository scope is ambiguous — committing or pushing "everything" from the workspace root, interpreting an `oms status` pointer that has moved, debugging a push, or adding or removing a repo with `oms sync` or `oms unsync`. Establishes workspace state and root-versus-submodule scope before acting on Git.
+description: Use for scope-ambiguous Git work in any workspace containing an `oms.yaml`, including submodule topology and pointers or worktree-mode managed checkout lifecycle. Establishes mode, target, and repository scope before acting.
 ---
 
 # oms workspace scope
 
-An `oms` workspace keeps each source repository as a Git submodule under `oms/<alias>/`. The root repository tracks only a pointer (gitlink) to each submodule's commit, so the same Git command means different things at the root versus inside a submodule. Establish where you are before acting.
+An `oms` workspace uses one workspace-wide repository mode. Submodule mode stores one checkout at `oms/<alias>` and records a root gitlink. Worktree mode stores common repositories under `.oms/repos/` and addresses concurrent checkouts as `alias/name`, without root pointer records.
 
 ## Scope guardrail (applies before any Git work)
 
-- Run `oms status --json` before Git work involving `oms/` to read root versus submodule state.
-- Treat each `oms/<alias>/` directory as a separate Git repository.
-- Use `oms` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
-- Do not create root commits for existing submodule pointer updates unless the user explicitly runs `oms record <alias>`.
+- Run `oms status --json` before Git work involving `.oms/` or `oms/`; require schemaVersion 2 and use `oms status --help` if another version appears.
+- Read `mode`, `currentTarget`, the root relation, and each repository discriminator before choosing a Git scope.
+- Treat root operations, alias-scoped repository operations, and worktree-mode `alias/name` checkout operations as different scopes; never guess.
+- In submodule mode, record an existing pointer only when the user explicitly runs `oms record <alias>`; worktree mode has no root pointer record.
+- Check `oms <command> --help` for exact mode-specific targets, flags, and recovery behavior.
 
 ## Decide the scope first
 
-1. Run `oms status --json` and read the result. It reports the workspace root, the current alias (when you are inside `oms/<alias>/`), root pointer movement under `root.submodulePointers`, and each submodule's branch, dirtiness, and ahead-behind state.
-2. Choose the scope from that state — do not guess. Source-code changes belong inside `oms/<alias>/` (the submodule); the root repository only records pointers and topology.
-3. Never create a root pointer commit unless the user explicitly asks for one. A moved pointer is recorded with `oms record <alias>`, not by committing the root gitlink directly.
+1. Run `oms status --json` and require `schemaVersion: 2`.
+2. Choose root, alias, or `alias/name` scope from `mode`, current context, and repository discriminators.
+3. In submodule mode only, use `oms record <alias>` for an explicitly requested moved pointer. Never suggest it in worktree mode.
 
-These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics; `oms status --help` ships with the installed CLI and always matches the emitted schemaVersion.
+These instructions require `oms status --json` schemaVersion 2. If another version appears, stop and use `oms status --help` for the installed contract.
 
 ## Adding or removing a repo is topology, not a pointer record
 

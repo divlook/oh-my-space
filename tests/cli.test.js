@@ -1,13 +1,19 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  lstatSync,
   readFileSync,
+  readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +22,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import semver from "semver";
 import { parse as parseYaml } from "yaml";
+import Ajv2020 from "ajv/dist/2020.js";
 
 const cli = resolve("dist/oms.js");
 const publishBetaScript = resolve("scripts/publish-beta.mjs");
@@ -128,6 +135,31 @@ function gitOut(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", env: testEnv }).trim();
 }
 
+function clearProvenStaleWorkspaceLock(cwd) {
+  rmSync(join(cwd, ".oms-mutation.lock"), { force: true });
+}
+
+function snapshotDirectory(root) {
+  const entries = [];
+  const visit = (directory) => {
+    for (const name of readdirSync(directory).sort()) {
+      const path = join(directory, name);
+      const relativePath = path.slice(root.length + 1);
+      const stat = lstatSync(path);
+      if (stat.isDirectory()) {
+        entries.push([relativePath, "directory", stat.mode & 0o7777]);
+        visit(path);
+      } else if (stat.isSymbolicLink()) {
+        entries.push([relativePath, "symlink", realpathSync(path)]);
+      } else {
+        entries.push([relativePath, "file", stat.mode & 0o7777, createHash("sha256").update(readFileSync(path)).digest("hex")]);
+      }
+    }
+  };
+  visit(root);
+  return entries;
+}
+
 /** An empty bare repo — a valid push target that shares no history with the seeded origin. */
 function initEmptyBare() {
   const bare = mkdtempSync(join(tmpdir(), "oms-source-"));
@@ -162,7 +194,7 @@ function gitTopLevelStubEnv(mode) {
 
 // --- help / scaffolding / validation (no git operations) ---
 
-test("help is exposed as oms with the submodule commands", () => {
+test("help is exposed as oms with the workspace commands", () => {
   const result = run(["--help"]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Usage: oms/);
@@ -177,7 +209,7 @@ test("help is exposed as oms with the submodule commands", () => {
   assert.match(result.stdout, /\bagent\b/);
   assert.match(result.stdout, /\bskills\b/);
   assert.match(result.stdout, /\bupdate\b/);
-  assert.doesNotMatch(result.stdout, /\bworktree\b/);
+  assert.match(result.stdout, /\bworktree\b/);
   assert.doesNotMatch(result.stdout, /\bmigrate\b/);
 });
 
@@ -218,6 +250,439 @@ test("init scaffolds oms.yaml with the schema comment and does not gitignore oms
   }
 });
 
+test("mode switch manifest editing rejects symlinks and preserves unrelated YAML bytes", () => {
+  const cwd = tempWorkspace();
+  const source = "# header\r\nmode: 'submodule' # keep\r\nrepos:\r\n  - alias: api\r\n    remotes:\r\n      origin: git@example.com:org/repo.git\r\n";
+  writeFileSync(join(cwd, "oms.yaml"), source);
+  const switched = run(["mode", "switch", "worktree", "--no-sync"], { cwd });
+  assert.equal(switched.status, 0, switched.stdout + switched.stderr);
+  assert.equal(
+    readFileSync(join(cwd, "oms.yaml"), "utf8"),
+    source.replace("'submodule'", "'worktree'"),
+  );
+
+  const target = join(cwd, "manifest-target.yaml");
+  writeFileSync(target, source);
+  rmSync(join(cwd, "oms.yaml"));
+  symlinkSync(target, join(cwd, "oms.yaml"));
+  const refused = run(["mode", "switch", "worktree", "--no-sync"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, /regular workspace-local file.*symbolic link/);
+  assert.equal(readFileSync(target, "utf8"), source);
+});
+
+test("mode switch requires an explicit non-interactive scope and transitions clean topology both ways", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+
+  const missingScope = run(["mode", "switch", "worktree"], { cwd });
+  assert.equal(missingScope.status, 1, missingScope.stdout + missingScope.stderr);
+  assert.match(missingScope.stdout + missingScope.stderr, /--sync.*--no-sync/);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, undefined);
+  const ownershipBytes = readFileSync(join(cwd, ".oms", "workspace.json"));
+
+  const toWorktree = run(["mode", "switch", "worktree", "--no-sync"], { cwd });
+  assert.equal(toWorktree.status, 0, toWorktree.stdout + toWorktree.stderr);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "worktree");
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const toSubmodule = run(["mode", "switch", "submodule", "--no-sync"], { cwd });
+  assert.equal(toSubmodule.status, 0, toSubmodule.stdout + toSubmodule.stderr);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "submodule");
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), false);
+  assert.equal(existsSync(join(cwd, ".oms", "workspace.json")), true);
+  assert.deepEqual(readFileSync(join(cwd, ".oms", "workspace.json")), ownershipBytes);
+  const exclude = readFileSync(resolve(cwd, gitOut(cwd, "rev-parse", "--git-path", "info/exclude")), "utf8");
+  assert.match(exclude, /\.oms\/workspace\.json/);
+  assert.match(exclude, /\.oms-mode-switch\.json/);
+  assert.doesNotMatch(exclude, /\.oms\/repos\//);
+  assert.doesNotMatch(exclude, /\/oms\/api\//);
+});
+
+test("interactive mode switch selects transition-only and transition-plus-sync in both directions", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const transitionOnly = run(["mode", "switch", "worktree"], {
+    cwd,
+    env: queueEnv([{ type: "select", value: "no-sync" }]),
+  });
+  assert.equal(transitionOnly.status, 0, transitionOnly.stdout + transitionOnly.stderr);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "worktree");
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), false);
+
+  const transitionAndSync = run(["mode", "switch", "submodule"], {
+    cwd,
+    env: queueEnv([{ type: "select", value: "sync" }]),
+  });
+  assert.equal(transitionAndSync.status, 0, transitionAndSync.stdout + transitionAndSync.stderr);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "submodule");
+  assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
+  assert.match(gitOut(cwd, "ls-files", "--stage", "oms/api"), /^160000 [0-9a-f]{40} 0\toms\/api$/);
+});
+
+test("mode switch recovers only a stale lock matching its journal identities", () => {
+  const cwd = tempWorkspace();
+  writeSources(cwd);
+  mkdirSync(join(cwd, ".oms"));
+  const workspaceId = "11111111-1111-4111-8111-111111111111";
+  writeFileSync(join(cwd, ".oms", "workspace.json"), `${JSON.stringify({ version: 1, workspaceId })}\n`);
+  const transitionId = "transition-test";
+  const operationId = "operation-test";
+  const manifestBytes = readFileSync(join(cwd, "oms.yaml"));
+  const expectedManifest = Buffer.from(`mode: worktree\n${manifestBytes.toString("utf8")}`);
+  const journal = {
+    version: 1,
+    transitionId,
+    lockOperationId: operationId,
+    workspaceId,
+    sourceMode: "submodule",
+    targetMode: "worktree",
+    sync: false,
+    commit: false,
+    force: false,
+    originalManifestHash: createHash("sha256").update(manifestBytes).digest("hex"),
+    expectedManifestHash: createHash("sha256").update(expectedManifest).digest("hex"),
+    modeRange: [0, 0],
+    modeToken: null,
+    rootIndex: null,
+    exclude: null,
+    rootHeadBefore: null,
+    phase: "prepared",
+    completedAliases: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  const lock = {
+    version: 1,
+    operation: "mode switch",
+    operationId,
+    ownerToken: "old-owner",
+    targetHash: createHash("sha256").update(realpathSync(cwd)).digest("hex"),
+    workspaceId,
+    transitionId,
+    pid: process.pid,
+    processStart: "not-the-current-process-start",
+    startedAt: "2026-01-01T00:00:00.000Z",
+  };
+  writeFileSync(join(cwd, ".oms-mode-switch.json"), `${JSON.stringify(journal)}\n`);
+  const lockPath = join(cwd, ".oms-mutation.lock");
+  const journalPath = join(cwd, ".oms-mode-switch.json");
+  const writeLock = (value) => writeFileSync(lockPath, typeof value === "string" ? value : `${JSON.stringify(value)}\n`);
+
+  const liveLock = {
+    ...lock,
+    processStart: execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8" }).trim(),
+  };
+  writeLock(liveLock);
+  const live = run(["mode", "switch", "worktree", "--no-sync"], { cwd });
+  assert.equal(live.status, 1, live.stdout + live.stderr);
+  assert.match(live.stdout + live.stderr, /still owns/);
+  assert.equal(existsSync(journalPath), true);
+
+  writeLock({ ...lock, operationId: "identity-mismatch" });
+  const mismatched = run(["mode", "switch", "worktree", "--no-sync"], { cwd });
+  assert.equal(mismatched.status, 1, mismatched.stdout + mismatched.stderr);
+  assert.match(mismatched.stdout + mismatched.stderr, /does not match the mode-switch journal/);
+  assert.equal(existsSync(journalPath), true);
+
+  writeLock("{ malformed\n");
+  const malformed = run(["mode", "switch", "worktree", "--no-sync"], { cwd });
+  assert.equal(malformed.status, 1, malformed.stdout + malformed.stderr);
+  assert.match(malformed.stdout + malformed.stderr, /mutation\.lock is malformed/);
+  assert.equal(existsSync(journalPath), true);
+
+  writeLock(lock);
+
+  const result = run(["mode", "switch", "worktree", "--no-sync"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "worktree");
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+  assert.equal(existsSync(join(cwd, ".oms-mutation.lock")), false);
+});
+
+test("mode switch preserves unrelated index entries and resumes a failed scoped commit", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  writeFileSync(join(cwd, "unrelated.txt"), "staged before transition\n");
+  git(cwd, "add", "unrelated.txt");
+  const unrelatedEntry = gitOut(cwd, "ls-files", "--stage", "unrelated.txt");
+
+  const rejected = run(["mode", "switch", "worktree", "--no-sync", "--commit"], { cwd });
+  assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
+  assert.match(rejected.stdout + rejected.stderr, /unrelated staged changes/);
+  assert.equal(gitOut(cwd, "ls-files", "--stage", "unrelated.txt"), unrelatedEntry);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, undefined);
+
+  git(cwd, "reset", "HEAD", "unrelated.txt");
+  const hook = join(cwd, ".git", "hooks", "pre-commit");
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+  chmodSync(hook, 0o755);
+  const failed = run(["mode", "switch", "worktree", "--no-sync", "--commit"], { cwd });
+  assert.equal(failed.status, 2, failed.stdout + failed.stderr);
+  assert.match(failed.stdout + failed.stderr, /root commit failed.*remain staged/i);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), true);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "worktree");
+  assert.ok(gitOut(cwd, "diff", "--cached", "--name-only").split("\n").includes("oms.yaml"));
+
+  const standalone = run(["sync", "api"], { cwd });
+  assert.equal(standalone.status, 1, standalone.stdout + standalone.stderr);
+  assert.match(standalone.stdout + standalone.stderr, /Standalone sync is blocked by transition/);
+
+  rmSync(hook);
+  const resumed = run(["mode", "switch", "worktree", "--no-sync", "--commit"], { cwd });
+  assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr);
+  assert.equal(gitOut(cwd, "show", "-s", "--format=%s", "HEAD"), "chore(oms): switch workspace mode to worktree");
+  const committed = gitOut(cwd, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n");
+  assert.ok(committed.includes("oms.yaml"));
+  assert.ok(committed.every((path) => ["oms.yaml", ".gitmodules", "oms/api"].includes(path)));
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+  assert.equal(existsSync(join(cwd, ".oms", "workspace.json")), true);
+});
+
+test("mode switch signing failure retains staged recovery state", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  const signingEnv = {
+    ...testEnv,
+    GIT_CONFIG_COUNT: "5",
+    GIT_CONFIG_VALUE_1: "true",
+    GIT_CONFIG_KEY_4: "user.signingkey",
+    GIT_CONFIG_VALUE_4: "oms-test-missing-signing-key",
+  };
+
+  const failed = run(["mode", "switch", "worktree", "--no-sync", "--commit"], { cwd, env: signingEnv });
+  assert.equal(failed.status, 2, failed.stdout + failed.stderr);
+  assert.match(failed.stdout + failed.stderr, /root commit failed.*remain staged/i);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), true);
+  assert.ok(gitOut(cwd, "diff", "--cached", "--name-only").split("\n").includes("oms.yaml"));
+
+  const resumed = run(["mode", "switch", "worktree", "--no-sync", "--commit"], { cwd });
+  assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+});
+
+test("mode switch preserves complete local refs and raw object closure in staged worktree storage", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  const source = join(cwd, "oms", "api");
+  git(source, "switch", "-c", "local-only");
+  writeFileSync(join(source, "local.txt"), "local closure\n");
+  git(source, "add", "local.txt");
+  git(source, "commit", "-m", "local-only commit");
+  const localOid = gitOut(source, "rev-parse", "HEAD");
+  git(source, "branch", "-f", "main", localOid);
+  git(source, "tag", "-a", "local-tag", "-m", "local tag");
+  const tagOid = gitOut(source, "rev-parse", "refs/tags/local-tag");
+  git(source, "update-ref", "refs/archive/local", localOid);
+  git(source, "notes", "add", "-m", "local note", localOid);
+  const notesOid = gitOut(source, "rev-parse", "refs/notes/commits");
+  writeFileSync(join(source, "stash.txt"), "local stash\n");
+  git(source, "add", "stash.txt");
+  git(source, "stash", "push", "-m", "local stash");
+  const stashOid = gitOut(source, "rev-parse", "refs/stash");
+  git(source, "commit", "--allow-empty", "-m", "replacement commit");
+  const replacementOid = gitOut(source, "rev-parse", "HEAD");
+  git(source, "reset", "--hard", localOid);
+  git(source, "replace", localOid, replacementOid);
+
+  const switched = run(["mode", "switch", "worktree", "--sync", "--preserve-local"], { cwd });
+  assert.equal(switched.status, 0, switched.stdout + switched.stderr);
+  assert.match(switched.stdout + switched.stderr, /mode switch never pushes/i);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  assert.equal(gitOut(common, "rev-parse", "refs/heads/local-only"), localOid);
+  assert.equal(gitOut(common, "rev-parse", "refs/heads/main"), localOid);
+  assert.equal(gitOut(common, "rev-parse", "refs/tags/local-tag"), tagOid);
+  assert.equal(gitOut(common, "rev-parse", "refs/archive/local"), localOid);
+  assert.equal(gitOut(common, "rev-parse", "refs/notes/commits"), notesOid);
+  assert.equal(gitOut(common, "rev-parse", "refs/stash"), stashOid);
+  assert.equal(gitOut(common, "rev-parse", `refs/replace/${localOid}`), replacementOid);
+  assert.equal(gitOut(common, "cat-file", "-t", replacementOid), "commit");
+  assert.equal(gitOut(common, "cat-file", "-p", `${localOid}:local.txt`), "local closure");
+  const baselineWorktree = join(cwd, "oms", "api", "main");
+  assert.equal(gitOut(baselineWorktree, "rev-parse", "HEAD"), localOid);
+  assert.equal(gitOut(baselineWorktree, "for-each-ref", "--format=%(upstream:short)", "refs/heads/main"), "origin/main");
+  assert.notEqual(spawnSync("git", ["-C", bare, "rev-parse", "--verify", "refs/heads/local-only"], { env: testEnv }).status, 0);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+});
+
+test("interactive mode switch can cancel local preservation before topology mutation", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  const source = join(cwd, "oms", "api");
+  git(source, "commit", "--allow-empty", "-m", "unpublished");
+  const sourceHead = gitOut(source, "rev-parse", "HEAD");
+
+  const nonInteractive = run(["mode", "switch", "worktree", "--sync"], { cwd });
+  assert.equal(nonInteractive.status, 1, nonInteractive.stdout + nonInteractive.stderr);
+  assert.match(nonInteractive.stdout + nonInteractive.stderr, /--sync --preserve-local.*--force.*publish suitable refs manually/is);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+
+  const cancelled = run(["mode", "switch", "worktree", "--sync"], {
+    cwd,
+    env: queueEnv([{ type: "select", value: "cancel" }]),
+  });
+  assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
+  assert.match(cancelled.stdout + cancelled.stderr, /publish suitable state manually.*mode switch never pushes/i);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, undefined);
+  assert.equal(gitOut(source, "rev-parse", "HEAD"), sourceHead);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+});
+
+test("mode switch never removes a submodule common repository with an external linked worktree", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  const source = join(cwd, "oms", "api");
+  const external = tempWorkspace();
+  rmSync(external, { recursive: true, force: true });
+  git(source, "branch", "external", "main");
+  git(source, "worktree", "add", external, "external");
+
+  const refused = run(["mode", "switch", "worktree", "--no-sync", "--force"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, /external linked worktree.*blocks mode switch.*--force cannot bypass/s);
+  assert.equal(existsSync(external), true);
+  assert.equal(existsSync(source), true);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+});
+
+test("mode switch installs an explicitly selected unpublished worktree OID as the submodule gitlink", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = initGitWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  writeFileSync(join(cwd, "unrelated.txt"), "preserve index flags\n");
+  git(cwd, "add", "unrelated.txt");
+  git(cwd, "commit", "-m", "track unrelated root file");
+  git(cwd, "update-index", "--skip-worktree", "unrelated.txt");
+  writeFileSync(join(cwd, "staged-root.txt"), "preserve staged mode\n");
+  git(cwd, "add", "staged-root.txt");
+  git(cwd, "update-index", "--chmod=+x", "staged-root.txt");
+  const unrelatedFlag = gitOut(cwd, "ls-files", "-v", "unrelated.txt");
+  const stagedRootEntry = gitOut(cwd, "ls-files", "--stage", "staged-root.txt");
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const dev = join(cwd, "oms", "api", "dev");
+  writeFileSync(join(dev, "selected.txt"), "selected unpublished closure\n");
+  git(dev, "add", "selected.txt");
+  git(dev, "commit", "-m", "selected unpublished commit");
+  const selectedOid = gitOut(dev, "rev-parse", "HEAD");
+
+  const ambiguous = run(["mode", "switch", "submodule", "--sync"], { cwd });
+  assert.equal(ambiguous.status, 1, ambiguous.stdout + ambiguous.stderr);
+  assert.match(ambiguous.stdout + ambiguous.stderr, /multiple viable pointer sources.*--source/s);
+  assert.equal(existsSync(dev), true);
+
+  const switched = run(["mode", "switch", "submodule", "--sync", "--source", "api/dev"], { cwd });
+  assert.equal(switched.status, 0, switched.stdout + switched.stderr);
+  const submodule = join(cwd, "oms", "api");
+  assert.equal(gitOut(submodule, "rev-parse", "HEAD"), selectedOid);
+  assert.equal(gitOut(cwd, "ls-files", "--stage", "oms/api").split(/\s+/)[1], selectedOid);
+  assert.equal(gitOut(cwd, "ls-files", "-v", "unrelated.txt"), unrelatedFlag);
+  assert.equal(gitOut(cwd, "ls-files", "--stage", "staged-root.txt"), stagedRootEntry);
+  assert.equal(readFileSync(join(submodule, "selected.txt"), "utf8"), "selected unpublished closure\n");
+  assert.notEqual(spawnSync("git", ["-C", bare, "cat-file", "-e", selectedOid], { env: testEnv }).status, 0);
+  assert.equal(existsSync(join(cwd, ".oms-mode-switch.json")), false);
+});
+
+test("mode switch resumes manifest-rename and commit-success interruptions without duplicate commits", () => {
+  const bare = initBareUpstream();
+  const manifestInterrupted = initGitWorkspace();
+  writeSources(manifestInterrupted, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd: manifestInterrupted }).status, 0);
+  const renamed = run(["mode", "switch", "worktree", "--no-sync"], {
+    cwd: manifestInterrupted,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_CRASH_AT: "mode-switch-after-manifest-rename" },
+  });
+  assert.equal(renamed.status, 137, renamed.stdout + renamed.stderr);
+  assert.equal(parseYaml(readFileSync(join(manifestInterrupted, "oms.yaml"), "utf8")).mode, "worktree");
+  const renameResume = run(["mode", "switch", "worktree", "--no-sync"], { cwd: manifestInterrupted });
+  assert.equal(renameResume.status, 0, renameResume.stdout + renameResume.stderr);
+
+  const commitInterrupted = initGitWorkspace();
+  writeSources(commitInterrupted, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd: commitInterrupted }).status, 0);
+  const committed = run(["mode", "switch", "worktree", "--no-sync", "--commit"], {
+    cwd: commitInterrupted,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_CRASH_AT: "mode-switch-after-root-finalize" },
+  });
+  assert.equal(committed.status, 137, committed.stdout + committed.stderr);
+  const transitionHead = gitOut(commitInterrupted, "rev-parse", "HEAD");
+  const commitResume = run(["mode", "switch", "worktree", "--no-sync", "--commit"], { cwd: commitInterrupted });
+  assert.equal(commitResume.status, 0, commitResume.stdout + commitResume.stderr);
+  assert.equal(gitOut(commitInterrupted, "rev-parse", "HEAD"), transitionHead);
+  const transitionSubjects = gitOut(commitInterrupted, "log", "--format=%s").split("\n")
+    .filter((subject) => subject === "chore(oms): switch workspace mode to worktree");
+  assert.equal(transitionSubjects.length, 1);
+});
+
+test("standalone submodule sync refuses stale worktree exclude cleanup without changing it", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  const excludePath = resolve(cwd, gitOut(cwd, "rev-parse", "--git-path", "info/exclude"));
+  const exclude = readFileSync(excludePath, "utf8");
+  const stale = exclude.replace(/(# oms workspace [0-9a-f-]+ end)/, "/.oms/repos/\n$1");
+  writeFileSync(excludePath, stale);
+
+  const refused = run(["sync", "api"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, /worktree-mode local-exclude rule.*remains/);
+  assert.equal(readFileSync(excludePath, "utf8"), stale);
+});
+
+test("mode switch resolves a fresh baseline when no viable managed worktree exists", () => {
+  const bare = initBareUpstream();
+  const expected = gitOut(bare, "rev-parse", "refs/heads/main");
+  const cwd = initGitWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "remove", "api/main"], { cwd }).status, 0);
+
+  const switched = run(["mode", "switch", "submodule", "--sync"], { cwd });
+  assert.equal(switched.status, 0, switched.stdout + switched.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "rev-parse", "HEAD"), expected);
+  assert.equal(gitOut(cwd, "ls-files", "--stage", "oms/api").split(/\s+/)[1], expected);
+});
+
+test("selected target object-copy and connectivity failures preserve worktree source topology", () => {
+  for (const failure of ["mode-switch-object-copy", "mode-switch-connectivity"]) {
+    const bare = initBareUpstream();
+    const cwd = initGitWorkspace();
+    writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+    assert.equal(run(["sync", "api"], { cwd }).status, 0);
+    const source = join(cwd, "oms", "api", "main");
+    writeFileSync(join(source, "selected-local.txt"), `${failure}\n`);
+    git(source, "add", "selected-local.txt");
+    git(source, "commit", "-m", failure);
+    const selectedOid = gitOut(source, "rev-parse", "HEAD");
+
+    const refused = run(["mode", "switch", "submodule", "--sync", "--force"], {
+      cwd,
+      env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_FAIL_AT: failure },
+    });
+    assert.equal(refused.status, 2, refused.stdout + refused.stderr);
+    assert.match(refused.stdout + refused.stderr, new RegExp(failure.replaceAll("-", "[- ]"), "i"));
+    assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "worktree");
+    assert.equal(gitOut(source, "rev-parse", "HEAD"), selectedOid);
+    assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), true);
+  }
+});
+
 test("init removes a stale managed oms/ entry left in .gitignore", () => {
   const cwd = tempWorkspace();
   writeFileSync(join(cwd, ".gitignore"), "node_modules/\n# managed by oms\noms/\n");
@@ -245,6 +710,75 @@ test("init --force overwrites", () => {
   const result = run(["init", "--force"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(readFileSync(join(cwd, "oms.yaml"), "utf8"), /alias: example/);
+});
+
+test("init --mode worktree writes an explicit mode and needs no root Git repository", () => {
+  const cwd = tempWorkspace();
+  const result = run(["init", "--mode", "worktree"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "worktree");
+  assert.doesNotMatch(output, /run "git init" here/);
+  assert.match(output, /local worktrees/);
+});
+
+test("init --mode worktree permits a workspace nested below an enclosing Git root", () => {
+  const root = initGitWorkspace();
+  const cwd = join(root, "nested");
+  mkdirSync(cwd);
+  const result = run(["init", "--mode", "worktree"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(parseYaml(readFileSync(join(cwd, "oms.yaml"), "utf8")).mode, "worktree");
+});
+
+test("init rejects an invalid mode before writing", () => {
+  const cwd = tempWorkspace();
+  const result = run(["init", "--mode", "mixed"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /expected "submodule" or "worktree"/);
+  assert.equal(existsSync(join(cwd, "oms.yaml")), false);
+});
+
+test("manifest accepts both workspace modes and defaults omission to submodule", () => {
+  for (const modeLine of ["", "mode: submodule\n", "mode: worktree\n"]) {
+    const cwd = tempWorkspace();
+    writeSources(cwd, `${modeLine}repos:\n  - alias: api\n    remotes:\n      origin: git@example.com:org/api.git\n`);
+    const result = run(["sync", "--list"], { cwd });
+    assert.equal(result.status, 0, `${modeLine || "omitted"}\n${result.stdout}${result.stderr}`);
+  }
+});
+
+test("manifest rejects repository-level mode", () => {
+  const cwd = tempWorkspace();
+  writeSources(cwd, "mode: worktree\nrepos:\n  - alias: api\n    mode: submodule\n    remotes:\n      origin: git@example.com:org/api.git\n");
+  const result = run(["sync", "--list"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /repos\[0\] has unknown key "mode"/);
+});
+
+test("worktree mode rejects credential-bearing and executable remote endpoints", () => {
+  for (const url of [
+    "https://user@example.com/org/api.git",
+    "https://user:secret@example.com/org/api.git",
+    "https://example.com/org/api.git?token=secret",
+    "https://example.com/org/api.git#secret",
+    "ext::sh -c secret",
+    "custom-helper://example.com/org/api.git",
+  ]) {
+    const cwd = tempWorkspace();
+    writeSources(cwd, `mode: worktree\nrepos:\n  - alias: api\n    remotes:\n      origin: ${url}\n`);
+    const result = run(["sync", "--list"], { cwd });
+    assert.equal(result.status, 1, `${url}\n${result.stdout}${result.stderr}`);
+  }
+});
+
+test("worktree mode permits credential-free SSH endpoints", () => {
+  for (const url of ["ssh://git@example.com/org/api.git", "git@example.com:org/api.git", "example.com:org/api.git"]) {
+    const cwd = tempWorkspace();
+    writeSources(cwd, `mode: worktree\nrepos:\n  - alias: api\n    remotes:\n      origin: ${url}\n`);
+    const result = run(["sync", "--list"], { cwd });
+    assert.equal(result.status, 0, `${url}\n${result.stdout}${result.stderr}`);
+  }
 });
 
 test("init succeeds at a Git top-level", () => {
@@ -593,6 +1127,1635 @@ test("sync registers a submodule on its baseline branch and tracks it in the par
   }
 });
 
+test("worktree sync provisions an owned bare common repository and relative first checkout", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const checkout = join(cwd, "oms", "api", "main");
+  assert.equal(gitOut(common, "rev-parse", "--is-bare-repository"), "true");
+  assert.equal(gitOut(common, "config", "--get", "worktree.useRelativePaths"), "true");
+  assert.equal(gitOut(common, "config", "--get", "oms.alias"), "api");
+  assert.equal(gitOut(common, "config", "--get", "remote.origin.fetch"), "+refs/heads/*:refs/remotes/origin/*");
+  assert.equal(gitOut(checkout, "branch", "--show-current"), "main");
+  assert.equal(gitOut(checkout, "rev-parse", "HEAD"), gitOut(bare, "rev-parse", "refs/heads/main"));
+  assert.doesNotMatch(readFileSync(join(checkout, ".git"), "utf8"), new RegExp(cwd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+  const ownership = JSON.parse(readFileSync(join(cwd, ".oms", "workspace.json"), "utf8"));
+  assert.equal(gitOut(common, "config", "--get", "oms.workspaceId"), ownership.workspaceId);
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".oms", "provisioning", "api.json"), "utf8")).phase, "complete");
+  assert.match(JSON.parse(readFileSync(join(cwd, ".oms", "fetch-provenance", "api", "origin.json"), "utf8")).fingerprint, /^[0-9a-f]{64}$/);
+});
+
+test("a moved whole worktree workspace keeps relative common-repository links", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const head = gitOut(join(cwd, "oms", "api", "main"), "rev-parse", "HEAD");
+  const movedParent = tempWorkspace();
+  const moved = join(movedParent, "workspace");
+  renameSync(cwd, moved);
+
+  const checkout = join(moved, "oms", "api", "main");
+  assert.equal(
+    realpathSync(gitOut(checkout, "rev-parse", "--path-format=absolute", "--git-common-dir")),
+    realpathSync(join(moved, ".oms", "repos", "api.git")),
+  );
+  assert.equal(gitOut(checkout, "rev-parse", "HEAD"), head);
+  const status = run(["status", "--json"], { cwd: moved });
+  assert.equal(status.status, 0, status.stdout + status.stderr);
+  assert.equal(JSON.parse(status.stdout).repos[0].worktrees[0].target, "api/main");
+});
+
+test("initial worktree sync preserves common state when origin HEAD is unresolved", () => {
+  const bare = initEmptyBare();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\nrepos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /origin baseline could not be resolved/);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), true);
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".oms", "provisioning", "api.json"), "utf8")).phase, "common-ready");
+});
+
+test("initial worktree sync retries after origin fetch failure", () => {
+  const bare = initBareUpstream();
+  const unavailable = `${bare}.unavailable`;
+  renameSync(bare, unavailable);
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+
+  const failed = run(["sync", "api"], { cwd });
+  assert.equal(failed.status, 2, failed.stdout + failed.stderr);
+  assert.match(failed.stdout + failed.stderr, /fetch origin failed/);
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".oms", "provisioning", "api.json"), "utf8")).phase, "common-ready");
+  assert.equal(existsSync(join(cwd, "oms", "api", "main")), false);
+
+  renameSync(unavailable, bare);
+  const retried = run(["sync", "api"], { cwd });
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api", "main"), "branch", "--show-current"), "main");
+});
+
+test("subsequent worktree sync refreshes remote refs without moving the checked-out branch", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const localBefore = gitOut(checkout, "rev-parse", "HEAD");
+
+  const seed = mkdtempSync(join(tmpdir(), "oms-seed-"));
+  execFileSync("git", ["clone", bare, seed], { stdio: "ignore", env: testEnv });
+  configIdentity(seed);
+  git(seed, "commit", "--allow-empty", "-m", "remote advance");
+  git(seed, "push", "origin", "main");
+  const remoteAfter = gitOut(bare, "rev-parse", "refs/heads/main");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(checkout, "rev-parse", "HEAD"), localBefore);
+  assert.equal(gitOut(common, "rev-parse", "refs/remotes/origin/main"), remoteAfter);
+});
+
+test("initial worktree sync can explicitly continue after only an additional remote fails", () => {
+  const origin = initBareUpstream();
+  const missing = join(tempWorkspace(), "missing.git");
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", origin, "main", { backup: missing })}`);
+
+  const result = run(["sync", "api"], {
+    cwd,
+    env: queueEnv([{ type: "select", value: "continue" }]),
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /continuing with degraded remote state/);
+  assert.match(result.stdout + result.stderr, /failed remote\(s\): backup/);
+  assert.equal(gitOut(join(cwd, "oms", "api", "main"), "branch", "--show-current"), "main");
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".oms", "provisioning", "api.json"), "utf8")).phase, "complete");
+});
+
+test("initial worktree sync cancel and non-interactive refusal preserve fetched state without a checkout", () => {
+  for (const response of [[{ type: "select", value: "cancel" }], null]) {
+    const origin = initBareUpstream();
+    const missing = join(tempWorkspace(), "missing.git");
+    const cwd = tempWorkspace();
+    writeSources(cwd, `mode: worktree\n${sourceFor("api", origin, "main", { backup: missing })}`);
+
+    const result = run(["sync", "api"], response ? { cwd, env: queueEnv(response) } : { cwd });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.equal(existsSync(join(cwd, "oms", "api", "main")), false);
+    assert.equal(JSON.parse(readFileSync(join(cwd, ".oms", "provisioning", "api.json"), "utf8")).phase, "common-ready");
+    assert.match(gitOut(join(cwd, ".oms", "repos", "api.git"), "rev-parse", "refs/remotes/origin/main"), /^[0-9a-f]{40}$/);
+  }
+});
+
+test("subsequent worktree sync attempts every remote and aggregates partial operational failure", () => {
+  const origin = initBareUpstream();
+  const broken = initBareUpstream();
+  const mirror = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", origin, "main", { broken, mirror })}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const localBefore = gitOut(checkout, "rev-parse", "HEAD");
+  const unavailable = `${broken}.unavailable`;
+  renameSync(broken, unavailable);
+
+  const originSeed = mkdtempSync(join(tmpdir(), "oms-seed-"));
+  execFileSync("git", ["clone", origin, originSeed], { stdio: "ignore", env: testEnv });
+  configIdentity(originSeed);
+  git(originSeed, "commit", "--allow-empty", "-m", "origin advance");
+  git(originSeed, "push", "origin", "main");
+  const mirrorSeed = mkdtempSync(join(tmpdir(), "oms-seed-"));
+  execFileSync("git", ["clone", mirror, mirrorSeed], { stdio: "ignore", env: testEnv });
+  configIdentity(mirrorSeed);
+  git(mirrorSeed, "commit", "--allow-empty", "-m", "mirror advance");
+  git(mirrorSeed, "push", "origin", "main");
+
+  const partial = run(["sync", "api"], { cwd });
+  assert.equal(partial.status, 2, partial.stdout + partial.stderr);
+  assert.match(partial.stdout + partial.stderr, /fetched origin/);
+  assert.match(partial.stdout + partial.stderr, /fetch broken failed/);
+  assert.match(partial.stdout + partial.stderr, /fetched mirror/);
+  assert.equal(gitOut(common, "rev-parse", "refs/remotes/origin/main"), gitOut(origin, "rev-parse", "refs/heads/main"));
+  assert.equal(gitOut(common, "rev-parse", "refs/remotes/mirror/main"), gitOut(mirror, "rev-parse", "refs/heads/main"));
+  assert.equal(gitOut(checkout, "rev-parse", "HEAD"), localBefore);
+
+  renameSync(unavailable, broken);
+  const rerun = run(["sync", "api"], { cwd });
+  assert.equal(rerun.status, 0, rerun.stdout + rerun.stderr);
+  assert.match(rerun.stdout + rerun.stderr, /fetched origin/);
+  assert.match(rerun.stdout + rerun.stderr, /fetched broken/);
+  assert.match(rerun.stdout + rerun.stderr, /fetched mirror/);
+  assert.equal(gitOut(checkout, "rev-parse", "HEAD"), localBefore);
+});
+
+test("worktree sync fails closed when provisioning state is missing beside an existing common repository", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const remoteBefore = gitOut(common, "rev-parse", "refs/remotes/origin/main");
+  rmSync(join(cwd, ".oms", "provisioning", "api.json"));
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /provisioning state is missing beside an existing common repository/);
+  assert.match(result.stdout + result.stderr, /preserved common repository/);
+  assert.equal(gitOut(common, "rev-parse", "refs/remotes/origin/main"), remoteBefore);
+});
+
+test("worktree sync fails closed on malformed provisioning state", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const provisioningPath = join(cwd, ".oms", "provisioning", "api.json");
+  writeFileSync(provisioningPath, "{ malformed\n");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /provisioning state is malformed/);
+  assert.equal(readFileSync(provisioningPath, "utf8"), "{ malformed\n");
+});
+
+test("worktree sync rejects a symlinked provisioning journal before remote mutation", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  const external = tempWorkspace();
+  mkdirSync(join(cwd, ".oms"));
+  symlinkSync(external, join(cwd, ".oms", "provisioning"), "dir");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /symbolic link/);
+  assert.equal(existsSync(join(external, "api.json")), false);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  assert.equal(existsSync(common), true);
+  assert.equal(gitOut(common, "for-each-ref", "--format=%(refname)", "refs/remotes"), "");
+});
+
+test("worktree sync never reads or deletes provenance through a symlink", () => {
+  const bare = initBareUpstream();
+  const replacement = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const provenanceRoot = join(cwd, ".oms", "fetch-provenance");
+  rmSync(provenanceRoot, { recursive: true, force: true });
+  const external = tempWorkspace();
+  mkdirSync(join(external, "api"));
+  const canary = join(external, "api", "origin.json");
+  writeFileSync(canary, "external provenance canary\n");
+  symlinkSync(external, provenanceRoot, "dir");
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", replacement)}`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /symbolic link/);
+  assert.equal(readFileSync(canary, "utf8"), "external provenance canary\n");
+});
+
+test("worktree sync adopts an interruption-created matching first worktree", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const provisioningPath = join(cwd, ".oms", "provisioning", "api.json");
+  const provisioning = JSON.parse(readFileSync(provisioningPath, "utf8"));
+  writeFileSync(provisioningPath, `${JSON.stringify({ ...provisioning, phase: "branch-ready" }, null, 2)}\n`);
+  const checkout = join(cwd, "oms", "api", "main");
+  const headBefore = gitOut(checkout, "rev-parse", "HEAD");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(JSON.parse(readFileSync(provisioningPath, "utf8")).phase, "complete");
+  assert.equal(gitOut(checkout, "rev-parse", "HEAD"), headBefore);
+  assert.equal(gitOut(join(cwd, ".oms", "repos", "api.git"), "worktree", "list", "--porcelain").match(/^worktree /gm).length, 2);
+});
+
+test("worktree sync refuses conflicting worktree-created phase identity", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const provisioningPath = join(cwd, ".oms", "provisioning", "api.json");
+  const provisioning = JSON.parse(readFileSync(provisioningPath, "utf8"));
+  writeFileSync(provisioningPath, `${JSON.stringify({ ...provisioning, phase: "worktree-created", name: "other" }, null, 2)}\n`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /worktree topology is missing or ambiguous/);
+  assert.equal(JSON.parse(readFileSync(provisioningPath, "utf8")).phase, "worktree-created");
+  assert.equal(existsSync(join(cwd, "oms", "api", "other")), false);
+});
+
+test("worktree sync refuses a conflicting branch-ready branch before fetching", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const provisioningPath = join(cwd, ".oms", "provisioning", "api.json");
+  const provisioning = JSON.parse(readFileSync(provisioningPath, "utf8"));
+  writeFileSync(provisioningPath, `${JSON.stringify({ ...provisioning, phase: "branch-ready" }, null, 2)}\n`);
+  git(join(cwd, "oms", "api", "main"), "commit", "--allow-empty", "-m", "conflicting local commit");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /provisioning branch main conflicts with origin\/main/);
+  assert.equal(JSON.parse(readFileSync(provisioningPath, "utf8")).phase, "branch-ready");
+});
+
+test("worktree sync preserves branch-ready state and removes only its empty directory after add failure", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [[ " $* " == *" worktree add "* ]]; then echo "injected worktree add failure" >&2; exit 2; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+
+  const result = run(["sync", "api"], { cwd, env: { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` } });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /local branch main and any partial checkout were preserved/);
+  assert.equal(existsSync(join(cwd, "oms", "api", "main")), false);
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".oms", "provisioning", "api.json"), "utf8")).phase, "branch-ready");
+  assert.match(gitOut(join(cwd, ".oms", "repos", "api.git"), "rev-parse", "refs/heads/main"), /^[0-9a-f]{40}$/);
+
+  const retried = run(["sync", "api"], { cwd });
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".oms", "provisioning", "api.json"), "utf8")).phase, "complete");
+  assert.equal(gitOut(join(cwd, "oms", "api", "main"), "branch", "--show-current"), "main");
+});
+
+test("common-ready recovery preserves its validated local branch when the remote advances", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  const localBefore = gitOut(checkout, "rev-parse", "HEAD");
+  assert.equal(run(["worktree", "remove", "api/main"], { cwd }).status, 0);
+  const provisioningPath = join(cwd, ".oms", "provisioning", "api.json");
+  const provisioning = JSON.parse(readFileSync(provisioningPath, "utf8"));
+  writeFileSync(provisioningPath, `${JSON.stringify({ ...provisioning, phase: "common-ready", branch: null, name: null }, null, 2)}\n`);
+
+  const seed = mkdtempSync(join(tmpdir(), "oms-seed-"));
+  execFileSync("git", ["clone", bare, seed], { stdio: "ignore", env: testEnv });
+  configIdentity(seed);
+  git(seed, "commit", "--allow-empty", "-m", "remote advance during recovery");
+  git(seed, "push", "origin", "main");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(checkout, "rev-parse", "HEAD"), localBefore);
+  assert.notEqual(gitOut(bare, "rev-parse", "refs/heads/main"), localBefore);
+  assert.equal(JSON.parse(readFileSync(provisioningPath, "utf8")).phase, "complete");
+});
+
+test("common-ready recovery keeps its interruption-created branch when origin HEAD changes", () => {
+  const bare = initBareUpstream({ branches: ["main", "trunk"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\nrepos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "remove", "api/main"], { cwd }).status, 0);
+  const provisioningPath = join(cwd, ".oms", "provisioning", "api.json");
+  const provisioning = JSON.parse(readFileSync(provisioningPath, "utf8"));
+  writeFileSync(provisioningPath, `${JSON.stringify({ ...provisioning, phase: "common-ready", branch: null, name: null }, null, 2)}\n`);
+  git(bare, "symbolic-ref", "HEAD", "refs/heads/trunk");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api", "main"), "branch", "--show-current"), "main");
+  assert.equal(existsSync(join(cwd, "oms", "api", "trunk")), false);
+});
+
+test("completed provisioning remains complete after the final worktree is removed", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "remove", "api/main"], { cwd }).status, 0);
+  const provisioningPath = join(cwd, ".oms", "provisioning", "api.json");
+  assert.equal(JSON.parse(readFileSync(provisioningPath, "utf8")).phase, "complete");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(join(cwd, "oms", "api", "main")), false);
+  assert.equal(JSON.parse(readFileSync(provisioningPath, "utf8")).phase, "complete");
+});
+
+test("subsequent worktree sync warns when the configured baseline disappears", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  const localBefore = gitOut(checkout, "rev-parse", "HEAD");
+  git(bare, "update-ref", "-d", "refs/heads/main");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /configured baseline origin\/main is unavailable/);
+  assert.equal(gitOut(checkout, "rev-parse", "HEAD"), localBefore);
+  assert.equal(spawnSync("git", ["-C", join(cwd, ".oms", "repos", "api.git"), "rev-parse", "--verify", "refs/remotes/origin/main"], { env: testEnv }).status, 128);
+});
+
+test("subsequent worktree sync prunes only a revalidated stale managed registration", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const managed = join(cwd, "oms", "api", "main");
+  const registeredManaged = realpathSync(managed);
+  rmSync(managed, { recursive: true, force: true });
+  assert.match(gitOut(common, "worktree", "list", "--porcelain"), new RegExp(`worktree ${registeredManaged.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /pruned stale managed worktree registration/);
+  assert.doesNotMatch(gitOut(common, "worktree", "list", "--porcelain"), new RegExp(`worktree ${registeredManaged.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.equal(JSON.parse(readFileSync(join(cwd, ".oms", "provisioning", "api.json"), "utf8")).phase, "complete");
+});
+
+test("subsequent worktree sync refuses a possible manual move and preserves external stale registrations", () => {
+  const bare = initBareUpstream({ branches: ["main", "external"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const original = join(cwd, "oms", "api", "main");
+  const registeredOriginal = realpathSync(original);
+  const movedParent = join(cwd, "oms", "moved");
+  const moved = join(movedParent, "main");
+  mkdirSync(movedParent);
+  renameSync(original, moved);
+  const external = tempWorkspace();
+  git(common, "branch", "external", "refs/remotes/origin/external");
+  git(common, "worktree", "add", external, "external");
+  const registeredExternal = realpathSync(external);
+  rmSync(external, { recursive: true, force: true });
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /may have been moved manually/);
+  assert.equal(existsSync(moved), true);
+  const registrations = gitOut(common, "worktree", "list", "--porcelain");
+  assert.match(registrations, new RegExp(`worktree ${registeredOriginal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(registrations, new RegExp(`worktree ${registeredExternal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+});
+
+test("worktree sync reconciles declared remote drift and preserves undeclared remotes", () => {
+  const bare = initBareUpstream();
+  const drifted = initEmptyBare();
+  const extra = initEmptyBare();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "remote", "set-url", "origin", `file://${drifted}`);
+  git(common, "config", "--replace-all", "remote.origin.fetch", "+refs/tags/*:refs/tags/*");
+  git(common, "remote", "add", "extra", `file://${extra}`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(common, "remote", "get-url", "origin"), `file://${bare}`);
+  assert.equal(gitOut(common, "config", "--get-all", "remote.origin.fetch"), "+refs/heads/*:refs/remotes/origin/*");
+  assert.equal(gitOut(common, "remote", "get-url", "extra"), `file://${extra}`);
+});
+
+test("worktree sync rejects additional declared-remote URLs before fetching", () => {
+  const bare = initBareUpstream();
+  const additional = initEmptyBare();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "remote", "set-url", "--add", "origin", `file://${additional}`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /remote origin has additional fetch URLs/);
+  assert.equal(gitOut(common, "config", "--get-all", "remote.origin.url").split("\n").length, 2);
+});
+
+test("worktree sync rejects declared-remote pushurl drift before fetching", () => {
+  const bare = initBareUpstream();
+  const pushTarget = initEmptyBare();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "remote", "set-url", "--push", "origin", `file://${pushTarget}`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /remote origin has undeclared pushurl configuration/);
+  assert.equal(gitOut(common, "remote", "get-url", "--push", "origin"), `file://${pushTarget}`);
+});
+
+test("worktree add, list, move, and remove preserve attached local branches", () => {
+  const bare = initBareUpstream({ branches: ["main", "feature/login"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const add = run(["worktree", "add", "api", "feature/login"], { cwd });
+  assert.equal(add.status, 0, add.stdout + add.stderr);
+  const original = join(cwd, "oms", "api", "feature-login");
+  assert.equal(gitOut(original, "branch", "--show-current"), "feature/login");
+
+  const list = run(["worktree", "list", "api"], { cwd });
+  assert.equal(list.status, 0, list.stdout + list.stderr);
+  assert.match(list.stdout, /api\/main\s+main/);
+  assert.match(list.stdout, /api\/feature-login\s+feature\/login/);
+
+  const move = run(["worktree", "move", "api/feature-login", "login-v2"], { cwd });
+  assert.equal(move.status, 0, move.stdout + move.stderr);
+  const moved = join(cwd, "oms", "api", "login-v2");
+  assert.equal(gitOut(moved, "branch", "--show-current"), "feature/login");
+
+  const remove = run(["worktree", "remove", "api/login-v2"], { cwd });
+  assert.equal(remove.status, 0, remove.stdout + remove.stderr);
+  assert.equal(existsSync(moved), false);
+  assert.equal(gitOut(join(cwd, ".oms", "repos", "api.git"), "rev-parse", "refs/heads/feature/login"), gitOut(bare, "rev-parse", "refs/heads/feature/login"));
+});
+
+test("worktree add resolves interactive inputs and rejects missing non-interactive inputs", () => {
+  const bare = initBareUpstream({ branches: ["main", "feature/login"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const interactive = run(["worktree", "add"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "api" },
+      { type: "text", value: "feature/login" },
+    ]),
+  });
+  assert.equal(interactive.status, 0, interactive.stdout + interactive.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api", "feature-login"), "branch", "--show-current"), "feature/login");
+
+  const missingAlias = run(["worktree", "add"], { cwd });
+  assert.equal(missingAlias.status, 1, missingAlias.stdout + missingAlias.stderr);
+  assert.match(missingAlias.stdout + missingAlias.stderr, /requires a repository alias/);
+  const missingBranch = run(["worktree", "add", "api"], { cwd });
+  assert.equal(missingBranch.status, 1, missingBranch.stdout + missingBranch.stderr);
+  assert.match(missingBranch.stdout + missingBranch.stderr, /requires a branch/);
+});
+
+test("worktree add honors selected remote tracking, explicit start points, names, and checked-out protection", () => {
+  const origin = initBareUpstream();
+  const upstream = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", origin, "main", { upstream })}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const tracked = run(["worktree", "add", "api", "dev", "--remote", "upstream", "--name", "upstream-dev"], { cwd });
+  assert.equal(tracked.status, 0, tracked.stdout + tracked.stderr);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  assert.equal(gitOut(common, "for-each-ref", "--format=%(upstream:short)", "refs/heads/dev"), "upstream/dev");
+
+  const created = run(["worktree", "add", "api", "scratch", "--from", "refs/remotes/origin/main", "--name", "scratch-space"], { cwd });
+  assert.equal(created.status, 0, created.stdout + created.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api", "scratch-space"), "rev-parse", "HEAD"), gitOut(origin, "rev-parse", "refs/heads/main"));
+
+  const checkedOut = run(["worktree", "add", "api", "main", "--name", "second-main"], { cwd });
+  assert.equal(checkedOut.status, 1, checkedOut.stdout + checkedOut.stderr);
+  assert.match(checkedOut.stdout + checkedOut.stderr, /branch main is already checked out/);
+});
+
+test("worktree add failure preserves its branch, removes only its empty directory, and retries", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(stubGit, `#!/usr/bin/env bash\nif [[ " $* " == *" worktree add "* ]]; then exit 2; fi\nexec ${JSON.stringify(realGit)} "$@"\n`);
+  chmodSync(stubGit, 0o755);
+
+  const failed = run(["worktree", "add", "api", "dev"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` },
+  });
+  assert.equal(failed.status, 2, failed.stdout + failed.stderr);
+  assert.match(failed.stdout + failed.stderr, /branch dev was preserved/);
+  assert.match(failed.stdout + failed.stderr, /Retry "oms worktree add api dev"/);
+  assert.equal(existsSync(join(cwd, "oms", "api", "dev")), false);
+  assert.match(gitOut(join(cwd, ".oms", "repos", "api.git"), "rev-parse", "refs/heads/dev"), /^[0-9a-f]{40}$/);
+
+  const retried = run(["worktree", "add", "api", "dev"], { cwd });
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api", "dev"), "branch", "--show-current"), "dev");
+});
+
+test("worktree move preserves dirty state and refuses collisions, operations, and locks", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const dev = join(cwd, "oms", "api", "dev");
+  writeFileSync(join(dev, "dirty.txt"), "dirty\n");
+
+  const collision = run(["worktree", "move", "api/dev", "main"], { cwd });
+  assert.equal(collision.status, 1, collision.stdout + collision.stderr);
+  const moved = run(["worktree", "move", "api/dev", "dev-dirty"], { cwd });
+  assert.equal(moved.status, 0, moved.stdout + moved.stderr);
+  const dirty = join(cwd, "oms", "api", "dev-dirty");
+  assert.equal(readFileSync(join(dirty, "dirty.txt"), "utf8"), "dirty\n");
+
+  const mergeHead = gitOut(dirty, "rev-parse", "--git-path", "MERGE_HEAD");
+  writeFileSync(resolve(dirty, mergeHead), `${gitOut(dirty, "rev-parse", "HEAD")}\n`);
+  const operation = run(["worktree", "move", "api/dev-dirty", "blocked"], { cwd });
+  assert.equal(operation.status, 1, operation.stdout + operation.stderr);
+  assert.match(operation.stdout + operation.stderr, /Git operation merge is in progress/);
+  rmSync(resolve(dirty, mergeHead));
+
+  git(join(cwd, ".oms", "repos", "api.git"), "worktree", "lock", dirty);
+  const lockedMove = run(["worktree", "move", "api/dev-dirty", "blocked"], { cwd });
+  assert.equal(lockedMove.status, 1, lockedMove.stdout + lockedMove.stderr);
+  const lockedRemove = run(["worktree", "remove", "api/dev-dirty", "--force"], { cwd });
+  assert.equal(lockedRemove.status, 1, lockedRemove.stdout + lockedRemove.stderr);
+  assert.match(lockedRemove.stdout + lockedRemove.stderr, /locked/);
+});
+
+test("worktree move and remove failures preserve retryable paths, registrations, and branches", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const original = join(cwd, "oms", "api", "dev");
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [[ " $* " == *" worktree move "* || " $* " == *" worktree remove "* ]]; then exit 2; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+  const env = { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` };
+
+  const failedMove = run(["worktree", "move", "api/dev", "dev-moved"], { cwd, env });
+  assert.equal(failedMove.status, 2, failedMove.stdout + failedMove.stderr);
+  assert.match(failedMove.stdout + failedMove.stderr, /move failed.*oms worktree list api/);
+  assert.equal(existsSync(original), true);
+  assert.match(gitOut(common, "worktree", "list", "--porcelain"), /branch refs\/heads\/dev/);
+
+  const moved = run(["worktree", "move", "api/dev", "dev-moved"], { cwd });
+  assert.equal(moved.status, 0, moved.stdout + moved.stderr);
+  const movedPath = join(cwd, "oms", "api", "dev-moved");
+  const failedRemove = run(["worktree", "remove", "api/dev-moved"], { cwd, env });
+  assert.equal(failedRemove.status, 2, failedRemove.stdout + failedRemove.stderr);
+  assert.match(failedRemove.stdout + failedRemove.stderr, /removal failed; the branch was preserved/);
+  assert.equal(existsSync(movedPath), true);
+  assert.match(gitOut(common, "rev-parse", "refs/heads/dev"), /^[0-9a-f]{40}$/);
+
+  const removed = run(["worktree", "remove", "api/dev-moved"], { cwd });
+  assert.equal(removed.status, 0, removed.stdout + removed.stderr);
+  assert.equal(existsSync(movedPath), false);
+  assert.match(gitOut(common, "rev-parse", "refs/heads/dev"), /^[0-9a-f]{40}$/);
+});
+
+test("worktree commit resolves current and explicit targets and remains checkout-local", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const main = join(cwd, "oms", "api", "main");
+  mkdirSync(join(main, "nested"));
+  writeFileSync(join(main, "current.txt"), "current\n");
+  const current = run(["commit", "-m", "test: current worktree"], { cwd: join(main, "nested") });
+  assert.equal(current.status, 0, current.stdout + current.stderr);
+  assert.match(current.stdout + current.stderr, /api\/main: committed/);
+  assert.doesNotMatch(current.stdout + current.stderr, /oms record|root pointer/i);
+
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const dev = join(cwd, "oms", "api", "dev");
+  writeFileSync(join(main, "main-only.txt"), "main\n");
+  writeFileSync(join(dev, "dev-only.txt"), "dev\n");
+  const ambiguous = run(["commit", "api", "-m", "test: ambiguous"], { cwd });
+  assert.equal(ambiguous.status, 1, ambiguous.stdout + ambiguous.stderr);
+  assert.match(ambiguous.stdout + ambiguous.stderr, /Multiple managed worktrees.*alias\/name/);
+
+  const mainBefore = gitOut(main, "rev-parse", "HEAD");
+  const explicit = run(["commit", "api/dev", "-m", "test: explicit worktree"], { cwd });
+  assert.equal(explicit.status, 0, explicit.stdout + explicit.stderr);
+  assert.notEqual(gitOut(dev, "rev-parse", "HEAD"), gitOut(bare, "rev-parse", "refs/heads/dev"));
+  assert.equal(gitOut(main, "rev-parse", "HEAD"), mainBefore);
+  assert.equal(existsSync(join(main, "main-only.txt")), true);
+});
+
+test("ineligible current worktree never falls through non-interactively and allows explicit interactive reselection", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const main = join(cwd, "oms", "api", "main");
+  const dev = join(cwd, "oms", "api", "dev");
+  const mergeHead = gitOut(dev, "rev-parse", "--git-path", "MERGE_HEAD");
+  writeFileSync(resolve(dev, mergeHead), `${gitOut(dev, "rev-parse", "HEAD")}\n`);
+  writeFileSync(join(main, "selected.txt"), "selected\n");
+
+  const refused = run(["commit", "-m", "test: should not fall through"], { cwd: dev });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, /current target cannot commit because merge in progress/);
+  assert.equal(existsSync(join(main, "selected.txt")), true);
+
+  const selected = run(["commit", "-m", "test: selected alternative"], {
+    cwd: dev,
+    env: queueEnv([{ type: "select", value: "api/main" }]),
+  });
+  assert.equal(selected.status, 0, selected.stdout + selected.stderr);
+  assert.equal(existsSync(join(main, "selected.txt")), true);
+  assert.equal(gitOut(main, "status", "--porcelain"), "");
+});
+
+test("detached current commit and in-progress current checkout refuse without target fallback", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const main = join(cwd, "oms", "api", "main");
+  const dev = join(cwd, "oms", "api", "dev");
+  git(main, "checkout", "--detach");
+  writeFileSync(join(main, "detached.txt"), "local\n");
+
+  const detached = run(["commit", "-m", "test: detached"], { cwd: main });
+  assert.equal(detached.status, 1, detached.stdout + detached.stderr);
+  assert.match(detached.stdout + detached.stderr, /current target cannot commit because detached HEAD/);
+  assert.equal(existsSync(join(main, "detached.txt")), true);
+
+  const mergeHead = gitOut(dev, "rev-parse", "--git-path", "MERGE_HEAD");
+  writeFileSync(resolve(dev, mergeHead), `${gitOut(dev, "rev-parse", "HEAD")}\n`);
+  const checkout = run(["branch", "checkout"], { cwd: dev });
+  assert.equal(checkout.status, 1, checkout.stdout + checkout.stderr);
+  assert.match(checkout.stdout + checkout.stderr, /current target cannot branch-checkout because merge in progress/);
+});
+
+test("worktree fetch defaults to every declared remote, aggregates failures, and supports explicit filtering", () => {
+  const origin = initBareUpstream();
+  const backup = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", origin, "main", { backup })}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const unavailable = `${backup}.unavailable`;
+  renameSync(backup, unavailable);
+
+  const partial = run(["fetch", "api"], { cwd });
+  assert.equal(partial.status, 2, partial.stdout + partial.stderr);
+  assert.match(partial.stdout + partial.stderr, /fetched origin/);
+  assert.match(partial.stdout + partial.stderr, /fetch backup failed/);
+
+  const selected = run(["fetch", "api", "--remote", "origin"], { cwd });
+  assert.equal(selected.status, 0, selected.stdout + selected.stderr);
+  assert.match(selected.stdout + selected.stderr, /fetched origin/);
+  assert.doesNotMatch(selected.stdout + selected.stderr, /fetching backup|fetch backup/);
+
+  const unknown = run(["fetch", "api", "--remote", "unknown"], { cwd });
+  assert.equal(unknown.status, 1, unknown.stdout + unknown.stderr);
+  assert.match(unknown.stdout + unknown.stderr, /not declared in oms.yaml/);
+
+  renameSync(unavailable, backup);
+  const rerun = run(["fetch", "api"], { cwd });
+  assert.equal(rerun.status, 0, rerun.stdout + rerun.stderr);
+  assert.match(rerun.stdout + rerun.stderr, /fetched origin/);
+  assert.match(rerun.stdout + rerun.stderr, /fetched backup/);
+});
+
+test("worktree pull targets managed checkouts, follows declared upstreams, and aggregates safety refusals", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const main = join(cwd, "oms", "api", "main");
+  const dev = join(cwd, "oms", "api", "dev");
+  const mainBefore = gitOut(main, "rev-parse", "HEAD");
+  const devBefore = gitOut(dev, "rev-parse", "HEAD");
+
+  const seed = mkdtempSync(join(tmpdir(), "oms-seed-"));
+  execFileSync("git", ["clone", bare, seed], { stdio: "ignore", env: testEnv });
+  configIdentity(seed);
+  git(seed, "commit", "--allow-empty", "-m", "advance main");
+  git(seed, "push", "origin", "main");
+  git(seed, "checkout", "dev");
+  git(seed, "commit", "--allow-empty", "-m", "advance dev");
+  git(seed, "push", "origin", "dev");
+
+  const pulled = run(["pull", "--all"], { cwd });
+  assert.equal(pulled.status, 0, pulled.stdout + pulled.stderr);
+  assert.notEqual(gitOut(main, "rev-parse", "HEAD"), mainBefore);
+  assert.notEqual(gitOut(dev, "rev-parse", "HEAD"), devBefore);
+
+  writeFileSync(join(dev, "dirty.txt"), "dirty\n");
+  const partial = run(["pull", "--all"], { cwd });
+  assert.equal(partial.status, 1, partial.stdout + partial.stderr);
+  assert.match(partial.stdout + partial.stderr, /api\/dev: cannot pull because dirty working tree/);
+  assert.match(partial.stdout + partial.stderr, /api\/main: pulled/);
+  rmSync(join(dev, "dirty.txt"));
+  const rerun = run(["pull", "--all"], { cwd });
+  assert.equal(rerun.status, 0, rerun.stdout + rerun.stderr);
+  assert.match(rerun.stdout + rerun.stderr, /api\/main: pulled/);
+  assert.match(rerun.stdout + rerun.stderr, /api\/dev: pulled/);
+  git(dev, "config", "branch.dev.remote", "rogue");
+  git(dev, "config", "branch.dev.merge", "refs/heads/dev");
+  const undeclared = run(["pull", "api/dev"], { cwd });
+  assert.equal(undeclared.status, 1, undeclared.stdout + undeclared.stderr);
+  assert.match(undeclared.stdout + undeclared.stderr, /upstream remote.*not declared|explicit declared --remote/);
+});
+
+test("worktree push sets origin upstream and attempts every explicit declared remote independently", () => {
+  const origin = initBareUpstream();
+  const backup = initEmptyBare();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", origin, "main", { backup })}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "scratch", "--from", "refs/remotes/origin/main"], { cwd }).status, 0);
+  const scratch = join(cwd, "oms", "api", "scratch");
+  git(scratch, "commit", "--allow-empty", "-m", "scratch commit");
+
+  const first = run(["push", "api/scratch"], { cwd });
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  assert.equal(gitOut(scratch, "for-each-ref", "--format=%(upstream:short)", "refs/heads/scratch"), "origin/scratch");
+  assert.equal(gitOut(origin, "rev-parse", "refs/heads/scratch"), gitOut(scratch, "rev-parse", "HEAD"));
+
+  git(scratch, "commit", "--allow-empty", "-m", "second scratch commit");
+  const unavailable = `${backup}.unavailable`;
+  renameSync(backup, unavailable);
+  const partial = run(["push", "api/scratch", "--remote", "backup", "--remote", "origin"], { cwd });
+  assert.equal(partial.status, 2, partial.stdout + partial.stderr);
+  assert.match(partial.stdout + partial.stderr, /push to backup failed/);
+  assert.match(partial.stdout + partial.stderr, /pushed to origin\/scratch/);
+  assert.equal(gitOut(origin, "rev-parse", "refs/heads/scratch"), gitOut(scratch, "rev-parse", "HEAD"));
+});
+
+test("worktree branch switch and checkout are target-scoped and protect branches checked out elsewhere", () => {
+  const origin = initBareUpstream({ branches: ["main", "dev", "cached"] });
+  const upstream = initBareUpstream({ branches: ["main", "release"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", origin, "main", { upstream })}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const main = join(cwd, "oms", "api", "main");
+  const dev = join(cwd, "oms", "api", "dev");
+
+  const switched = run(["branch", "switch", "api/main", "feature/local", "--from", "main"], { cwd });
+  assert.equal(switched.status, 0, switched.stdout + switched.stderr);
+  assert.equal(gitOut(main, "branch", "--show-current"), "feature/local");
+  assert.equal(gitOut(dev, "branch", "--show-current"), "dev");
+  const occupied = run(["branch", "switch", "api/dev", "feature/local"], { cwd });
+  assert.equal(occupied.status, 1, occupied.stdout + occupied.stderr);
+  assert.match(occupied.stdout + occupied.stderr, /already checked out at/);
+
+  const checkedOut = run(["branch", "checkout", "api/main", "release", "--remote", "upstream"], { cwd });
+  assert.equal(checkedOut.status, 0, checkedOut.stdout + checkedOut.stderr);
+  assert.equal(gitOut(main, "branch", "--show-current"), "release");
+  assert.equal(gitOut(main, "for-each-ref", "--format=%(upstream:short)", "refs/heads/release"), "upstream/release");
+
+  rmSync(origin, { recursive: true, force: true });
+  const cached = run(["branch", "checkout", "api/main", "cached"], { cwd });
+  assert.equal(cached.status, 0, cached.stdout + cached.stderr);
+  assert.match(cached.stdout + cached.stderr, /using refs from the last verified fetch as stale data/);
+  assert.equal(gitOut(main, "branch", "--show-current"), "cached");
+});
+
+test("worktree mode rejects record because no parent gitlink exists", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const result = run(["record", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /no parent gitlink pointer to record/);
+});
+
+test("worktree branch delete protects managed, external, and resolved baseline branches", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev", "external"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\nrepos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "branch", "external", "refs/remotes/origin/external");
+  const external = tempWorkspace();
+  git(common, "worktree", "add", external, "external");
+  git(common, "branch", "delete-me", "refs/heads/main");
+
+  const managed = run(["branch", "delete", "api", "dev", "--force"], { cwd });
+  assert.equal(managed.status, 1, managed.stdout + managed.stderr);
+  assert.match(managed.stdout + managed.stderr, /checked out at/);
+  const outside = run(["branch", "delete", "api", "external", "--force"], { cwd });
+  assert.equal(outside.status, 1, outside.stdout + outside.stderr);
+  assert.match(outside.stdout + outside.stderr, new RegExp(realpathSync(external).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+  const deleted = run(["branch", "delete", "api", "delete-me"], { cwd });
+  assert.equal(deleted.status, 0, deleted.stdout + deleted.stderr);
+  assert.equal(spawnSync("git", ["-C", common, "rev-parse", "--verify", "refs/heads/delete-me"], { env: testEnv }).status, 128);
+
+  assert.equal(run(["worktree", "remove", "api/main"], { cwd }).status, 0);
+  const baseline = run(["branch", "delete", "api", "main", "--force"], { cwd });
+  assert.equal(baseline.status, 1, baseline.stdout + baseline.stderr);
+  assert.match(baseline.stdout + baseline.stderr, /protected baseline branch/);
+});
+
+test("worktree inventory classifies external, locked, stale, and safely prunable registrations", () => {
+  const bare = initBareUpstream({ branches: ["main", "external"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const managed = join(cwd, "oms", "api", "main");
+  const external = tempWorkspace();
+  git(common, "branch", "external", "refs/remotes/origin/external");
+  git(common, "worktree", "add", external, "external");
+  git(common, "worktree", "lock", external);
+
+  const mixed = run(["worktree", "list", "api"], { cwd });
+  assert.equal(mixed.status, 0, mixed.stdout + mixed.stderr);
+  assert.match(mixed.stdout, /api\/main\s+main/);
+  assert.match(mixed.stdout, /api\/\(external\).*external,locked/);
+
+  rmSync(managed, { recursive: true, force: true });
+  const stale = run(["worktree", "list", "api"], { cwd });
+  assert.equal(stale.status, 0, stale.stdout + stale.stderr);
+  assert.match(stale.stdout, /api\/main\s+main.*stale,prunable/);
+});
+
+test("worktree inventory refuses safe prune when a nested manual-move candidate exists", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const original = join(cwd, "oms", "api", "main");
+  const movedParent = join(cwd, "oms", "moved");
+  const moved = join(movedParent, "deeper");
+  mkdirSync(movedParent);
+  renameSync(original, moved);
+
+  const result = run(["worktree", "list", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /api\/main\s+main.*stale/);
+  assert.doesNotMatch(result.stdout, /api\/main\s+main.*prunable/);
+});
+
+test("worktree doctor diagnoses a manual move with bounded read-only repair guidance", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const original = join(cwd, "oms", "api", "main");
+  const moved = join(cwd, "oms", "manual-move", "main");
+  mkdirSync(dirname(moved), { recursive: true });
+  renameSync(original, moved);
+  const registrationBefore = gitOut(join(cwd, ".oms", "repos", "api.git"), "worktree", "list", "--porcelain");
+
+  const result = run(["doctor"], { cwd });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /may have been moved manually/);
+  assert.match(result.stdout + result.stderr, /git -C .* worktree repair <actual-path>/);
+  assert.equal(gitOut(join(cwd, ".oms", "repos", "api.git"), "worktree", "list", "--porcelain"), registrationBefore);
+  assert.equal(existsSync(moved), true);
+});
+
+test("worktree inventory does not manage a checkout through a symlinked path component", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const aliasPath = join(cwd, "oms", "api");
+  const actualPath = join(cwd, "oms", "api-actual");
+  renameSync(aliasPath, actualPath);
+  symlinkSync(actualPath, aliasPath, "dir");
+
+  const result = run(["worktree", "remove", "api/main", "--force"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /not a registered managed worktree/);
+  assert.equal(existsSync(join(actualPath, "main")), true);
+});
+
+test("worktree inventory rejects foreign common repository ownership", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "config", "oms.workspaceId", "00000000-0000-0000-0000-000000000000");
+
+  const result = run(["worktree", "list", "api"], { cwd });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /ownership or shape does not match/);
+});
+
+test("worktree sync reconciles nested enclosing-Git excludes without hiding agent files", () => {
+  const bare = initBareUpstream();
+  const gitRoot = initGitWorkspace();
+  const cwd = join(gitRoot, "nested");
+  mkdirSync(cwd);
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  const instructions = join(cwd, "oms");
+  mkdirSync(instructions);
+  writeFileSync(join(instructions, "AGENTS.md"), "agents\n");
+  writeFileSync(join(instructions, "CLAUDE.md"), "claude\n");
+  const excludePath = join(gitRoot, ".git", "info", "exclude");
+  writeFileSync(excludePath, "# user rule\r\n*.local\r\n");
+  chmodSync(excludePath, 0o640);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const exclude = readFileSync(excludePath, "utf8");
+  assert.match(exclude, /^# user rule\r\n\*\.local\r\n/);
+  assert.match(exclude, /\/nested\/\.oms\/workspace\.json\r\n/);
+  assert.match(exclude, /\/nested\/\.oms\/repos\/\r\n/);
+  assert.match(exclude, /\/nested\/oms\/api\/main\/\r\n/);
+  assert.equal(statSync(excludePath).mode & 0o777, 0o640);
+  assert.equal(spawnSync("git", ["check-ignore", "-q", "nested/.oms/workspace.json"], { cwd: gitRoot }).status, 0);
+  assert.equal(spawnSync("git", ["check-ignore", "-q", "nested/oms/AGENTS.md"], { cwd: gitRoot }).status, 1);
+  assert.equal(spawnSync("git", ["check-ignore", "-q", "nested/oms/CLAUDE.md"], { cwd: gitRoot }).status, 1);
+});
+
+test("workspace exclude lock and malformed markers fail before worktree mutation", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = initGitWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const excludePath = join(cwd, ".git", "info", "exclude");
+  const excludeLock = `${excludePath}.oms.lock`;
+  writeFileSync(excludeLock, "occupied\n");
+
+  const locked = run(["worktree", "add", "api", "dev"], { cwd });
+  assert.equal(locked.status, 1, locked.stdout + locked.stderr);
+  assert.match(locked.stdout + locked.stderr, /local exclude file is locked/);
+  assert.equal(existsSync(join(cwd, "oms", "api", "dev")), false);
+  assert.equal(readFileSync(excludeLock, "utf8"), "occupied\n");
+
+  rmSync(excludeLock);
+  const ownership = JSON.parse(readFileSync(join(cwd, ".oms", "workspace.json"), "utf8"));
+  writeFileSync(excludePath, `${readFileSync(excludePath, "utf8")}literal # oms workspace ${ownership.workspaceId} begin text\n`);
+  const inline = run(["sync", "api"], { cwd });
+  assert.equal(inline.status, 0, inline.stdout + inline.stderr);
+  assert.match(readFileSync(excludePath, "utf8"), /literal # oms workspace .* begin text/);
+  writeFileSync(excludePath, `${readFileSync(excludePath, "utf8")}# oms workspace invalid marker\n`);
+  const invalid = run(["worktree", "add", "api", "dev"], { cwd });
+  assert.equal(invalid.status, 1, invalid.stdout + invalid.stderr);
+  assert.match(invalid.stdout + invalid.stderr, /marker block is malformed/);
+  writeFileSync(excludePath, readFileSync(excludePath, "utf8").replace("# oms workspace invalid marker\n", ""));
+  writeFileSync(excludePath, `${readFileSync(excludePath, "utf8")}# oms workspace ${ownership.workspaceId} begin\n`);
+  const malformed = run(["worktree", "add", "api", "dev"], { cwd });
+  assert.equal(malformed.status, 1, malformed.stdout + malformed.stderr);
+  assert.match(malformed.stdout + malformed.stderr, /marker block is malformed/);
+  assert.equal(existsSync(join(cwd, "oms", "api", "dev")), false);
+  assert.equal(existsSync(excludeLock), false);
+});
+
+test("workspace exclude discovery ignores inherited Git repository routing", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const gitRoot = initGitWorkspace();
+  const cwd = join(gitRoot, "nested");
+  mkdirSync(cwd);
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const actualExclude = join(gitRoot, ".git", "info", "exclude");
+  writeFileSync(actualExclude, "# reset actual\n");
+  const foreign = initGitWorkspace();
+  const foreignExclude = join(foreign, ".git", "info", "exclude");
+  writeFileSync(foreignExclude, "# foreign sentinel\n");
+
+  run(["worktree", "add", "api", "dev"], {
+    cwd,
+    env: { ...testEnv, GIT_DIR: join(foreign, ".git"), GIT_WORK_TREE: foreign },
+  });
+  assert.match(readFileSync(actualExclude, "utf8"), /# oms workspace/);
+  assert.equal(readFileSync(foreignExclude, "utf8"), "# foreign sentinel\n");
+});
+
+test("workspace excludes only ownership-verified generated paths", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  const aliasPath = join(cwd, "oms", "api");
+  mkdirSync(aliasPath, { recursive: true });
+  writeFileSync(join(aliasPath, "notes.txt"), "user data\n");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(spawnSync("git", ["check-ignore", "-q", "oms/api/main"], { cwd }).status, 0);
+  assert.equal(spawnSync("git", ["check-ignore", "-q", "oms/api/notes.txt"], { cwd }).status, 1);
+
+  const foreignRoot = initGitWorkspace();
+  writeSources(foreignRoot, `mode: worktree\n${sourceFor("api", bare)}`);
+  const foreignCommon = join(foreignRoot, ".oms", "repos", "api.git");
+  mkdirSync(join(foreignRoot, ".oms", "repos"), { recursive: true });
+  execFileSync("git", ["init", "--bare", foreignCommon], { stdio: "ignore", env: testEnv });
+  const refused = run(["sync", "api"], { cwd: foreignRoot });
+  assert.notEqual(refused.status, 0, refused.stdout + refused.stderr);
+  assert.equal(spawnSync("git", ["check-ignore", "-q", ".oms/repos/api.git/HEAD"], { cwd: foreignRoot }).status, 1);
+});
+
+test("submodule-mode reconciliation removes only worktree-specific exclude rules", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const excludePath = join(cwd, ".git", "info", "exclude");
+  assert.match(readFileSync(excludePath, "utf8"), /\/\.oms\/repos\//);
+  writeSources(cwd, `mode: submodule\n${sourceFor("api", bare)}`);
+
+  run(["fetch", "api"], { cwd });
+  const exclude = readFileSync(excludePath, "utf8");
+  assert.match(exclude, /\/\.oms\/workspace\.json/);
+  assert.match(exclude, /\/\.oms-mutation\.lock/);
+  assert.match(exclude, /\/\.oms-mode-switch\.json/);
+  assert.doesNotMatch(exclude, /\/\.oms\/repos\//);
+  assert.doesNotMatch(exclude, /\/oms\/api\//);
+});
+
+test("worktree removal inspects ignored and nested repository data", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  writeFileSync(join(checkout, ".gitignore"), "ignored.txt\n");
+  git(checkout, "add", ".gitignore");
+  git(checkout, "commit", "-m", "ignore fixture");
+  writeFileSync(join(checkout, "ignored.txt"), "ignored\n");
+  const nested = join(checkout, "nested");
+  mkdirSync(nested);
+  git(nested, "init");
+  const nestedBare = join(checkout, "nested-bare.git");
+  execFileSync("git", ["init", "--bare", nestedBare], { stdio: "ignore", env: testEnv });
+  git(checkout, "config", "status.showUntrackedFiles", "no");
+
+  const refused = run(["worktree", "remove", "api/main"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, /1 ignored/);
+  assert.match(refused.stdout + refused.stderr, /[1-9]\d* untracked/);
+  assert.match(refused.stdout + refused.stderr, /2 nested repositories/);
+  assert.equal(existsSync(checkout), true);
+
+  const forced = run(["worktree", "remove", "api/main", "--force"], { cwd });
+  assert.equal(forced.status, 0, forced.stdout + forced.stderr);
+  assert.match(forced.stdout + forced.stderr, /forcing removal/);
+  assert.equal(existsSync(checkout), false);
+});
+
+test("worktree removal inspects in-progress operations", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  const mergeHead = gitOut(checkout, "rev-parse", "--git-path", "MERGE_HEAD");
+  writeFileSync(resolve(checkout, mergeHead), `${gitOut(checkout, "rev-parse", "HEAD")}\n`);
+
+  const refused = run(["worktree", "remove", "api/main"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, /merge in progress/);
+  assert.equal(existsSync(checkout), true);
+});
+
+test("worktree removal protects an unrecoverable detached HEAD", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  git(checkout, "commit", "--allow-empty", "-m", "detached local commit");
+  const detached = gitOut(checkout, "rev-parse", "HEAD");
+  git(checkout, "checkout", "--detach");
+  git(checkout, "update-ref", "refs/worktree/keep", detached);
+  git(join(cwd, ".oms", "repos", "api.git"), "branch", "-D", "main");
+
+  const refused = run(["worktree", "remove", "api/main"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, new RegExp(`detached unpublished HEAD ${detached}`));
+  assert.equal(existsSync(checkout), true);
+});
+
+test("worktree add uses cached refs only after a matching successful fetch", () => {
+  const bare = initBareUpstream({ branches: ["main", "feature/login"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  rmSync(bare, { recursive: true, force: true });
+
+  const result = run(["worktree", "add", "api", "feature/login"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /using refs from the last verified fetch as stale data/);
+  assert.equal(gitOut(join(cwd, "oms", "api", "feature-login"), "branch", "--show-current"), "feature/login");
+});
+
+test("worktree remote URL drift invalidates cached refs before a failed fetch", () => {
+  const bare = initBareUpstream({ branches: ["main", "feature/login"] });
+  const unavailable = tempWorkspace();
+  rmSync(unavailable, { recursive: true, force: true });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const provenance = join(cwd, ".oms", "fetch-provenance", "api", "origin.json");
+  assert.equal(existsSync(provenance), true);
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", unavailable)}`);
+
+  const result = run(["worktree", "add", "api", "feature/login"], { cwd });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /fetch origin failed; no worktree was created/);
+  assert.equal(existsSync(provenance), false);
+  assert.equal(existsSync(join(cwd, "oms", "api", "feature-login")), false);
+});
+
+test("malformed fetch provenance remains untrusted across processes and is replaced after a successful fetch", () => {
+  const bare = initBareUpstream({ branches: ["main", "feature/login"] });
+  const unavailable = `${bare}.unavailable`;
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const provenance = join(cwd, ".oms", "fetch-provenance", "api", "origin.json");
+  writeFileSync(provenance, "{ interrupted\n");
+  renameSync(bare, unavailable);
+
+  const refused = run(["worktree", "add", "api", "feature/login"], { cwd });
+  assert.equal(refused.status, 2, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, /fetch origin failed; no worktree was created/);
+  assert.equal(existsSync(join(cwd, "oms", "api", "feature-login")), false);
+
+  renameSync(unavailable, bare);
+  const recovered = run(["sync", "api"], { cwd });
+  assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
+  assert.match(JSON.parse(readFileSync(provenance, "utf8")).fingerprint, /^[0-9a-f]{64}$/);
+});
+
+test("worktree fetch ignores injected and global Git URL rewrites", () => {
+  const bare = initBareUpstream();
+  const redirected = initBareUpstream();
+  const redirectedSeed = mkdtempSync(join(tmpdir(), "oms-seed-"));
+  execFileSync("git", ["clone", redirected, redirectedSeed], { stdio: "ignore", env: testEnv });
+  configIdentity(redirectedSeed);
+  git(redirectedSeed, "commit", "--allow-empty", "-m", "redirected only");
+  git(redirectedSeed, "push", "origin", "main");
+  const cwd = tempWorkspace();
+  const home = tempWorkspace();
+  writeFileSync(join(home, ".gitconfig"), `[url "file://${redirected}"]\n\tinsteadOf = file://${bare}\n`);
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  const env = {
+    ...testEnv,
+    HOME: home,
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "protocol.file.allow",
+    GIT_CONFIG_VALUE_0: "always",
+    GIT_CONFIG_KEY_1: `url.file://${redirected}.insteadOf`,
+    GIT_CONFIG_VALUE_1: `file://${bare}`,
+  };
+
+  const result = run(["sync", "api"], { cwd, env });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api", "main"), "rev-parse", "HEAD"), gitOut(bare, "rev-parse", "refs/heads/main"));
+  assert.notEqual(gitOut(bare, "rev-parse", "refs/heads/main"), gitOut(redirected, "rev-parse", "refs/heads/main"));
+});
+
+test("worktree fetch rejects local Git URL rewrites before network access", () => {
+  const bare = initBareUpstream();
+  const redirected = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const refBefore = gitOut(common, "rev-parse", "refs/remotes/origin/main");
+  git(common, "config", `url.file://${redirected}.insteadOf`, `file://${bare}`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /local Git URL rewrite configuration is not allowed/);
+  assert.equal(gitOut(common, "rev-parse", "refs/remotes/origin/main"), refBefore);
+});
+
+test("worktree fetch rejects a local pushInsteadOf rewrite before network access", () => {
+  const bare = initBareUpstream();
+  const redirected = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const refBefore = gitOut(common, "rev-parse", "refs/remotes/origin/main");
+  git(common, "config", `url.file://${redirected}.pushInsteadOf`, `file://${bare}`);
+
+  const result = run(["sync", "api"], { cwd });
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /local Git URL rewrite configuration is not allowed/);
+  assert.equal(gitOut(common, "rev-parse", "refs/remotes/origin/main"), refBefore);
+});
+
+test("worktree unsync removes clean published managed state and retains the manifest", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const manifest = readFileSync(join(cwd, "oms.yaml"), "utf8");
+
+  const result = run(["unsync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), false);
+  assert.equal(existsSync(join(cwd, "oms", "api", "main")), false);
+  assert.equal(existsSync(join(cwd, ".oms", "provisioning", "api.json")), false);
+  assert.equal(readFileSync(join(cwd, "oms.yaml"), "utf8"), manifest);
+});
+
+test("worktree unsync requires force for dirty state and discloses discarded categories", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  writeFileSync(join(checkout, "local.txt"), "local\n");
+
+  const refused = run(["unsync", "api"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.equal(existsSync(checkout), true);
+
+  const forced = run(["unsync", "api", "--force"], { cwd });
+  assert.equal(forced.status, 0, forced.stdout + forced.stderr);
+  assert.match(forced.stdout + forced.stderr, /force will discard untracked=1/);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), false);
+});
+
+test("worktree unsync protects metadata refs and dangling objects with full-OID force disclosure", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const head = gitOut(common, "rev-parse", "refs/heads/main");
+  git(common, "tag", "local-only", head);
+  const dangling = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+    cwd: common,
+    encoding: "utf8",
+    input: "recoverable local blob\n",
+    env: testEnv,
+  }).trim();
+
+  const refused = run(["unsync", "api"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, new RegExp(`tag refs/tags/local-only commit ${head}`));
+  assert.match(refused.stdout + refused.stderr, new RegExp(`dangling blob ${dangling}`));
+
+  const forced = run(["unsync", "api", "--force"], { cwd });
+  assert.equal(forced.status, 0, forced.stdout + forced.stderr);
+  assert.match(forced.stdout + forced.stderr, new RegExp(`force will discard tag refs/tags/local-only commit ${head}`));
+  assert.match(forced.stdout + forced.stderr, new RegExp(`force will discard dangling blob ${dangling}`));
+});
+
+test("worktree unsync inventories stash, notes, replace, and custom ref namespaces", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const checkout = join(cwd, "oms", "api", "main");
+  const head = gitOut(checkout, "rev-parse", "HEAD");
+  writeFileSync(join(checkout, "stash.txt"), "stash\n");
+  git(checkout, "add", "stash.txt");
+  git(checkout, "stash", "push", "-m", "local stash");
+  git(common, "notes", "add", "-m", "local note", head);
+  git(common, "update-ref", "refs/custom/keep", head);
+  const original = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+    cwd: common,
+    encoding: "utf8",
+    input: "original\n",
+    env: testEnv,
+  }).trim();
+  const replacement = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+    cwd: common,
+    encoding: "utf8",
+    input: "replacement\n",
+    env: testEnv,
+  }).trim();
+  git(common, "update-ref", `refs/replace/${original}`, replacement);
+
+  const result = run(["unsync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /stash refs\/stash commit [0-9a-f]{40}/);
+  assert.match(output, /notes refs\/notes\/commits commit [0-9a-f]{40}/);
+  assert.match(output, new RegExp(`replace refs/replace/${original} blob ${replacement}`));
+  assert.match(output, new RegExp(`custom-ref refs/custom/keep commit ${head}`));
+  assert.equal(existsSync(common), true);
+});
+
+test("worktree unsync reports ignored, nested-repository, and in-progress state", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  writeFileSync(join(checkout, ".gitignore"), "ignored.log\n");
+  git(checkout, "add", ".gitignore");
+  git(checkout, "commit", "-m", "chore: ignore local logs");
+  git(checkout, "push", "origin", "main");
+  writeFileSync(join(checkout, "ignored.log"), "ignored\n");
+  const nested = join(checkout, "nested");
+  mkdirSync(nested);
+  git(nested, "init");
+  const mergeHead = gitOut(checkout, "rev-parse", "--git-path", "MERGE_HEAD");
+  writeFileSync(isAbsolute(mergeHead) ? mergeHead : join(checkout, mergeHead), `${gitOut(checkout, "rev-parse", "HEAD")}\n`);
+
+  const result = run(["unsync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  const output = result.stdout + result.stderr;
+  assert.match(output, /ignored=1/);
+  assert.match(output, /nested-repositories=1/);
+  assert.match(output, /operation=merge/);
+  assert.equal(existsSync(checkout), true);
+});
+
+test("worktree unsync protects and force-discloses an unpublished detached HEAD", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  git(checkout, "commit", "--allow-empty", "-m", "local detached commit");
+  const oid = gitOut(checkout, "rev-parse", "HEAD");
+  git(checkout, "checkout", "--detach");
+  git(join(cwd, ".oms", "repos", "api.git"), "branch", "-D", "main");
+
+  const refused = run(["unsync", "api"], { cwd });
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, new RegExp(`worktree-head api/main commit ${oid}`));
+
+  const forced = run(["unsync", "api", "--force"], { cwd });
+  assert.equal(forced.status, 0, forced.stdout + forced.stderr);
+  assert.match(forced.stdout + forced.stderr, new RegExp(`force will discard worktree-head api/main commit ${oid}`));
+});
+
+test("worktree unsync refuses ownership drift before deletion", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "config", "oms.workspaceId", "00000000-0000-4000-8000-000000000000");
+
+  const result = run(["unsync", "api", "--force"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /ownership or shape does not match/);
+  assert.equal(existsSync(common), true);
+});
+
+test("worktree unsync refuses a symlinked common-repository boundary even with force", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const relocated = `${common}.relocated`;
+  renameSync(common, relocated);
+  symlinkSync(relocated, common);
+
+  const result = run(["unsync", "api", "--force"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /common repository path contains a symbolic link/);
+  assert.equal(existsSync(relocated), true);
+});
+
+test("worktree unsync revalidation detects a concurrent direct Git commit", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+
+  const result = run(["unsync", "api"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_MUTATE_AT: "unsync-before-worktree:api/main" },
+  });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /Git or working-tree state changed after preflight/);
+  assert.equal(existsSync(checkout), true);
+});
+
+test("multi-alias worktree unsync completes global preflight before deleting any alias", () => {
+  const api = initBareUpstream();
+  const web = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", api)}${sourceFor("web", web).replace(/^repos:\n/, "").replace(/^  /gm, "  ")}`);
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  writeFileSync(join(cwd, "oms", "web", "main", "dirty.txt"), "dirty\n");
+
+  const result = run(["unsync", "--all"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /no alias storage was deleted/);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), true);
+  assert.equal(existsSync(join(cwd, "oms", "api", "main")), true);
+});
+
+test("external and locked worktrees block worktree unsync even with force", () => {
+  const bare = initBareUpstream({ branches: ["main", "external"] });
+  const externalCwd = tempWorkspace();
+  writeSources(externalCwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd: externalCwd }).status, 0);
+  const externalCommon = join(externalCwd, ".oms", "repos", "api.git");
+  const external = tempWorkspace();
+  git(externalCommon, "branch", "external", "refs/remotes/origin/external");
+  git(externalCommon, "worktree", "add", external, "external");
+  const externalResult = run(["unsync", "api", "--force"], { cwd: externalCwd });
+  assert.equal(externalResult.status, 1, externalResult.stdout + externalResult.stderr);
+  assert.match(externalResult.stdout + externalResult.stderr, /external or ownership-ambiguous worktree/);
+  assert.equal(existsSync(externalCommon), true);
+
+  const lockedCwd = tempWorkspace();
+  writeSources(lockedCwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd: lockedCwd }).status, 0);
+  const lockedCommon = join(lockedCwd, ".oms", "repos", "api.git");
+  const lockedCheckout = join(lockedCwd, "oms", "api", "main");
+  git(lockedCommon, "worktree", "lock", lockedCheckout);
+  const lockedResult = run(["unsync", "api", "--force"], { cwd: lockedCwd });
+  assert.equal(lockedResult.status, 1, lockedResult.stdout + lockedResult.stderr);
+  assert.match(lockedResult.stdout + lockedResult.stderr, /is locked/);
+  assert.equal(existsSync(lockedCommon), true);
+});
+
+test("worktree unsync requires fresh remote knowledge unless force accepts stale verification", () => {
+  const bare = initBareUpstream();
+  const unavailable = `${bare}.unavailable`;
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  renameSync(bare, unavailable);
+
+  const refused = run(["unsync", "api"], { cwd });
+  assert.equal(refused.status, 2, refused.stdout + refused.stderr);
+  assert.match(refused.stdout + refused.stderr, /fresh publication verification failed/);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), true);
+
+  const forced = run(["unsync", "api", "--force"], { cwd });
+  assert.equal(forced.status, 0, forced.stdout + forced.stderr);
+  assert.match(forced.stdout + forced.stderr, /continuing with stale remote knowledge/);
+});
+
+test("explicit orphan unsync is safe while --all does not infer alias renames", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  writeSources(cwd, `mode: worktree\n${sourceFor("web", bare)}`);
+
+  const all = run(["unsync", "--all"], { cwd });
+  assert.equal(all.status, 0, all.stdout + all.stderr);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), true);
+
+  const explicit = run(["unsync", "api"], { cwd });
+  assert.equal(explicit.status, 0, explicit.stdout + explicit.stderr);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), false);
+});
+
+test("worktree unsync resumes after worktrees were removed but common deletion failed", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const failed = run(["unsync", "api"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_FAIL_AT: "unsync-common:api" },
+  });
+  assert.equal(failed.status, 2, failed.stdout + failed.stderr);
+  assert.match(failed.stdout + failed.stderr, /worktrees removed \[api\/main\], but common repository was preserved/);
+  assert.equal(existsSync(join(cwd, "oms", "api", "main")), false);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), true);
+
+  const retried = run(["unsync", "api"], { cwd });
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), false);
+});
+
+test("multi-alias worktree unsync reports completed and incomplete deletion phases", () => {
+  const api = initBareUpstream();
+  const web = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", api)}${sourceFor("web", web).replace(/^repos:\n/, "")}`);
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+
+  const result = run(["unsync", "--all"], {
+    cwd,
+    env: { ...testEnv, OMS_TEST_MODE: "1", OMS_TEST_FAIL_AT: "unsync-common:api" },
+  });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /Unsync completed: web; incomplete: api/);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), true);
+  assert.equal(existsSync(join(cwd, "oms", "api", "main")), false);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "web.git")), false);
+
+  const retried = run(["unsync", "api"], { cwd });
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.equal(existsSync(join(cwd, ".oms", "repos", "api.git")), false);
+});
+
+test("worktree branch list is lock-free and does not refresh common refs", () => {
+  const bare = initBareUpstream({ branches: ["main", "feature/login"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const external = tempWorkspace();
+  git(common, "branch", "external", "refs/remotes/origin/feature/login");
+  git(common, "worktree", "add", external, "external");
+  const remoteBefore = gitOut(common, "rev-parse", "refs/remotes/origin/main");
+
+  const seed = mkdtempSync(join(tmpdir(), "oms-seed-"));
+  execFileSync("git", ["clone", bare, seed], { stdio: "ignore", env: testEnv });
+  configIdentity(seed);
+  git(seed, "commit", "--allow-empty", "-m", "remote advance");
+  git(seed, "push", "origin", "main");
+  writeFileSync(join(cwd, ".oms-mutation.lock"), "occupied\n");
+
+  const result = run(["branch", "list", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /main\s+[0-9a-f]+\s+api\/main/);
+  const canonicalExternal = realpathSync(external);
+  assert.match(result.stdout, new RegExp(`external\\s+[0-9a-f]+\\s+${canonicalExternal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(result.stdout, /origin\s+feature\/login/);
+  assert.equal(gitOut(common, "rev-parse", "refs/remotes/origin/main"), remoteBefore);
+  assert.equal(readFileSync(join(cwd, ".oms-mutation.lock"), "utf8"), "occupied\n");
+});
+
+test("worktree names reject non-portable and colliding slugs before mutation", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  for (const name of ["UPPER", "con", "bad/name", "a".repeat(65)]) {
+    const result = run(["worktree", "add", "api", "dev", "--name", name], { cwd });
+    assert.equal(result.status, 1, `${name}\n${result.stdout}${result.stderr}`);
+  }
+  const collision = run(["worktree", "add", "api", "dev", "--name", "main"], { cwd });
+  assert.equal(collision.status, 1, collision.stdout + collision.stderr);
+  assert.equal(existsSync(join(cwd, "oms", "api", "dev")), false);
+});
+
 test("sync accepts aliases with underscore, dash, and at-sign", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
@@ -862,20 +3025,24 @@ test("status --json emits one pretty JSON object on stdout with the stable top-l
 
   // Pure JSON: starts with `{`, two-space indented, single trailing newline, no diagnostics.
   assert.ok(result.stdout.startsWith("{"));
-  assert.match(result.stdout, /\n  "schemaVersion": 1,/);
+  assert.match(result.stdout, /\n  "schemaVersion": 2,/);
   assert.ok(result.stdout.endsWith("}\n"));
 
   const data = JSON.parse(result.stdout);
-  assert.equal(data.schemaVersion, 1);
+  assert.equal(data.schemaVersion, 2);
+  assert.equal(data.mode, "submodule");
   assert.equal(typeof data.toolVersion, "string");
   assert.equal(data.workspaceRoot, realpathSync(cwd));
   assert.ok(isAbsolute(data.workspaceRoot));
   assert.equal(data.currentAlias, null);
+  assert.equal(data.currentWorktree, null);
+  assert.equal(data.currentTarget, null);
   assert.ok(Array.isArray(data.errors));
   assert.deepEqual(data.errors, []);
   assert.ok(data.root && typeof data.root === "object");
 
   const repo = data.repos[0];
+  assert.equal(repo.mode, "submodule");
   assert.equal(repo.alias, "api");
   assert.equal(repo.path, "oms/api"); // POSIX, workspace-relative
   assert.equal(repo.absolutePath, join(realpathSync(cwd), "oms", "api"));
@@ -883,6 +3050,24 @@ test("status --json emits one pretty JSON object on stdout with the stable top-l
   assert.equal(repo.initialized, true);
   assert.equal(repo.pin, "ok");
   assert.equal(repo.error, null);
+  const schema = JSON.parse(readFileSync(resolve("oms.status.schema.json"), "utf8"));
+  const validate = new Ajv2020({ strict: true }).compile(schema);
+  assert.equal(validate(data), true, JSON.stringify(validate.errors));
+});
+
+test("golden status-v2 fixtures match the normative schema and contain no v1 contract", () => {
+  const schema = JSON.parse(readFileSync(resolve("oms.status.schema.json"), "utf8"));
+  const validate = new Ajv2020({ strict: true }).compile(schema);
+  const fixtureRoot = resolve("tests", "fixtures", "status-v2");
+  const fixtures = readdirSync(fixtureRoot).filter((name) => name.endsWith(".json")).sort();
+  assert.deepEqual(fixtures, ["submodule.json", "worktree.json"]);
+  for (const name of fixtures) {
+    const source = readFileSync(join(fixtureRoot, name), "utf8");
+    const fixture = JSON.parse(source);
+    assert.equal(fixture.schemaVersion, 2, name);
+    assert.equal(validate(fixture), true, `${name}: ${JSON.stringify(validate.errors)}`);
+    assert.doesNotMatch(source, /"schemaVersion"\s*:\s*1\b/, name);
+  }
 });
 
 test("status --json reports currentAlias when run inside a configured submodule subtree", () => {
@@ -907,7 +3092,10 @@ test("status --json keeps its schema and path representation through a symlinked
   const data = statusJson(linked);
   assert.deepEqual(Object.keys(data).sort(), [
     "currentAlias",
+    "currentTarget",
+    "currentWorktree",
     "errors",
+    "mode",
     "repos",
     "root",
     "schemaVersion",
@@ -1094,6 +3282,99 @@ test("status --json keeps valid JSON and exits non-zero when a repo read fails",
   // Structured fields keep their normal shape with safe defaults.
   assert.deepEqual(repo.changes, { staged: 0, unstaged: 0, untracked: 0 });
   assert.equal(data.errors.length, 1);
+});
+
+test("worktree status v2 reports plain-directory current context and validates against its schema", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  const data = statusJson(checkout);
+  assert.equal(data.schemaVersion, 2);
+  assert.equal(data.mode, "worktree");
+  assert.equal(data.currentAlias, "api");
+  assert.equal(data.currentWorktree, "main");
+  assert.equal(data.currentTarget, "api/main");
+  assert.equal(data.root, null);
+  assert.equal(data.repos[0].mode, "worktree");
+  assert.equal(data.repos[0].worktrees[0].target, "api/main");
+  assert.equal(data.repos[0].worktrees[0].relativePath, "oms/api/main");
+  assert.equal("pin" in data.repos[0], false);
+  const human = run(["status"], { cwd: checkout });
+  assert.equal(human.status, 0, human.stdout + human.stderr);
+  assert.match(human.stdout, /api\/main\s+main/);
+  const schema = JSON.parse(readFileSync(resolve("oms.status.schema.json"), "utf8"));
+  const validate = new Ajv2020({ strict: true }).compile(schema);
+  assert.equal(validate(data), true, JSON.stringify(validate.errors));
+});
+
+test("worktree status reports external checkouts and compound filters", () => {
+  const bare = initBareUpstream({ branches: ["main", "external"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "branch", "external", "refs/remotes/origin/external");
+  const external = tempWorkspace();
+  git(common, "worktree", "add", external, "external");
+
+  const all = statusJson(cwd);
+  const outside = all.repos[0].worktrees.find((entry) => !entry.managed);
+  assert.equal(outside.name, null);
+  assert.equal(outside.target, null);
+  assert.equal(outside.path, realpathSync(external));
+  const schema = JSON.parse(readFileSync(resolve("oms.status.schema.json"), "utf8"));
+  const validate = new Ajv2020({ strict: true }).compile(schema);
+  assert.equal(validate(all), true, JSON.stringify(validate.errors));
+  const filtered = statusJson(cwd, ["api/main"]);
+  assert.equal(filtered.repos.length, 1);
+  assert.deepEqual(filtered.repos[0].worktrees.map((entry) => entry.target), ["api/main"]);
+  const invalid = run(["status", "api/missing", "--json"], { cwd });
+  assert.equal(invalid.status, 1, invalid.stdout + invalid.stderr);
+  assert.equal(invalid.stdout, "");
+});
+
+test("submodule status rejects worktree compound filters before JSON output", () => {
+  const { cwd } = workspaceWithApi();
+  const result = run(["status", "api/main", "--json"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /not alias\/name targets/);
+});
+
+test("worktree status preserves empty repositories and surfaces partial worktree errors", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const checkout = join(cwd, "oms", "api", "main");
+  rmSync(checkout, { recursive: true, force: true });
+  const partial = statusJson(cwd, [], 2);
+  assert.equal(partial.repos[0].worktrees[0].error, "worktree path is stale");
+  assert.equal(partial.errors[0].scope, "worktree");
+
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const empty = statusJson(cwd);
+  assert.deepEqual(empty.repos[0].worktrees, []);
+  const human = run(["status"], { cwd });
+  assert.equal(human.status, 0, human.stdout + human.stderr);
+  assert.match(human.stdout, /api\s+\(no worktrees\)/);
+});
+
+test("nested worktree status reports enclosing root and excludes generated paths from counts", () => {
+  const bare = initBareUpstream();
+  const root = initGitWorkspace();
+  const cwd = join(root, "nested");
+  mkdirSync(cwd);
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  const before = gitOut(root, "status", "--porcelain").split("\n").filter(Boolean).length;
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const data = statusJson(cwd);
+  assert.equal(data.root.path, realpathSync(root));
+  assert.equal(data.root.relation, "ancestor");
+  assert.equal(data.root.changes.untracked, before);
+  assert.equal("submodulePointers" in data.root, false);
 });
 
 // --- oms commit (submodule source commits only) ---
@@ -2026,10 +4307,11 @@ test("agent install --target both creates one managed block per file with the du
     assert.ok(content.endsWith("\n") && !content.endsWith("\n\n"));
     // Durable rules per the spec scenario.
     assert.match(content, /oms status --json/);
-    assert.match(content, /separate Git repositor/);
-    assert.match(content, /do not guess/i);
+    assert.match(content, /schemaVersion 2/);
+    assert.match(content, /mode.*currentTarget/);
+    assert.match(content, /alias\/name/);
+    assert.match(content, /never guess/i);
     assert.match(content, /oms record <alias>/);
-    assert.match(content, /oms --help/);
     assert.match(content, /oms <command> --help/);
   }
 });
@@ -2126,11 +4408,11 @@ test("agent uninstall rejects a duplicate managed block atomically", () => {
 
 // --- command help boundaries ---
 
-test("commit help explains the submodule scope with an example", () => {
+test("commit help explains submodule and worktree checkout scope with an example", () => {
   const result = run(["commit", "--help"]);
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /submodule only/);
-  assert.match(result.stdout, /never the root gitlink/);
+  assert.match(result.stdout, /selected submodule alias or worktree-mode alias\/name only/);
+  assert.match(result.stdout, /staged-first/);
   assert.match(result.stdout, /oms commit api/);
 });
 
@@ -2164,15 +4446,18 @@ test("status help documents the machine-readable --json mode", () => {
   assert.match(result.stdout, /JSON object/);
 });
 
-test("status help documents the schemaVersion 1 field contract", () => {
+test("status help documents the schemaVersion 2 field contract", () => {
   const result = run(["status", "--help"]);
   assert.equal(result.status, 0);
-  // Names every schemaVersion 1 top-level key.
+  // Names every schemaVersion 2 top-level key.
   for (const key of [
     "schemaVersion",
     "toolVersion",
     "workspaceRoot",
     "currentAlias",
+    "currentWorktree",
+    "currentTarget",
+    "mode",
     "root",
     "repos",
     "errors",
@@ -2436,7 +4721,7 @@ test("doctor warns when .gitignore still excludes oms/", () => {
   assert.match(output, /\.gitignore excludes oms\//);
 });
 
-test("doctor warns when git is older than the recommended 2.40", () => {
+test("doctor warns when git is older than the required 2.48", () => {
   const cwd = tempWorkspace();
   writeSources(cwd);
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
@@ -2454,7 +4739,364 @@ test("doctor warns when git is older than the recommended 2.40", () => {
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
-  assert.match(output, /git 2\.30 is older than the recommended 2\.40/);
+  assert.match(output, /git 2\.30 is older than the required 2\.48/);
+});
+
+test("init rejects Git older than 2.48 before writing", () => {
+  const cwd = tempWorkspace();
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "$1" = "--version" ]; then echo "git version 2.47.9"; exit 0; fi\nexec ${realGit} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+  const result = run(["init", "--mode", "worktree"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` },
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /Git 2\.48 or newer is required/);
+  assert.equal(existsSync(join(cwd, "oms.yaml")), false);
+});
+
+test("the first post-init mutation creates one workspace identity and excludes control files", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+
+  const ownershipPath = join(cwd, ".oms", "workspace.json");
+  const first = readFileSync(ownershipPath, "utf8");
+  const ownership = JSON.parse(first);
+  assert.match(ownership.workspaceId, /^[0-9a-f-]{36}$/);
+  assert.equal(existsSync(join(cwd, ".oms-mutation.lock")), false);
+  assert.equal(gitOut(cwd, "status", "--porcelain", "--", ".oms", ".oms-mutation.lock"), "");
+
+  assert.equal(run(["fetch", "api"], { cwd }).status, 0);
+  assert.equal(readFileSync(ownershipPath, "utf8"), first);
+});
+
+test("a workspace mutation lock conflict leaves manifest, identity, and Git state unchanged", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  const manifestBefore = readFileSync(join(cwd, "oms.yaml"), "utf8");
+  const headBefore = gitOut(cwd, "rev-parse", "HEAD");
+  const indexBefore = readFileSync(join(cwd, ".git", "index"));
+  writeFileSync(join(cwd, ".oms-mutation.lock"), "occupied\n");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /Another OMS mutation owns/);
+  assert.equal(readFileSync(join(cwd, "oms.yaml"), "utf8"), manifestBefore);
+  assert.equal(existsSync(join(cwd, ".oms", "workspace.json")), false);
+  assert.equal(readFileSync(join(cwd, ".oms-mutation.lock"), "utf8"), "occupied\n");
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
+  assert.deepEqual(readFileSync(join(cwd, ".git", "index")), indexBefore);
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+});
+
+test("representative mutation-lock conflicts leave worktree files, refs, and topology unchanged", () => {
+  const bare = initBareUpstream({ branches: ["main", "dev"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["worktree", "add", "api", "dev"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const main = join(cwd, "oms", "api", "main");
+  const manifestBefore = readFileSync(join(cwd, "oms.yaml"));
+  const ownershipBefore = readFileSync(join(cwd, ".oms", "workspace.json"));
+  const refsBefore = gitOut(common, "show-ref");
+  const headBefore = gitOut(main, "rev-parse", "HEAD");
+  const statusBefore = gitOut(main, "status", "--porcelain=v1", "--untracked-files=all");
+  writeFileSync(join(cwd, ".oms-mutation.lock"), "occupied\n");
+
+  const commands = [
+    ["sync", "api"],
+    ["unsync", "api"],
+    ["worktree", "add", "api", "locked-branch", "--from", "main"],
+    ["worktree", "move", "api/main", "moved"],
+    ["worktree", "remove", "api/main"],
+    ["commit", "api/main", "-m", "test: locked"],
+    ["record", "api"],
+    ["fetch", "api"],
+    ["pull", "api/main"],
+    ["push", "api/main"],
+    ["branch", "switch", "api/main", "locked-branch", "--from", "main"],
+    ["branch", "checkout", "api/main", "dev"],
+    ["branch", "delete", "api", "dev"],
+    ["mode", "switch", "submodule", "--no-sync"],
+  ];
+  for (const args of commands) {
+    const result = run(args, { cwd });
+    assert.equal(result.status, 1, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
+    assert.match(result.stdout + result.stderr, /Another OMS mutation owns/, args.join(" "));
+    assert.deepEqual(readFileSync(join(cwd, "oms.yaml")), manifestBefore);
+    assert.deepEqual(readFileSync(join(cwd, ".oms", "workspace.json")), ownershipBefore);
+    assert.equal(gitOut(common, "show-ref"), refsBefore);
+    assert.equal(gitOut(main, "rev-parse", "HEAD"), headBefore);
+    assert.equal(gitOut(main, "status", "--porcelain=v1", "--untracked-files=all"), statusBefore);
+    assert.equal(readFileSync(join(cwd, ".oms-mutation.lock"), "utf8"), "occupied\n");
+  }
+});
+
+test("init and root record lock conflicts refuse before manifest or index mutation", () => {
+  const initRoot = tempWorkspace();
+  writeFileSync(join(initRoot, ".oms-mutation.lock"), "occupied\n");
+  const initResult = run(["init", "--mode", "worktree"], { cwd: initRoot });
+  assert.equal(initResult.status, 1, initResult.stdout + initResult.stderr);
+  assert.match(initResult.stdout + initResult.stderr, /Another OMS mutation owns/);
+  assert.equal(existsSync(join(initRoot, "oms.yaml")), false);
+
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  const indexBefore = readFileSync(join(cwd, ".git", "index"));
+  const headBefore = gitOut(cwd, "rev-parse", "HEAD");
+  writeFileSync(join(cwd, ".oms-mutation.lock"), "occupied\n");
+  const record = run(["record", "api"], { cwd });
+  assert.equal(record.status, 1, record.stdout + record.stderr);
+  assert.match(record.stdout + record.stderr, /Another OMS mutation owns/);
+  assert.deepEqual(readFileSync(join(cwd, ".git", "index")), indexBefore);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
+});
+
+test("submodule branch list preserves refresh behavior behind the mutation lock", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const headBefore = gitOut(join(cwd, "oms", "api"), "rev-parse", "HEAD");
+  const refBefore = gitOut(join(cwd, "oms", "api"), "rev-parse", "refs/remotes/origin/main");
+  writeFileSync(join(cwd, ".oms-mutation.lock"), "occupied\n");
+
+  const result = run(["branch", "list", "api"], { cwd });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /Another OMS mutation owns/);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "rev-parse", "HEAD"), headBefore);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "rev-parse", "refs/remotes/origin/main"), refBefore);
+  assert.equal(readFileSync(join(cwd, ".oms-mutation.lock"), "utf8"), "occupied\n");
+});
+
+test("doctor reports a proven stale workspace mutation lock without removing it", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const lock = {
+    version: 1,
+    operation: "sync",
+    operationId: "test-operation",
+    ownerToken: "test-owner",
+    targetHash: "test-target",
+    workspaceId: null,
+    pid: process.pid,
+    processStart: "not-the-current-process-start",
+    startedAt: "2026-01-01T00:00:00.000Z",
+  };
+  writeFileSync(join(cwd, ".oms-mutation.lock"), `${JSON.stringify(lock)}\n`);
+
+  const result = run(["doctor"], { cwd });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /refers to non-running sync process/);
+  assert.match(result.stdout + result.stderr, /Verify no OMS mutation is active/);
+  assert.equal(readFileSync(join(cwd, ".oms-mutation.lock"), "utf8"), `${JSON.stringify(lock)}\n`);
+});
+
+test("lock-free doctor Git subprocesses disable optional locks", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "\${GIT_OPTIONAL_LOCKS:-}" != "0" ]; then echo "optional locks enabled" >&2; exit 97; fi\nexec ${realGit} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+
+  const result = run(["doctor"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` },
+  });
+  assert.notEqual(result.status, 97, result.stdout + result.stderr);
+  assert.doesNotMatch(result.stdout + result.stderr, /optional locks enabled/);
+});
+
+test("worktree doctor diagnoses endpoint, provenance, relative metadata, lock, exclude, and orphan drift read-only", () => {
+  const bare = initBareUpstream({ branches: ["main", "external"] });
+  const root = initGitWorkspace();
+  const cwd = join(root, "nested");
+  mkdirSync(cwd);
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  const checkout = join(cwd, "oms", "api", "main");
+  git(common, "config", "worktree.useRelativePaths", "false");
+  git(common, "config", "--add", "remote.origin.url", `file://${bare}`);
+  git(common, "config", "--replace-all", "remote.origin.fetch", "+refs/tags/*:refs/tags/*");
+  git(common, "config", "url.file:///redirect.insteadOf", "file:///declared");
+  git(common, "worktree", "lock", checkout);
+  mkdirSync(join(cwd, ".oms", "repos", "orphan.git"));
+  const excludePath = resolve(cwd, gitOut(cwd, "rev-parse", "--git-path", "info/exclude"));
+  writeFileSync(excludePath, readFileSync(excludePath, "utf8").replace(/^.*\.oms\/workspace\.json.*\r?\n/m, ""));
+  const before = snapshotDirectory(cwd);
+
+  const result = run(["doctor"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /worktree\.useRelativePaths is not enabled/);
+  assert.match(output, /endpoint configuration drifted/);
+  assert.match(output, /fetch refspec drifted/);
+  assert.match(output, /fetch provenance is untrusted/);
+  assert.match(output, /URL rewrite configuration violates/);
+  assert.match(output, /is locked/);
+  assert.match(output, /orphaned from oms\.yaml/);
+  assert.match(output, /local exclude block is missing \.oms\/workspace\.json/);
+  assert.deepEqual(snapshotDirectory(cwd), before);
+});
+
+test("doctor reports ownership, symlink, external, stale, and incompatible topology boundaries", () => {
+  const bare = initBareUpstream({ branches: ["main", "external"] });
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "branch", "external", "refs/remotes/origin/external");
+  const external = tempWorkspace();
+  git(common, "worktree", "add", external, "external");
+  const externalResult = run(["doctor"], { cwd });
+  assert.equal(externalResult.status, 2, externalResult.stdout + externalResult.stderr);
+  assert.match(externalResult.stdout + externalResult.stderr, /external or ownership-ambiguous worktree/);
+
+  git(common, "worktree", "remove", "--force", external);
+  const aliasPath = join(cwd, "oms", "api");
+  const actualPath = join(cwd, "oms", "api-actual");
+  renameSync(aliasPath, actualPath);
+  symlinkSync(actualPath, aliasPath, "dir");
+  const symlinked = run(["doctor"], { cwd });
+  assert.equal(symlinked.status, 2, symlinked.stdout + symlinked.stderr);
+  assert.match(symlinked.stdout + symlinked.stderr, /symbolic|ownership-ambiguous/);
+
+  unlinkSync(aliasPath);
+  renameSync(actualPath, aliasPath);
+  git(common, "config", "oms.workspaceId", "00000000-0000-0000-0000-000000000000");
+  const foreign = run(["doctor"], { cwd });
+  assert.equal(foreign.status, 2, foreign.stdout + foreign.stderr);
+  assert.match(foreign.stdout + foreign.stderr, /ownership or shape does not match/);
+
+  const submodule = initGitWorkspace();
+  writeSources(submodule);
+  mkdirSync(join(submodule, ".oms", "repos"), { recursive: true });
+  const incompatible = run(["doctor"], { cwd: submodule });
+  assert.equal(incompatible.status, 2, incompatible.stdout + incompatible.stderr);
+  assert.match(incompatible.stdout + incompatible.stderr, /worktree-mode state remains in submodule mode/);
+});
+
+test("all lock-free worktree inspections disable optional locks and leave concurrent mutation state unchanged", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const processStart = execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8" }).trim();
+  writeFileSync(join(cwd, ".oms-mutation.lock"), `${JSON.stringify({
+    version: 1,
+    operation: "representative concurrent mutation",
+    operationId: "inspection-test",
+    ownerToken: "inspection-test",
+    targetHash: "inspection-test",
+    workspaceId: JSON.parse(readFileSync(join(cwd, ".oms", "workspace.json"), "utf8")).workspaceId,
+    transitionId: null,
+    pid: process.pid,
+    processStart,
+    startedAt: "2026-01-01T00:00:00.000Z",
+  })}\n`);
+  const before = snapshotDirectory(cwd);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(stubGit, `#!/usr/bin/env bash\nif [ "\${GIT_OPTIONAL_LOCKS:-}" != "0" ]; then echo "optional locks enabled" >&2; exit 97; fi\nexec ${JSON.stringify(realGit)} "$@"\n`);
+  chmodSync(stubGit, 0o755);
+  const env = { ...testEnv, PATH: `${stubDir}${delimiter}${process.env.PATH}` };
+  for (const args of [["status", "--json"], ["worktree", "list"], ["branch", "list", "api"], ["doctor"]]) {
+    const result = run(args, { cwd, env });
+    assert.notEqual(result.status, 97, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
+    assert.doesNotMatch(result.stdout + result.stderr, /optional locks enabled/);
+    assert.deepEqual(snapshotDirectory(cwd), before, args.join(" "));
+  }
+});
+
+test("worktree prompt and exit contracts are deterministic without real prompt fallback", () => {
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  const success = run(["sync", "api"], { cwd, env: queueEnv([]) });
+  assert.equal(success.status, 0, success.stdout + success.stderr);
+  const deterministic = run(["worktree", "add"], { cwd, env: queueEnv([{ type: "cancel" }]) });
+  assert.equal(deterministic.status, 1, deterministic.stdout + deterministic.stderr);
+  const refusal = run(["worktree", "add"], { cwd });
+  assert.equal(refusal.status, 1, refusal.stdout + refusal.stderr);
+  assert.match(refusal.stdout + refusal.stderr, /requires a repository alias outside an interactive terminal/);
+  const common = join(cwd, ".oms", "repos", "api.git");
+  git(common, "config", "--add", "remote.origin.url", `file://${bare}`);
+  const safety = run(["fetch", "api"], { cwd, env: queueEnv([]) });
+  assert.equal(safety.status, 1, safety.stdout + safety.stderr);
+  const missing = join(cwd, "missing-remote.git");
+  git(common, "config", "--unset-all", "remote.origin.url");
+  git(common, "config", "--add", "remote.origin.url", `file://${missing}`);
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", missing)}`);
+  const operational = run(["fetch", "api"], { cwd, env: queueEnv([]) });
+  assert.equal(operational.status, 2, operational.stdout + operational.stderr);
+});
+
+test("credential canaries never cross output channels or OMS-managed durable files", () => {
+  const canary = "OMS_CANARY_9f31";
+  const bare = initBareUpstream();
+  const cwd = tempWorkspace();
+  writeSources(cwd, `mode: worktree\n${sourceFor("api", bare)}`);
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(stubGit, `#!/usr/bin/env bash\nif [ "$1" = "fetch" ]; then\n  printf '%s\\n' 'https://user:${canary}@example.invalid/repo.git?token=${canary}#${canary}' >&2\n  printf '%s\\n' 'https://user%3A${canary}%40example.invalid/repo.git' >&2\n  printf '%s\\n' 'Authorization: Bearer ${canary}' 'Proxy-Authorization: Basic ${canary}' 'http.extraHeader=Authorization: Bearer ${canary}' >&2\n  printf '\\001OMS_CANARY_9f31\\n' >&2\n  exit 42\nfi\nexec ${JSON.stringify(realGit)} "$@"\n`);
+  chmodSync(stubGit, 0o755);
+  const result = run(["fetch", "api"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}${delimiter}${process.env.PATH}` },
+  });
+  assert.equal(result.status, 2, result.stdout + result.stderr);
+  const output = result.stdout + result.stderr;
+  assert.doesNotMatch(output, new RegExp(canary));
+  assert.doesNotMatch(output, /%3AOMS_CANARY|[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/);
+  assert.match(output, /\[redacted\]/);
+  for (const [path, kind, , hash] of snapshotDirectory(cwd)) {
+    if (kind !== "file" || path === "oms.yaml") continue;
+    assert.notEqual(hash, createHash("sha256").update(canary).digest("hex"));
+    assert.doesNotMatch(readFileSync(join(cwd, path), "utf8"), new RegExp(canary), path);
+  }
+});
+
+test("managed mutations reject Git older than 2.48 before workspace changes", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = mkdtempSync(join(tmpdir(), "oms-git-stub-"));
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "$1" = "--version" ]; then echo "git version 2.47.9"; exit 0; fi\nexec ${realGit} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+  const result = run(["sync", "sample"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` },
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /Git 2\.48 or newer is required/);
+  assert.equal(existsSync(join(cwd, ".oms-mutation.lock")), false);
+  assert.equal(existsSync(join(cwd, ".oms")), false);
+  assert.equal(existsSync(join(cwd, "oms", "sample")), false);
 });
 
 // --- multiple remotes ---
@@ -3186,10 +5828,11 @@ test("skills help documents purpose, scope, and an example", () => {
 // The canonical scope-guardrail kernel, identical to OMS_SCOPE_GUARDRAIL in scripts/oms.ts.
 // Pinned to the source constant below via the marker-block assertion, so it cannot silently drift.
 const SKILL_KERNEL = [
-  "- Run `oms status --json` before Git work involving `oms/` to read root versus submodule state.",
-  "- Treat each `oms/<alias>/` directory as a separate Git repository.",
-  "- Use `oms` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.",
-  "- Do not create root commits for existing submodule pointer updates unless the user explicitly runs `oms record <alias>`.",
+  "- Run `oms status --json` before Git work involving `.oms/` or `oms/`; require schemaVersion 2 and use `oms status --help` if another version appears.",
+  "- Read `mode`, `currentTarget`, the root relation, and each repository discriminator before choosing a Git scope.",
+  "- Treat root operations, alias-scoped repository operations, and worktree-mode `alias/name` checkout operations as different scopes; never guess.",
+  "- In submodule mode, record an existing pointer only when the user explicitly runs `oms record <alias>`; worktree mode has no root pointer record.",
+  "- Check `oms <command> --help` for exact mode-specific targets, flags, and recovery behavior.",
 ].join("\n");
 
 const SKILL_NAMES = ["oms-workspace", "oms-pointer", "oms-branch"];
@@ -4265,7 +6908,8 @@ test("an interrupted commit after HEAD advances is recovered by the next command
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
 
-  // The next root-mutating command completes the recovery and clears the state.
+  // Doctor-confirmed stale workspace-lock removal allows the root transaction recovery to resume.
+  clearProvenStaleWorkspaceLock(cwd);
   const recovered = run(["sync", "api"], { cwd });
   assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
@@ -4317,7 +6961,7 @@ test("an interruption before HEAD advances preserves the real index and is clean
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
 
-  // The next run cleans the uncommitted prepared state and finalizes normally.
+  clearProvenStaleWorkspaceLock(cwd);
   const recovered = run(["sync", "api", "--commit"], { cwd });
   assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
@@ -4340,6 +6984,7 @@ test("a committed recovery whose index no longer matches is preserved and blocks
   writeFileSync(join(cwd, "unrelated.txt"), "x");
   git(cwd, "add", "unrelated.txt");
 
+  clearProvenStaleWorkspaceLock(cwd);
   const blocked = run(["sync", "api"], { cwd });
   const output = blocked.stdout + blocked.stderr;
   assert.notEqual(blocked.status, 0, output);
@@ -4361,6 +7006,7 @@ test("record completes a pending finalization recovery through the shared prefli
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
 
   // record runs the same recovery preflight before touching the root pointer.
+  clearProvenStaleWorkspaceLock(cwd);
   const recovered = run(["record", "api"], { cwd });
   assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
@@ -4434,6 +7080,7 @@ test("an index-install failure after HEAD advances preserves recovery state for 
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
 
+  clearProvenStaleWorkspaceLock(cwd);
   const recovered = run(["sync", "api"], { cwd });
   assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
@@ -4476,6 +7123,7 @@ test("a crash after index installation is recognized as completed recovery", () 
   assert.notEqual(crashed.status, 0, crashed.stdout + crashed.stderr);
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
 
+  clearProvenStaleWorkspaceLock(cwd);
   const recovered = run(["sync", "api"], { cwd });
   assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);
@@ -4495,6 +7143,7 @@ test("a crash after the real index rename cleans the retained recovery artifact"
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), true);
   assert.equal(existsSync(join(cwd, ".git", "oms", "index.recovery")), true);
 
+  clearProvenStaleWorkspaceLock(cwd);
   const recovered = run(["sync", "api"], { cwd });
   assert.equal(recovered.status, 0, recovered.stdout + recovered.stderr);
   assert.equal(existsSync(join(cwd, ".git", "oms", "finalize.json")), false);

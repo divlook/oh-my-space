@@ -9,17 +9,17 @@ const OMS_MARKER_START = "<!-- OMS START -->";
 const OMS_MARKER_END = "<!-- OMS END -->";
 
 /** Canonical scope-guardrail kernel, single-sourced into the marker block and each published SKILL.md. */
-const OMS_SCOPE_GUARDRAIL = `- Run \`oms status --json\` before Git work involving \`oms/\` to read root versus submodule state.
-- Treat each \`oms/<alias>/\` directory as a separate Git repository.
-- Use \`oms\` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
-- Do not create root commits for existing submodule pointer updates unless the user explicitly runs \`oms record <alias>\`.`;
+const OMS_SCOPE_GUARDRAIL = `- Run \`oms status --json\` before Git work involving \`.oms/\` or \`oms/\`; require schemaVersion 2 and use \`oms status --help\` if another version appears.
+- Read \`mode\`, \`currentTarget\`, the root relation, and each repository discriminator before choosing a Git scope.
+- Treat root operations, alias-scoped repository operations, and worktree-mode \`alias/name\` checkout operations as different scopes; never guess.
+- In submodule mode, record an existing pointer only when the user explicitly runs \`oms record <alias>\`; worktree mode has no root pointer record.
+- Check \`oms <command> --help\` for exact mode-specific targets, flags, and recovery behavior.`;
 
 /** Concise, durable agent rules; detailed usage is deferred to CLI help. The marker's own --help line stays outside the kernel constant. */
 const OMS_INSTRUCTION_BLOCK = `${OMS_MARKER_START}
 ## OMS Workspace Rules
 
 ${OMS_SCOPE_GUARDRAIL}
-- Check \`oms --help\` and \`oms <command> --help\` for exact command usage.
 ${OMS_MARKER_END}`;
 
 type ManagedBlockState =

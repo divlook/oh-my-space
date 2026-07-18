@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "@clack/prompts";
 import { DATA_DIRNAME, MANIFEST_FILENAME } from "./constants.js";
 import { recoveryPreflight } from "./root-tx.js";
+import { readModeSwitchJournal } from "./mode-switch-journal.js";
+import type { ModeSwitchJournal } from "./mode-switch-journal.js";
 import { reconcileGitmodules, type AliasMetadataPlan } from "./gitmodules-reconcile.js";
 import {
   aliasDir,
@@ -42,6 +45,10 @@ import {
 import { finalizeTopology } from "./topology-commit.js";
 import { attachBranch, ensureRemotes, gitmodulesBranch } from "./submodule-config.js";
 import { ensureOmsNotIgnored } from "./workspace-ignore.js";
+import { runWorktreeSync } from "./worktree-sync.js";
+import { runWorktreeUnsync } from "./worktree-unsync.js";
+import { readWorkspaceOwnership } from "./workspace-mutation.js";
+import { unexpectedWorktreeExcludeRules } from "./workspace-exclude.js";
 import type {
   OperationResult,
   RemoveOutcome,
@@ -63,6 +70,81 @@ function gitmodulesMergeState(repoRoot: string): "clear" | "unmerged" | "unknown
   const result = runGit(repoRoot, ["ls-files", "-u", "--", ".gitmodules"]);
   if (!result.success) return "unknown";
   return result.stdout.trim().length > 0 ? "unmerged" : "clear";
+}
+
+function unexpectedOldModeTopology(repoRoot: string, mode: "submodule" | "worktree"): string | null {
+  if (mode === "submodule") {
+    const old = [join(repoRoot, ".oms", "repos"), join(repoRoot, ".oms", "provisioning"), join(repoRoot, ".oms", "fetch-provenance")]
+      .find((path) => existsSync(path));
+    return old ? `${old} remains from worktree mode` : null;
+  }
+  if (existsSync(join(repoRoot, ".gitmodules"))) return ".gitmodules remains from submodule mode";
+  const modules = runGit(repoRoot, ["rev-parse", "--git-path", `modules/${DATA_DIRNAME}`]);
+  if (modules.success && modules.stdout.trim()) {
+    const modulesPath = modules.stdout.trim();
+    const absoluteModules = modulesPath.startsWith("/") ? modulesPath : join(repoRoot, modulesPath);
+    if (existsSync(absoluteModules)) return `${absoluteModules} remains from submodule mode`;
+  }
+  const gitlinks = runGit(repoRoot, ["ls-files", "--stage", "--", `${DATA_DIRNAME}/`]);
+  if (gitlinks.success && gitlinks.stdout.split("\n").some((line) => line.startsWith("160000 "))) {
+    return "root index still contains submodule gitlinks";
+  }
+  return null;
+}
+
+/** Validates that only the recorded transition may provision target-mode topology. */
+export function validateModeSwitchTargetSync(
+  repoRoot: string,
+  loaded: { mode: "submodule" | "worktree"; repos: Repo[] },
+  transition: ModeSwitchJournal,
+): string | null {
+  if (!transition.sync) return "the transition journal selected --no-sync";
+  if (transition.phase !== "manifest-updated") return `the transition phase is ${transition.phase}, not manifest-updated`;
+  if (transition.targetMode !== loaded.mode || transition.sourceMode === loaded.mode) {
+    return "the transition modes do not match the current manifest mode";
+  }
+  const manifestHash = createHash("sha256").update(readFileSync(join(repoRoot, MANIFEST_FILENAME))).digest("hex");
+  if (manifestHash !== transition.expectedManifestHash) return "oms.yaml does not match the journal's expected target bytes";
+  const expectedAliases = loaded.repos.map(({ alias }) => alias).sort();
+  const completedAliases = [...transition.completedAliases].sort();
+  if (completedAliases.length !== expectedAliases.length
+    || completedAliases.some((alias, index) => alias !== expectedAliases[index])) {
+    return "the journal does not record source removal for every declared alias";
+  }
+  if (loaded.mode === "worktree") {
+    if (existsSync(join(repoRoot, ".gitmodules"))) return ".gitmodules remains from submodule mode";
+    const modules = runGit(repoRoot, ["rev-parse", "--git-path", `modules/${DATA_DIRNAME}`]);
+    if (modules.success && modules.stdout.trim()) {
+      const modulesPath = modules.stdout.trim();
+      const absoluteModules = modulesPath.startsWith("/") ? modulesPath : join(repoRoot, modulesPath);
+      if (existsSync(absoluteModules)) return `${absoluteModules} remains from submodule mode`;
+    }
+  } else {
+    const old = [join(repoRoot, ".oms", "repos"), join(repoRoot, ".oms", "provisioning"), join(repoRoot, ".oms", "fetch-provenance")]
+      .find((path) => existsSync(path));
+    if (old) return `${old} remains from worktree mode`;
+  }
+  const unmerged = runGit(repoRoot, ["ls-files", "-u"]);
+  if (!unmerged.success || unmerged.stdout.trim()) return "the root index has unmerged or unreadable entries";
+  const selectedByAlias = new Map(transition.selectedSources.map(({ alias, oid }) => [alias, oid]));
+  for (const repo of loaded.repos) {
+    const entries = runGit(repoRoot, ["ls-files", "--stage", "--", submodulePath(repo.alias)]);
+    if (!entries.success) return `${repo.alias}: the expected root index entry could not be inspected`;
+    const lines = entries.stdout.split("\n").filter(Boolean);
+    if (transition.targetMode === "worktree") {
+      if (lines.some((line) => !/^160000 [0-9a-f]{40,64} 0\t/.test(line))) {
+        return `${repo.alias}: the source gitlink index entry has an unexpected mode or stage`;
+      }
+    } else if (lines.length > 0) {
+      // Idempotent resume: an already-installed alias may hold exactly its verified selected gitlink.
+      const expectedOid = selectedByAlias.get(repo.alias);
+      const single = lines.length === 1 ? lines[0].match(/^160000 ([0-9a-f]{40,64}) 0\t/) : null;
+      if (!expectedOid || !single || single[1] !== expectedOid) {
+        return `${repo.alias}: a target submodule index entry exists before verified target installation`;
+      }
+    }
+  }
+  return null;
 }
 
 function cleanupFailedAdd(repoRoot: string, alias: string): void {
@@ -387,11 +469,44 @@ export async function runSync(aliases: string[], options: SyncCommitOptions): Pr
     return 1;
   }
   const { repos, repoRoot } = loaded;
+  const transition = readModeSwitchJournal(repoRoot);
+  if (transition && transition.transitionId !== options.modeSwitchTransitionId) {
+    log.error(`Standalone sync is blocked by transition ${transition.transitionId}. Resume "oms mode switch ${transition.targetMode} ${transition.sync ? "--sync" : "--no-sync"}" first.`);
+    return 1;
+  }
+  if (transition && transition.transitionId === options.modeSwitchTransitionId) {
+    const invalid = validateModeSwitchTargetSync(repoRoot, loaded, transition);
+    if (invalid) {
+      log.error(`Journal-owned target sync is blocked because ${invalid}. Run "oms doctor" before retrying.`);
+      return 1;
+    }
+  }
+  const incompatibleTopology = unexpectedOldModeTopology(repoRoot, loaded.mode);
+  if (incompatibleTopology && !options.modeSwitchTransitionId) {
+    log.error(`Sync is blocked because ${incompatibleTopology}. Resume the matching mode switch or run "oms doctor".`);
+    return 1;
+  }
+  if (!options.modeSwitchTransitionId && loaded.mode === "submodule") {
+    const ownership = readWorkspaceOwnership(repoRoot);
+    if (ownership) {
+      const staleExclude = unexpectedWorktreeExcludeRules(repoRoot, ownership.workspaceId);
+      if (staleExclude) {
+        log.error(`Sync is blocked because worktree-mode local-exclude rule "${staleExclude}" remains. Resume the matching mode switch or run "oms doctor".`);
+        return 1;
+      }
+    }
+  }
   if (abortOnLegacyRenameAt(repoRoot)) return 1;
 
   if (options.list) {
     printList(repos);
     return 0;
+  }
+
+  if (loaded.mode === "worktree") {
+    const picked = await selectRepos(repos, aliases, options, "sync");
+    if (!picked || picked.length === 0) return 1;
+    return runWorktreeSync(repoRoot, picked);
   }
 
   if (emitWorkspaceGitIdentityError(repoRoot)) return 1;
@@ -473,6 +588,9 @@ export async function runSync(aliases: string[], options: SyncCommitOptions): Pr
 }
 
 export async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<number> {
+  const mode = loadRepos();
+  if (!mode) return 1;
+  if (mode.mode === "worktree") return runWorktreeUnsync(mode.repoRoot, mode.repos, aliases, options);
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;

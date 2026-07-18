@@ -31,6 +31,8 @@ bun add -g oh-my-space@beta
 
 Beta releases are manually published from a selected clean commit. They do not require a `beta` branch. The beta package version is created temporarily from the chosen base stable version and the current commit short hash, then discarded locally after publish or dry-run.
 
+Release builders must use Node 20.19 or newer and Git 2.48 or newer. Before publishing, record `node --version` and `git --version`, then require `npm run build`, `npm test`, and strict OpenSpec validation for the release change to exit 0. Git 2.48 is a release requirement because older Git versions cannot guarantee portable relative worktree metadata.
+
 Preview the beta package without publishing:
 
 ```bash
@@ -84,6 +86,8 @@ Users can return to stable with the stable install command for their package man
 ```bash
 npm install -g oh-my-space@latest
 ```
+
+Do not downgrade to a release that predates worktree mode while `.oms/repos/` or `.oms-mode-switch.json` exists. Complete or recover the transition, switch to submodule mode, and verify `oms doctor` first. Older releases do not understand status schema v2, worktree ownership, or transition journals and must refuse this state rather than attempting repair.
 
 If a bad beta was published, move the `beta` dist-tag back to the last known-good beta version:
 

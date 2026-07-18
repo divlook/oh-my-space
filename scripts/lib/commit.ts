@@ -9,7 +9,7 @@ import {
   submoduleInitialized,
   submodulePath,
 } from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
+import { loadForSubmodules, loadRepos } from "./manifest.js";
 import { resolveCommandAlias } from "./prompts.js";
 import { recoveryPreflight } from "./root-tx.js";
 import { stagedRootPaths } from "./root-index.js";
@@ -23,6 +23,39 @@ import {
   printRootFollowup,
 } from "./status.js";
 import type { CommitOptions } from "./types.js";
+import { resolveWorktreeTarget } from "./worktree-target.js";
+
+async function runWorktreeCommit(target: string | undefined, options: CommitOptions): Promise<number> {
+  const loaded = loadRepos();
+  if (!loaded || loaded.mode !== "worktree") return 1;
+  const selected = await resolveWorktreeTarget(loaded.repoRoot, loaded.repos, target, "commit");
+  if (!selected) return 1;
+  const label = `${selected.target.alias}/${selected.target.name}`;
+  const dir = selected.entry.path;
+  const counts = changeCounts(dir, new Set());
+  if (!isDirtyCounts(counts)) {
+    log.info(`Nothing to commit for ${label}.`);
+    return 0;
+  }
+  const messages = options.message ?? [];
+  if (messages.length === 0) {
+    log.error(`${label}: -m is required to create a worktree commit. Re-run with -m "<message>".`);
+    return 1;
+  }
+  const commitArgs = ["commit", ...messages.flatMap((message) => ["-m", message])];
+  if (counts.staged > 0) {
+    log.step(`${label}: git commit (staged changes only)`);
+    if (!runGit(dir, commitArgs, true).success) return 2;
+    if (counts.unstaged > 0 || counts.untracked > 0) {
+      log.warn(`${label}: committed staged changes only; unstaged or untracked changes remain uncommitted.`);
+    }
+  } else {
+    log.step(`${label}: git add -A && git commit`);
+    if (!runGit(dir, ["add", "-A"], true).success || !runGit(dir, commitArgs, true).success) return 2;
+  }
+  log.success(`${label}: committed ${shortSha(dir)}`);
+  return 0;
+}
 
 /**
  * Commit only inside the selected submodule. Respects an existing submodule index (staged-first): when
@@ -30,6 +63,8 @@ import type { CommitOptions } from "./types.js";
  * changes with `git add -A`. Never stages or commits the root gitlink.
  */
 export async function runCommit(alias: string | undefined, options: CommitOptions): Promise<number> {
+  const mode = loadRepos();
+  if (mode?.mode === "worktree") return runWorktreeCommit(alias, options);
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
@@ -96,6 +131,11 @@ export async function runCommit(alias: string | undefined, options: CommitOption
  * a submodule registration (that is sync/unsync topology) and never includes unrelated staged paths.
  */
 export async function runRecord(alias: string | undefined): Promise<number> {
+  const mode = loadRepos();
+  if (mode?.mode === "worktree") {
+    log.error("worktree mode has no parent gitlink pointer to record; commit and push the managed checkout directly");
+    return 1;
+  }
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;

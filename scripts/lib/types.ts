@@ -5,6 +5,13 @@ export type Repo = {
   branch?: string;
 };
 
+export type WorkspaceMode = "submodule" | "worktree";
+
+export type WorkspaceManifest = {
+  mode: WorkspaceMode;
+  repos: Repo[];
+};
+
 export type SourcesOptions = {
   all?: boolean;
   list?: boolean;
@@ -13,6 +20,8 @@ export type SourcesOptions = {
 export type UnsyncOptions = SourcesOptions & {
   force?: boolean;
   commit?: boolean;
+  /** Internal mode-switch OIDs already copied into verified staged target storage. */
+  preservedOids?: Record<string, string[]>;
 };
 
 export type PushOptions = {
@@ -31,6 +40,8 @@ export type CommitOptions = {
 
 export type SyncCommitOptions = SourcesOptions & {
   commit?: boolean;
+  /** Internal transition identity that permits journal-owned target sync. */
+  modeSwitchTransitionId?: string;
 };
 
 export type AgentTarget = "agents" | "claude" | "both";
@@ -94,6 +105,87 @@ export type InstallContext = {
   updateCommand?: UpdateCommand;
   guidance: string[];
   warnings: string[];
+};
+
+export type StatusChanges = { staged: number; unstaged: number; untracked: number };
+export type StatusError = { scope: "root" | "repo" | "worktree"; alias: string | null; target: string | null; message: string };
+export type StatusRoot = {
+  path: string;
+  relation: "same" | "ancestor";
+  branch: string | null;
+  head: string | null;
+  detached: boolean;
+  dirty: boolean;
+  changes: StatusChanges;
+  submodulePointers?: { moved: string[]; staged: string[]; split: string[]; conflict: string[] };
+};
+export type SubmoduleStatusRepo = {
+  mode: "submodule";
+  alias: string;
+  path: string;
+  absolutePath: string;
+  configured: true;
+  initialized: boolean;
+  branch: string | null;
+  head: string | null;
+  detached: boolean;
+  trackingBranch: string | null;
+  pin: "ok" | "moved" | "uninit" | "missing" | "conflict";
+  dirty: boolean;
+  changes: StatusChanges;
+  ahead: number | null;
+  behind: number | null;
+  error: string | null;
+};
+type WorktreeStatusEntryBase = {
+  path: string;
+  branch: string | null;
+  head: string | null;
+  detached: boolean;
+  trackingBranch: string | null;
+  ahead: number | null;
+  behind: number | null;
+  dirty: boolean;
+  changes: StatusChanges;
+  locked: boolean;
+  operation: string | null;
+  error: string | null;
+};
+export type ManagedWorktreeStatusEntry = WorktreeStatusEntryBase & {
+  managed: true;
+  name: string;
+  target: string;
+  relativePath: string;
+};
+export type ExternalWorktreeStatusEntry = WorktreeStatusEntryBase & {
+  managed: false;
+  name: null;
+  target: null;
+  relativePath: null;
+};
+export type WorktreeStatusEntry = ManagedWorktreeStatusEntry | ExternalWorktreeStatusEntry;
+export type WorktreeStatusRepo = {
+  mode: "worktree";
+  alias: string;
+  commonPath: string;
+  absoluteCommonPath: string;
+  ready: boolean;
+  remotes: Array<{ name: string }>;
+  worktrees: WorktreeStatusEntry[];
+  error: string | null;
+};
+export type StatusRepo = SubmoduleStatusRepo | WorktreeStatusRepo;
+export type StatusV2 = {
+  schemaVersion: 2;
+  toolVersion: string;
+  mode: WorkspaceMode;
+  workspaceRoot: string;
+  currentAlias: string | null;
+  currentWorktree: string | null;
+  currentTarget: string | null;
+  root: StatusRoot | null;
+  repos: StatusRepo[];
+  errors: StatusError[];
 };
 
 export type RuntimeEvidence = {

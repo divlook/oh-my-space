@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.status.schema.json",
+  "title": "OMS status schema version 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "toolVersion", "mode", "workspaceRoot", "currentAlias", "currentWorktree", "currentTarget", "root", "repos", "errors"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "toolVersion": { "type": "string" },
+    "mode": { "enum": ["submodule", "worktree"] },
+    "workspaceRoot": { "type": "string" },
+    "currentAlias": { "type": ["string", "null"] },
+    "currentWorktree": { "type": ["string", "null"] },
+    "currentTarget": { "type": ["string", "null"] },
+    "root": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/root" }] },
+    "repos": { "type": "array", "items": { "oneOf": [{ "$ref": "#/$defs/submoduleRepo" }, { "$ref": "#/$defs/worktreeRepo" }] } },
+    "errors": { "type": "array", "items": { "$ref": "#/$defs/error" } }
+  },
+  "$defs": {
+    "nullableString": { "type": ["string", "null"] },
+    "nullableNumber": { "type": ["number", "null"] },
+    "changes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["staged", "unstaged", "untracked"],
+      "properties": {
+        "staged": { "type": "integer", "minimum": 0 },
+        "unstaged": { "type": "integer", "minimum": 0 },
+        "untracked": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "pointers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["moved", "staged", "split", "conflict"],
+      "properties": {
+        "moved": { "type": "array", "items": { "type": "string" } },
+        "staged": { "type": "array", "items": { "type": "string" } },
+        "split": { "type": "array", "items": { "type": "string" } },
+        "conflict": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "relation", "branch", "head", "detached", "dirty", "changes"],
+      "properties": {
+        "path": { "type": "string" },
+        "relation": { "enum": ["same", "ancestor"] },
+        "branch": { "$ref": "#/$defs/nullableString" },
+        "head": { "$ref": "#/$defs/nullableString" },
+        "detached": { "type": "boolean" },
+        "dirty": { "type": "boolean" },
+        "changes": { "$ref": "#/$defs/changes" },
+        "submodulePointers": { "$ref": "#/$defs/pointers" }
+      }
+    },
+    "submoduleRepo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "alias", "path", "absolutePath", "configured", "initialized", "branch", "head", "detached", "trackingBranch", "pin", "dirty", "changes", "ahead", "behind", "error"],
+      "properties": {
+        "mode": { "const": "submodule" },
+        "alias": { "type": "string" },
+        "path": { "type": "string" },
+        "absolutePath": { "type": "string" },
+        "configured": { "const": true },
+        "initialized": { "type": "boolean" },
+        "branch": { "$ref": "#/$defs/nullableString" },
+        "head": { "$ref": "#/$defs/nullableString" },
+        "detached": { "type": "boolean" },
+        "trackingBranch": { "$ref": "#/$defs/nullableString" },
+        "pin": { "enum": ["ok", "moved", "uninit", "missing", "conflict"] },
+        "dirty": { "type": "boolean" },
+        "changes": { "$ref": "#/$defs/changes" },
+        "ahead": { "$ref": "#/$defs/nullableNumber" },
+        "behind": { "$ref": "#/$defs/nullableNumber" },
+        "error": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "worktree": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "managed": { "const": true } }, "required": ["managed"] },
+          "then": {
+            "properties": {
+              "name": { "type": "string" },
+              "target": { "type": "string" },
+              "relativePath": { "type": "string" }
+            }
+          },
+          "else": {
+            "properties": {
+              "name": { "type": "null" },
+              "target": { "type": "null" },
+              "relativePath": { "type": "null" }
+            }
+          }
+        }
+      ],
+      "required": ["managed", "name", "target", "path", "relativePath", "branch", "head", "detached", "trackingBranch", "ahead", "behind", "dirty", "changes", "locked", "operation", "error"],
+      "properties": {
+        "managed": { "type": "boolean" },
+        "name": { "$ref": "#/$defs/nullableString" },
+        "target": { "$ref": "#/$defs/nullableString" },
+        "path": { "type": "string" },
+        "relativePath": { "$ref": "#/$defs/nullableString" },
+        "branch": { "$ref": "#/$defs/nullableString" },
+        "head": { "$ref": "#/$defs/nullableString" },
+        "detached": { "type": "boolean" },
+        "trackingBranch": { "$ref": "#/$defs/nullableString" },
+        "ahead": { "$ref": "#/$defs/nullableNumber" },
+        "behind": { "$ref": "#/$defs/nullableNumber" },
+        "dirty": { "type": "boolean" },
+        "changes": { "$ref": "#/$defs/changes" },
+        "locked": { "type": "boolean" },
+        "operation": { "$ref": "#/$defs/nullableString" },
+        "error": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "worktreeRepo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "alias", "commonPath", "absoluteCommonPath", "ready", "remotes", "worktrees", "error"],
+      "properties": {
+        "mode": { "const": "worktree" },
+        "alias": { "type": "string" },
+        "commonPath": { "type": "string" },
+        "absoluteCommonPath": { "type": "string" },
+        "ready": { "type": "boolean" },
+        "remotes": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name"], "properties": { "name": { "type": "string" } } } },
+        "worktrees": { "type": "array", "items": { "$ref": "#/$defs/worktree" } },
+        "error": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "alias", "target", "message"],
+      "properties": {
+        "scope": { "enum": ["root", "repo", "worktree"] },
+        "alias": { "$ref": "#/$defs/nullableString" },
+        "target": { "$ref": "#/$defs/nullableString" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

@@ -21,7 +21,59 @@ import {
   inspectWorkspaceGitIdentity,
   resolveWorkspaceManifest,
 } from "./git.js";
-import type { Repo, WorkspaceOptions } from "./types.js";
+import type { Repo, WorkspaceManifest, WorkspaceMode, WorkspaceOptions } from "./types.js";
+
+export function validateWorktreeRemoteUrl(url: string, where: string): void {
+  if (/^[a-z][a-z0-9+.-]*::/i.test(url)) {
+    throw new Error(`${MANIFEST_FILENAME}: ${where} uses an executable Git transport, which is not allowed in worktree mode`);
+  }
+  if (/^[a-z]:[\\/]/i.test(url)) return;
+
+  const scpStyle = !/^[a-z][a-z0-9+.-]*:\/\//i.test(url)
+    && /^(?:[^/@:\s]+@)?[^/:\s]+:.+$/.test(url);
+  if (scpStyle) return;
+
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // SCP-style SSH locations such as git@example.com:org/repo.git are not WHATWG URLs.
+  }
+  if (!parsed) return;
+
+  if (!new Set(["http:", "https:", "ssh:", "git:", "file:"]).has(parsed.protocol.toLowerCase())) {
+    throw new Error(`${MANIFEST_FILENAME}: ${where} uses unsupported protocol ${parsed.protocol}, which may execute a Git remote helper`);
+  }
+
+  if (parsed.search || parsed.hash) {
+    throw new Error(`${MANIFEST_FILENAME}: ${where} must not contain URL query or fragment components in worktree mode`);
+  }
+  if (parsed.password || ((parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.username)) {
+    throw new Error(
+      `${MANIFEST_FILENAME}: ${where} must not contain credentials in worktree mode; use a credential helper or SSH agent`,
+    );
+  }
+}
+
+export function validateManifest(data: unknown): WorkspaceManifest {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error(`${MANIFEST_FILENAME}: root must be a mapping`);
+  }
+  const obj = data as Record<string, unknown>;
+  const mode: WorkspaceMode = obj.mode === undefined ? "submodule" : obj.mode as WorkspaceMode;
+  if (mode !== "submodule" && mode !== "worktree") {
+    throw new Error(`${MANIFEST_FILENAME}: "mode" must be "submodule" or "worktree"`);
+  }
+  const repos = validateSources(data);
+  if (mode === "worktree") {
+    repos.forEach((repo, repoIndex) => {
+      Object.entries(repo.remotes).forEach(([remote, url]) => {
+        validateWorktreeRemoteUrl(url, `repos[${repoIndex}].remotes.${remote}`);
+      });
+    });
+  }
+  return { mode, repos };
+}
 
 export function validateSources(data: unknown): Repo[] {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
@@ -166,7 +218,7 @@ export function abortOnLegacyWorktree(repoRoot: string, repos: Repo[]): boolean 
   return true;
 }
 
-export function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repoRoot: string } | null {
+export function loadRepos(options: WorkspaceOptions = {}): (WorkspaceManifest & { repoRoot: string }) | null {
   const resolution = resolveWorkspaceManifest(options);
   if (resolution.kind === "missing") {
     log.error(
@@ -183,10 +235,7 @@ export function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repo
   }
 
   try {
-    return {
-      repos: validateSources(parseYaml(readFileSync(resolution.manifestPath, "utf8"))),
-      repoRoot: resolution.repoRoot,
-    };
+    return { ...validateManifest(parseYaml(readFileSync(resolution.manifestPath, "utf8"))), repoRoot: resolution.repoRoot };
   } catch (e) {
     log.error(e instanceof Error ? e.message : String(e));
     return null;
@@ -217,7 +266,7 @@ export function emitWorkspaceGitIdentityError(repoRoot: string): boolean {
 }
 
 /** Shared preamble: load the manifest and validate the root submodule repository identity. */
-export function loadForSubmodules(): { repos: Repo[]; repoRoot: string } | null {
+export function loadForSubmodules(): (WorkspaceManifest & { repoRoot: string }) | null {
   const loaded = loadRepos();
   if (!loaded) {
     emitLegacyRenameHintWalkUp();
@@ -225,7 +274,25 @@ export function loadForSubmodules(): { repos: Repo[]; repoRoot: string } | null 
   }
   const { repoRoot, repos } = loaded;
   if (abortOnLegacyRenameAt(repoRoot)) return null;
+  if (loaded.mode !== "submodule") {
+    log.error(`This command currently requires submodule mode; workspace ${repoRoot} uses worktree mode.`);
+    return null;
+  }
   if (emitWorkspaceGitIdentityError(repoRoot)) return null;
   if (abortOnLegacyWorktree(repoRoot, repos)) return null;
+  return loaded;
+}
+
+export function loadForWorktrees(): (WorkspaceManifest & { repoRoot: string }) | null {
+  const loaded = loadRepos();
+  if (!loaded) {
+    emitLegacyRenameHintWalkUp();
+    return null;
+  }
+  if (abortOnLegacyRenameAt(loaded.repoRoot)) return null;
+  if (loaded.mode !== "worktree") {
+    log.error(`This command requires worktree mode; workspace ${loaded.repoRoot} uses submodule mode.`);
+    return null;
+  }
   return loaded;
 }

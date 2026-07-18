@@ -13,15 +13,113 @@ import {
   submoduleInitialized,
   submodulePath,
 } from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
+import { loadForSubmodules, loadRepos } from "./manifest.js";
 import { gitlinkState, submoduleOperationInProgress } from "./status.js";
 import { resolveBaselines, type ProtectedReason } from "./branch-baseline.js";
 import { guardedConfirm, guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
 import { runBranchList } from "./branch-list.js";
 import { runCheckout, runSwitch } from "./branch-ops.js";
+import { commonRepoPath, parseAlias } from "./worktree-paths.js";
+import { inspectWorktreeInventory } from "./worktree-inspection.js";
+import { readWorkspaceOwnership } from "./workspace-mutation.js";
+import { resolveWorktreeBaseline } from "./worktree-sync.js";
 
 type BranchDeleteOptions = { force?: boolean };
+
+async function resolveWorktreeDeleteAlias(repos: Repo[], aliasArg: string | undefined): Promise<Repo | null> {
+  if (aliasArg) {
+    try {
+      const alias = parseAlias(aliasArg);
+      const repo = repos.find((candidate) => candidate.alias === alias) ?? null;
+      if (!repo) log.error(`Unknown alias "${alias}".`);
+      return repo;
+    } catch (error) {
+      log.error(error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  }
+  if (repos.length === 1) return repos[0];
+  if (!interactive()) {
+    log.error("No alias given and multiple repositories exist; pass an alias.");
+    return null;
+  }
+  const choice = await guardedSelect<string>({
+    message: "Select a repository to delete a local branch from",
+    options: repos.map((repo) => ({ value: repo.alias, label: repo.alias })),
+  });
+  if (isCancel(choice)) return null;
+  return repos.find((repo) => repo.alias === choice) ?? null;
+}
+
+function worktreeLocalBranches(common: string): string[] {
+  const result = runGit(common, ["for-each-ref", "--format=%(refname:strip=2)", "refs/heads"]);
+  return result.success ? result.stdout.split("\n").map((value) => value.trim()).filter(Boolean).sort() : [];
+}
+
+async function runWorktreeBranchDelete(
+  aliasArg: string | undefined,
+  branchArg: string | undefined,
+  options: BranchDeleteOptions,
+): Promise<number> {
+  const loaded = loadRepos();
+  if (!loaded || loaded.mode !== "worktree") return 1;
+  const repo = await resolveWorktreeDeleteAlias(loaded.repos, aliasArg);
+  if (!repo) return 1;
+  const ownership = readWorkspaceOwnership(loaded.repoRoot);
+  if (!ownership) return 1;
+  const common = commonRepoPath(loaded.repoRoot, repo.alias);
+  const branches = worktreeLocalBranches(common);
+  let branch = branchArg;
+  if (!branch) {
+    if (!interactive()) {
+      log.error(`No branch given; pass a local branch: "oms branch delete ${repo.alias} <branch>".`);
+      return 1;
+    }
+    const choice = await guardedSelect<string>({
+      message: `${repo.alias}: select a local branch to delete`,
+      options: branches.map((value) => ({ value, label: value })),
+    });
+    if (isCancel(choice)) return 1;
+    branch = choice;
+  }
+  if (!branches.includes(branch)) {
+    log.error(`${repo.alias}: local branch "${branch}" not found.`);
+    return 1;
+  }
+  const inventory = inspectWorktreeInventory(loaded.repoRoot, repo.alias, ownership.workspaceId);
+  const checkout = inventory.worktrees.find((entry) => entry.branch === branch);
+  if (checkout) {
+    log.error(`${repo.alias}: "${branch}" is checked out at ${checkout.path} and cannot be deleted.`);
+    return 1;
+  }
+  const baseline = repo.branch ?? resolveWorktreeBaseline(loaded.repoRoot, common, repo);
+  if (!baseline) {
+    log.error(`${repo.alias}: baseline could not be resolved; branch deletion was refused.`);
+    return 1;
+  }
+  if (branch === baseline) {
+    log.error(`${repo.alias}: "${branch}" is the protected baseline branch and cannot be deleted, even with --force.`);
+    return 1;
+  }
+  const oid = runGit(common, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]).stdout.trim();
+  const boundary = inspectWorktreeInventory(loaded.repoRoot, repo.alias, ownership.workspaceId);
+  const boundaryCheckout = boundary.worktrees.find((entry) => entry.branch === branch);
+  const currentOid = runGit(common, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]).stdout.trim();
+  const boundaryBaseline = repo.branch ?? resolveWorktreeBaseline(loaded.repoRoot, common, repo);
+  if (boundaryCheckout || currentOid !== oid || boundaryBaseline === branch) {
+    log.error(`${repo.alias}: branch ${branch} changed or became protected during deletion preflight; retry.`);
+    return 1;
+  }
+  if (options.force) log.warn(`${repo.alias}: force-deleting "${branch}" at ${oid}; recreate it with "git -C ${common} branch ${branch} ${oid}".`);
+  const deleted = runGit(common, ["branch", options.force ? "-D" : "-d", "--", branch], true);
+  if (!deleted.success) {
+    log.error(`${repo.alias}: branch deletion failed.${options.force ? "" : ` Retry with "oms branch delete ${repo.alias} ${branch} --force" after review.`}`);
+    return 2;
+  }
+  log.success(`${repo.alias}: deleted local branch ${branch}.`);
+  return 0;
+}
 
 /** True when prompts may run: a real TTY, or an active guarded test-response queue. */
 function interactive(): boolean {
@@ -336,6 +434,8 @@ export async function runBranchDelete(
   branchArg: string | undefined,
   options: BranchDeleteOptions,
 ): Promise<number> {
+  const mode = loadRepos();
+  if (mode?.mode === "worktree") return runWorktreeBranchDelete(aliasArg, branchArg, options);
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
