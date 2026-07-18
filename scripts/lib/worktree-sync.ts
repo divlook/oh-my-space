@@ -435,6 +435,12 @@ function provisionFirstWorktree(
       const created = runGit(common, ["branch", "--track", branch, `refs/remotes/origin/${branch}`]);
       if (!created.success) throw new Error(`${repo.alias}: could not create baseline branch ${branch}`);
     }
+    // Point the bare common repository's HEAD at the baseline branch. `git init --bare` leaves HEAD on
+    // the host's init.defaultBranch (e.g. an unborn "master"), which makes `git branch -d` treat every
+    // fully merged branch as unmerged; anchoring HEAD to the baseline restores the merged-check semantics.
+    if (!runGit(common, ["symbolic-ref", "HEAD", `refs/heads/${branch}`]).success) {
+      throw new Error(`${repo.alias}: could not anchor common repository HEAD to baseline ${branch}`);
+    }
     current = { ...current, phase: "branch-ready", branch, name };
     writeProvisioning(workspaceRoot, current);
   }

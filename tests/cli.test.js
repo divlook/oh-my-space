@@ -32,7 +32,10 @@ const testEnv = {
   // Allow file-protocol clones, keep test commits unsigned, and provide a commit
   // identity so commits succeed even on hosts (CI) without a global git identity.
   // These are process-scoped (GIT_CONFIG_*), never written to disk.
-  GIT_CONFIG_COUNT: "4",
+  // init.defaultBranch is pinned so that a bare `git init` HEAD never depends on the
+  // host's global git config; "master" reproduces the CI default, which differs from
+  // the baseline branch and would surface any regression that relies on that coincidence.
+  GIT_CONFIG_COUNT: "5",
   GIT_CONFIG_KEY_0: "protocol.file.allow",
   GIT_CONFIG_VALUE_0: "always",
   GIT_CONFIG_KEY_1: "commit.gpgsign",
@@ -41,6 +44,8 @@ const testEnv = {
   GIT_CONFIG_VALUE_2: "test@example.com",
   GIT_CONFIG_KEY_3: "user.name",
   GIT_CONFIG_VALUE_3: "Test",
+  GIT_CONFIG_KEY_4: "init.defaultBranch",
+  GIT_CONFIG_VALUE_4: "master",
 };
 
 function run(args, options = {}) {
@@ -453,10 +458,10 @@ test("mode switch signing failure retains staged recovery state", () => {
   assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
   const signingEnv = {
     ...testEnv,
-    GIT_CONFIG_COUNT: "5",
+    GIT_CONFIG_COUNT: "6",
     GIT_CONFIG_VALUE_1: "true",
-    GIT_CONFIG_KEY_4: "user.signingkey",
-    GIT_CONFIG_VALUE_4: "oms-test-missing-signing-key",
+    GIT_CONFIG_KEY_5: "user.signingkey",
+    GIT_CONFIG_VALUE_5: "oms-test-missing-signing-key",
   };
 
   const failed = run(["mode", "switch", "worktree", "--no-sync", "--commit"], { cwd, env: signingEnv });
