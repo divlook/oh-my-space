@@ -11,6 +11,26 @@ if (args.help) {
   process.exit(0);
 }
 
+if (args.publish && args.allowDirty) {
+  fail("--allow-dirty is only supported for dry-run verification and cannot be combined with --publish.");
+}
+if (!args.allowDirty) {
+  // A run interrupted before restore (e.g. terminal closed during the long prepack
+  // test gate) leaves package.json/package-lock.json bumped to a `-beta.sha-` version.
+  // The script owns those edits, so recover that specific leftover automatically. This
+  // must run before the originals are captured below so restore writes clean content.
+  recoverBetaLeftover();
+  const dirty = changedFiles();
+  if (dirty.length > 0) {
+    fail(
+      `Working tree must be clean before beta publishing.\n` +
+        `Uncommitted changes:\n${dirty.map((file) => `  ${file}`).join("\n")}\n` +
+        `Commit or discard them (e.g. git checkout -- <file>), then re-run. ` +
+        `Use --allow-dirty only for intentional local verification.`,
+    );
+  }
+}
+
 const packageJsonOriginal = readFileSync(PACKAGE_JSON, "utf8");
 const packageLockOriginal = readFileSync(PACKAGE_LOCK, "utf8");
 const packageJson = JSON.parse(packageJsonOriginal);
@@ -22,12 +42,6 @@ process.once("SIGTERM", () => restoreAndExit(143));
 
 if (!isStableSemver(baseVersion)) {
   fail(`--base-version must be a stable semver version, got ${baseVersion}`);
-}
-if (args.publish && args.allowDirty) {
-  fail("--allow-dirty is only supported for dry-run verification and cannot be combined with --publish.");
-}
-if (!args.allowDirty && gitStatus().length > 0) {
-  fail("Working tree must be clean before beta publishing. Use --allow-dirty only for intentional local verification.");
 }
 
 const commit = git("rev-parse", "HEAD");
@@ -114,9 +128,35 @@ function git(...args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
 
-/** Returns porcelain status output. */
-function gitStatus() {
-  return git("status", "--porcelain");
+/** Returns the paths of files with uncommitted changes. */
+function changedFiles() {
+  // Read porcelain output raw: the leading status field is column-aligned, so the
+  // path starts at a fixed offset and must not be trimmed away.
+  const output = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" });
+  return output
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => line.slice(3));
+}
+
+/**
+ * Restores package.json/package-lock.json when they are the only dirty files and
+ * their working-tree version is a `-beta.sha-` prerelease left by an interrupted run.
+ */
+function recoverBetaLeftover() {
+  const dirty = changedFiles();
+  if (dirty.length === 0) return;
+  const owned = new Set([PACKAGE_JSON, PACKAGE_LOCK]);
+  if (!dirty.every((file) => owned.has(file))) return;
+  let workingVersion;
+  try {
+    workingVersion = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")).version;
+  } catch {
+    return;
+  }
+  if (!/^\d+\.\d+\.\d+-beta\.sha-/.test(workingVersion)) return;
+  git("checkout", "--", ...dirty);
+  console.log(`Recovered leftover beta version in ${dirty.join(", ")} from an interrupted run.`);
 }
 
 /** Validates stable semver without accepting prerelease/build metadata. */
