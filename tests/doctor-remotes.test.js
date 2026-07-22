@@ -399,9 +399,11 @@ test("credential canaries never cross output channels or OMS-managed durable fil
   const stubGit = join(stubDir, "git");
   writeFileSync(stubGit, `#!/usr/bin/env bash\nif [ "$1" = "fetch" ]; then\n  printf '%s\\n' 'https://user:${canary}@example.invalid/repo.git?token=${canary}#${canary}' >&2\n  printf '%s\\n' 'https://user%3A${canary}%40example.invalid/repo.git' >&2\n  printf '%s\\n' 'Authorization: Bearer ${canary}' 'Proxy-Authorization: Basic ${canary}' 'http.extraHeader=Authorization: Bearer ${canary}' >&2\n  printf '\\001OMS_CANARY_9f31\\n' >&2\n  exit 42\nfi\nexec ${JSON.stringify(realGit)} "$@"\n`);
   chmodSync(stubGit, 0o755);
+  const env = { ...testEnv, NO_COLOR: "1", PATH: `${stubDir}${delimiter}${process.env.PATH}` };
+  delete env.FORCE_COLOR;
   const result = run(["fetch", "api"], {
     cwd,
-    env: { ...testEnv, PATH: `${stubDir}${delimiter}${process.env.PATH}` },
+    env,
   });
   assert.equal(result.status, 2, result.stdout + result.stderr);
   const output = result.stdout + result.stderr;
