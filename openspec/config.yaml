@@ -1,20 +1,24 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  oh-my-space (oms): a CLI that manages multi-repo workspaces via Git
+  submodules. Repos declared in `oms.yaml` sync into `oms/<alias>/`.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Stack: TypeScript, ESM, Node >=20.19.0. CLI: commander + @clack/prompts.
+  Build: esbuild + `tsc --noEmit`. Test: `node --test`. Release: Changesets.
+
+  Automation-first: automate safe, deterministic steps; ask only when a
+  choice needs user intent. On failure, report the failed operation, the
+  preserved state, and an actionable recovery command.
+
+  All committed text (commits, PRs, changesets, docs, OpenSpec artifacts)
+  is written in English.
+
+rules:
+  proposal:
+    - Sections: "## Why", "## What Changes", "## Capabilities", "## Impact".
+  spec:
+    - Requirements use normative SHALL language.
+    - Every requirement has at least one WHEN/THEN scenario.
+  tasks:
+    - Each step keeps build and tests green.
