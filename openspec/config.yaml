@@ -17,7 +17,7 @@ context: |
 rules:
   proposal:
     - 'Sections: "## Why", "## What Changes", "## Capabilities", "## Impact".'
-  spec:
+  specs:
     - Requirements use normative SHALL language.
     - Every requirement has at least one WHEN/THEN scenario.
   tasks:

@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 0.14.2
+
+### Patch Changes
+
+- [#60](https://github.com/divlook/oh-my-space/pull/60) [`1d206e7`](https://github.com/divlook/oh-my-space/commit/1d206e7f47b179c63be2c06e22e78a23e21f4ccb) Thanks [@divlook](https://github.com/divlook)! - Upgrade the `typescript` devDependency to `^7.0.2` so the build's `tsc --noEmit` type-check gate runs on the maintained TypeScript 7 compiler line. TypeScript is dev-only and esbuild owns emit, so the published `dist/oms.js` and runtime behavior are unchanged.
+
 ## 0.14.1
 
 ### Patch Changes
