@@ -282,6 +282,25 @@ npm ci
 npm test
 ```
 
+`npm test` is the canonical full gate. It type-checks and builds the bundle once, then runs every black-box test file. For focused work, use one of the stable feature scripts:
+
+```bash
+npm run test:scaffold
+npm run test:sync
+npm run test:commit
+npm run test:branch
+npm run test:tools
+```
+
+Each focused npm script rebuilds `dist/oms.js` before testing. If you invoke Node's test runner directly, rebuild the black-box target first:
+
+```bash
+npm run build
+node --test tests/cli-branch.test.js
+```
+
+Test fixtures are removed in one batch when each worker exits. To inspect fixtures after a failure, set `OMS_TEST_RETAIN_FIXTURES=1`; the retained worker-root path is printed to standard error.
+
 ## License
 
 [MIT](./LICENSE)

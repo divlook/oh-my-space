@@ -45,4 +45,4 @@ jobs:
       - name: Test
         run: npm test
       - name: Pack dry run
-        run: npm pack --dry-run
+        run: npm pack --dry-run --ignore-scripts

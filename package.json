@@ -45,7 +45,12 @@
   },
   "scripts": {
     "build": "tsc --noEmit && node scripts/build.mjs",
-    "test": "npm run build && node --test tests/*.test.js",
+    "test": "npm run build && node --test --test-concurrency=4 tests/*.test.js",
+    "test:scaffold": "npm run build && node --test tests/cli-scaffold.test.js",
+    "test:sync": "npm run build && node --test tests/cli-sync.test.js",
+    "test:commit": "npm run build && node --test tests/cli-commit.test.js",
+    "test:branch": "npm run build && node --test tests/cli-branch*.test.js",
+    "test:tools": "npm run build && node --test tests/cli-tools.test.js",
     "prepack": "npm test",
     "changeset": "changeset",
     "version": "changeset version",
