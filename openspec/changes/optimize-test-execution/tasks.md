@@ -33,5 +33,5 @@
 
 - [x] 6.1 Run the complete suite on Node.js 20.19.0 and the `.nvmrc` development version, then verify the package dry-run output on both versions.
 - [x] 6.2 Repeat the local benchmark three times under the baseline conditions and confirm the optimized median is no more than 60 percent of the recorded baseline.
-- [ ] 6.3 Inspect a completed CI run and confirm cumulative `Test` plus `Pack dry run` duration is no more than 60 percent of the representative baseline for each matrix entry.
+- [x] 6.3 Inspect a completed CI run and confirm cumulative `Test` plus `Pack dry run` duration is no more than 60 percent of the representative baseline for each matrix entry.
 - [x] 6.4 Run `openspec validate optimize-test-execution --strict` and record the final test inventory, concurrency setting, timing evidence, and any fixture-template decision.

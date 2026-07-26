@@ -49,9 +49,16 @@ The concurrency comparison is valid because both candidates ran on the same mach
 
 The first optimized runs were 462.71 seconds, 462.92 seconds, and 465.16 seconds, with a median of 462.92 seconds (88.5 percent of baseline). This missed the 60 percent threshold, so fixture setup was profiled and immutable upstream and initialized-workspace templates were introduced. Every test still receives an isolated local clone. Branch deletion and branch listing were also separated after profiling showed that their combined file determined the critical path.
 
-### Pending acceptance evidence
+### CI acceptance result
 
-- A completed optimized CI run for both matrix entries.
+Optimized run [30206174119](https://github.com/divlook/oh-my-space/actions/runs/30206174119) passed both matrix entries:
+
+| Matrix entry | Test | Pack dry run | Combined | Baseline ratio |
+| --- | ---: | ---: | ---: | ---: |
+| minimum-supported | 39 s | <1 s | 39 s | 26.4% |
+| development | 41 s | 1 s | 42 s | 18.3% |
+
+Both combined durations are below 60 percent of their representative baselines (148 seconds and 229 seconds, respectively).
 
 ### Local acceptance result
 
