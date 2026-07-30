@@ -9,6 +9,7 @@ export function printSummary(results: OperationResult[]): void {
     pulled: 0,
     pushed: 0,
     unsynced: 0,
+    recorded: 0,
     failed: 0,
   };
   for (const r of results) counts[r]++;

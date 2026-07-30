@@ -582,3 +582,30 @@ export function printRootFollowup(repoRoot: string, alias: string): void {
   const hint = rootFollowupHint(alias, gitlinkState(repoRoot, alias));
   if (hint) log.info(hint);
 }
+
+/**
+ * Print root follow-up hints for a whole multi-alias run. Several moved pointers collapse into one
+ * "oms record --all" hint instead of one hint per alias; every other hint stays per-alias.
+ * @param repoRoot - the root repository path
+ * @param aliases - the aliases processed by this invocation, in processing order
+ */
+export function printRootFollowups(repoRoot: string, aliases: string[]): void {
+  const moved: string[] = [];
+  const others: string[] = [];
+  for (const alias of aliases) {
+    const state = gitlinkState(repoRoot, alias);
+    if (state.headOid !== null && state.pathExists && !state.conflict && state.moved) {
+      moved.push(alias);
+      continue;
+    }
+    const hint = rootFollowupHint(alias, state);
+    if (hint) others.push(hint);
+  }
+
+  if (moved.length === 1) {
+    others.unshift(`Run "oms record ${moved[0]}" to record the root pointer update.`);
+  } else if (moved.length > 1) {
+    others.unshift(`Run "oms record --all" to record ${moved.length} root pointer updates.`);
+  }
+  for (const hint of others) log.info(hint);
+}

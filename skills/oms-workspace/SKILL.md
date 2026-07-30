@@ -27,6 +27,6 @@ These instructions were written against `oms status --json` schemaVersion 1. If 
 Adding or removing a repo changes the root topology — the `.gitmodules` entry and the `oms/<alias>` gitlink — which is different from recording a moved pointer:
 
 - `oms sync <alias>` (add or refresh) and `oms unsync <alias>` (remove) stage that root topology and commit it with `--commit`. Run non-interactively without `--commit`, the topology is left unstaged for the user to commit.
-- `oms record <alias>` records a moved pointer only; it refuses adds and removals.
+- `oms record <alias>` records moved pointers only; it refuses adds and removals. It also accepts several aliases and `--all`, recording them in one root commit.
 
 So when `oms sync` or `oms unsync` leaves the topology unstaged, finish it with `oms sync --commit` or `oms unsync --commit` (or commit it yourself) — do not reach for `oms record`, which will refuse. Defer remaining flag detail to `oms sync --help` and `oms unsync --help`.

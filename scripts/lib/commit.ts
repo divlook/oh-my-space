@@ -10,7 +10,8 @@ import {
   submodulePath,
 } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
-import { resolveCommandAlias } from "./prompts.js";
+import { exitFromResults, printSummary } from "./operation-results.js";
+import { resolveCommandAlias, resolveRecordAliases } from "./prompts.js";
 import { recoveryPreflight } from "./root-tx.js";
 import { stagedRootPaths } from "./root-index.js";
 import {
@@ -22,7 +23,72 @@ import {
   pendingAddTopology,
   printRootFollowup,
 } from "./status.js";
-import type { CommitOptions } from "./types.js";
+import type { GitlinkState } from "./status.js";
+import type { CommitOptions, OperationResult, SourcesOptions } from "./types.js";
+
+/**
+ * Why one alias can or cannot be recorded right now. A `benign` verdict is a normal no-op (the pointer
+ * simply has not moved); a `problem` verdict needs user action before that alias can be recorded.
+ */
+type RecordVerdict =
+  | { kind: "recordable" }
+  | { kind: "benign"; message: string }
+  | { kind: "problem"; message: string };
+
+/**
+ * Classify one alias's recordability from its root gitlink state
+ * @param state - the alias's current root gitlink state
+ * @param alias - the alias being classified
+ * @returns whether the alias can be recorded, or why it cannot
+ */
+function recordVerdict(state: GitlinkState, alias: string): RecordVerdict {
+  if (state.headOid === null) {
+    const topology = pendingAddTopology(state)
+      ? ` Create the initial topology commit with "oms sync ${alias} --commit".`
+      : "";
+    return {
+      kind: "problem",
+      message: `${alias}: the root HEAD has no recorded gitlink. "oms record" only updates existing root gitlinks.${topology}`,
+    };
+  }
+  if (!state.pathExists) {
+    return {
+      kind: "problem",
+      message: `${alias}: pending submodule removal. Record the removal with "oms unsync ${alias} --commit".`,
+    };
+  }
+  if (state.split) {
+    return {
+      kind: "problem",
+      message: `${alias}: the staged oms/${alias} pointer differs from the working tree. Unstage or restage oms/${alias}, then retry.`,
+    };
+  }
+  // No pointer movement is a clean no-op, not a failure.
+  if (state.worktreeOid === null || state.worktreeOid === state.headOid) {
+    return { kind: "benign", message: `Nothing to record for ${alias}.` };
+  }
+  return { kind: "recordable" };
+}
+
+/**
+ * Root commit subject for a pointer record, mirroring topologyCommitMessage: a single alias is named
+ * with its short SHA, several aliases drop the names because no subject line can carry every SHA.
+ * @param repoRoot - the root repository path
+ * @param aliases - the aliases being recorded
+ * @returns the commit subject
+ */
+function recordCommitMessage(repoRoot: string, aliases: string[]): string {
+  if (aliases.length === 1) {
+    return `chore(oms): update ${aliases[0]} submodule to ${shortSha(aliasDir(repoRoot, aliases[0]))}`;
+  }
+  return "chore(oms): update submodules";
+}
+
+/** Root index paths staged outside the selected alias set (child paths count as unrelated). */
+function unrelatedStagedRecordPaths(repoRoot: string, aliases: string[]): string[] {
+  const selected = new Set(aliases.map(submodulePath));
+  return stagedRootPaths(repoRoot).filter((p) => !selected.has(p));
+}
 
 /**
  * Commit only inside the selected submodule. Respects an existing submodule index (staged-first): when
@@ -95,7 +161,7 @@ export async function runCommit(alias: string | undefined, options: CommitOption
  * commit. Strict index safety keeps the commit scoped to exactly oms/<alias>; it never adds or removes
  * a submodule registration (that is sync/unsync topology) and never includes unrelated staged paths.
  */
-export async function runRecord(alias: string | undefined): Promise<number> {
+export async function runRecord(aliases: string[], options: SourcesOptions): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
@@ -107,54 +173,47 @@ export async function runRecord(alias: string | undefined): Promise<number> {
     return 2;
   }
 
-  const resolution = await resolveCommandAlias(repos, repoRoot, alias, "record");
+  const resolution = await resolveRecordAliases(repos, repoRoot, aliases, options);
   if (resolution.kind === "error") return 1;
   if (resolution.kind === "noop") return 0;
-  const selected = resolution.alias;
-  const path = submodulePath(selected);
-
-  const state = gitlinkState(repoRoot, selected);
+  const selectedAliases = resolution.aliases;
+  // A selection the user named must fail loudly; one OMS widened for them may skip unrecordable aliases.
+  const explicit = resolution.explicit;
 
   // Delegate the conflict / in-progress-op portion to the shared preflight. The fixed
   // conflict → inProgressOp order preserves record's original reporting order; occupiedPath does
-  // not apply because record neither creates nor occupies oms/<alias>.
-  //
-  // Note: assertRootTopologySafe re-invokes gitlinkState internally for its conflict check,
-  // duplicating the call above. The extra subprocess cost is accepted to keep the preflight a
-  // self-contained, single-source-of-truth safety API rather than threading a pre-computed state
-  // (and its staleness/alias-mismatch footgun) through the signature.
-  const safety = assertRootTopologySafe(repoRoot, selected, ["conflict", "inProgressOp"]);
-  if (!safety.safe) {
-    log.error(`${selected}: ${safety.reason}`);
-    return 1;
+  // not apply because record neither creates nor occupies oms/<alias>. These are root-wide problems,
+  // so they abort the whole invocation rather than skipping the offending alias.
+  for (const alias of selectedAliases) {
+    const safety = assertRootTopologySafe(repoRoot, alias, ["conflict", "inProgressOp"]);
+    if (!safety.safe) {
+      log.error(`${alias}: ${safety.reason}`);
+      return 1;
+    }
   }
   if (currentBranch(repoRoot) === null) {
     log.error(`Root repository is in detached HEAD. Switch the root repository to a branch before recording.`);
     return 1;
   }
 
-  if (state.headOid === null) {
-    const topology = pendingAddTopology(state)
-      ? ` Create the initial topology commit with "oms sync ${selected} --commit".`
-      : "";
-    log.error(
-      `${selected}: the root HEAD has no recorded gitlink. "oms record" only updates existing root gitlinks.${topology}`,
-    );
-    return 1;
-  }
-  if (!state.pathExists) {
-    log.error(`${selected}: pending submodule removal. Record the removal with "oms unsync ${selected} --commit".`);
-    return 1;
-  }
-  if (state.split) {
-    log.error(
-      `${selected}: the staged oms/${selected} pointer differs from the working tree. Unstage or restage oms/${selected}, then retry.`,
-    );
-    return 1;
+  const verdicts = selectedAliases.map((alias) => ({
+    alias,
+    verdict: recordVerdict(gitlinkState(repoRoot, alias), alias),
+  }));
+
+  // A named alias that cannot be recorded is an error, reported in record's original order — before
+  // the index-safety check — so single-alias behavior is unchanged.
+  if (explicit) {
+    const named = verdicts.find((v) => v.verdict.kind === "problem");
+    if (named && named.verdict.kind === "problem") {
+      log.error(named.verdict.message);
+      return 1;
+    }
   }
 
-  // Index safety: only the selected gitlink may be staged (NUL-delimited, child paths count as unrelated).
-  const unrelated = stagedRootPaths(repoRoot).filter((p) => p !== path);
+  // Index safety, judged against everything selected rather than only what will be committed: a
+  // staged gitlink for a skipped alias is inside the user's selection, so it must not abort the run.
+  const unrelated = unrelatedStagedRecordPaths(repoRoot, selectedAliases);
   if (unrelated.length > 0) {
     log.error(
       `Root repository has unrelated staged changes (${unrelated.join(", ")}). Commit or unstage them before recording.`,
@@ -162,26 +221,49 @@ export async function runRecord(alias: string | undefined): Promise<number> {
     return 1;
   }
 
-  // Record the current working tree HEAD pointer; no movement is a clean no-op.
-  if (state.worktreeOid === null || state.worktreeOid === state.headOid) {
-    log.info(`Nothing to record for ${selected}.`);
-    return 0;
+  const recordable = verdicts.filter((v) => v.verdict.kind === "recordable").map((v) => v.alias);
+  const problems = verdicts.flatMap((v) => (v.verdict.kind === "problem" ? [v.verdict.message] : []));
+  const benign = verdicts.flatMap((v) => (v.verdict.kind === "benign" ? [v.verdict.message] : []));
+
+  // A problem only reaches here under a widened selection; it fails that alias without stopping the rest.
+  const results: OperationResult[] = [];
+  for (const message of problems) {
+    log.error(message);
+    results.push("failed");
   }
 
-  if (isDirty(aliasDir(repoRoot, selected))) {
-    log.warn(`${selected}: submodule has uncommitted source changes; only the current HEAD pointer will be recorded.`);
+  if (recordable.length === 0) {
+    // No pointer moved. Name the alias for a selection the user made, summarize for a widened one.
+    if (problems.length === 0) {
+      log.info(explicit && benign.length === 1 ? benign[0] : "Nothing to record for any submodule.");
+    }
+    // Nothing was attempted, so an empty "Summary:" line would be noise.
+    if (results.length > 1) printSummary(results);
+    return exitFromResults(results);
   }
 
-  const message = `chore(oms): update ${selected} submodule to ${shortSha(aliasDir(repoRoot, selected))}`;
-  if (!runGit(repoRoot, ["add", "--", path]).success) {
-    log.error(`${selected}: failed to stage oms/${selected}.`);
+  for (const alias of recordable) {
+    if (isDirty(aliasDir(repoRoot, alias))) {
+      log.warn(`${alias}: submodule has uncommitted source changes; only the current HEAD pointer will be recorded.`);
+    }
+  }
+
+  const paths = recordable.map(submodulePath);
+  const scope = recordable.length === 1 ? `oms/${recordable[0]}` : paths.join(", ");
+  const prefix = recordable.length === 1 ? `${recordable[0]}: ` : "";
+  const message = recordCommitMessage(repoRoot, recordable);
+  if (!runGit(repoRoot, ["add", "--", ...paths]).success) {
+    log.error(`${prefix}failed to stage ${scope}.`);
     return 2;
   }
-  const commit = runGit(repoRoot, ["commit", "-m", message, "--", path], true);
+  const commit = runGit(repoRoot, ["commit", "-m", message, "--", ...paths], true);
   if (!commit.success) {
-    log.error(`${selected}: root commit failed; the staged oms/${selected} pointer was left in place.`);
+    log.error(`${prefix}root commit failed; the staged ${scope} pointer was left in place.`);
     return 2;
   }
-  log.success(`${selected}: recorded ${shortSha(repoRoot)}  ${message}`);
-  return 0;
+  log.success(`${prefix}recorded ${shortSha(repoRoot)}  ${message}`);
+  results.push(...recordable.map((): OperationResult => "recorded"));
+
+  if (results.length > 1 || options.all) printSummary(results);
+  return exitFromResults(results);
 }

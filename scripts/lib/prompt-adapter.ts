@@ -1,4 +1,9 @@
-import { confirm as clackConfirm, isCancel as clackIsCancel, select as clackSelect } from "@clack/prompts";
+import {
+  confirm as clackConfirm,
+  isCancel as clackIsCancel,
+  multiselect as clackMultiselect,
+  select as clackSelect,
+} from "@clack/prompts";
 import { isTestMode } from "./env.js";
 
 /**
@@ -20,11 +25,12 @@ export function isCancel(value: unknown): value is symbol {
 /** A misconfigured test queue; thrown to force a fail-closed exit 1 without opening a real prompt. */
 export class PromptQueueError extends Error {}
 
-type PromptType = "select" | "confirm";
+type PromptType = "select" | "confirm" | "multiselect";
 
 type ResponseEntry =
   | { type: "select"; value: string }
   | { type: "confirm"; value: boolean }
+  | { type: "multiselect"; values: string[] }
   | { type: "cancel" };
 
 let initialized = false;
@@ -51,6 +57,14 @@ function validateEntry(entry: unknown, index: number): ResponseEntry {
       throw new PromptQueueError(`${ENV_NAME}[${index}] confirm "value" must be a boolean.`);
     }
     return { type: "confirm", value: e.value };
+  }
+  if (e.type === "multiselect") {
+    if (!Array.isArray(e.values) || e.values.some((v) => typeof v !== "string")) {
+      throw new PromptQueueError(
+        `${ENV_NAME}[${index}] multiselect "values" must be an array of strings.`,
+      );
+    }
+    return { type: "multiselect", values: e.values as string[] };
   }
   throw new PromptQueueError(`${ENV_NAME}[${index}] has unknown type ${JSON.stringify(e.type)}.`);
 }
@@ -89,7 +103,7 @@ export function promptQueueActive(): boolean {
 type Consumed =
   | { injected: false }
   | { injected: true; cancelled: true }
-  | { injected: true; cancelled: false; value: string | boolean };
+  | { injected: true; cancelled: false; value: string | boolean | string[] };
 
 /** Consume the next queued response for a prompt of the given kind, or defer to a real prompt. */
 function consume(kind: PromptType): Consumed {
@@ -106,7 +120,11 @@ function consume(kind: PromptType): Consumed {
       `${ENV_NAME}[${cursor - 1}] is a "${entry.type}" response but a "${kind}" prompt was requested.`,
     );
   }
-  return { injected: true, cancelled: false, value: entry.value };
+  return {
+    injected: true,
+    cancelled: false,
+    value: entry.type === "multiselect" ? entry.values : entry.value,
+  };
 }
 
 /** Fail closed if any queued responses are left unconsumed when a command completes. */
@@ -129,6 +147,17 @@ export async function guardedSelect<Value>(
     return injected.cancelled ? PROMPT_CANCEL : (injected.value as Value);
   }
   return clackSelect<Value>(options);
+}
+
+/** A multi-select prompt guarded by the response queue; returns the values or a cancel symbol. */
+export async function guardedMultiselect<Value>(
+  options: Parameters<typeof clackMultiselect<Value>>[0],
+): Promise<Value[] | symbol> {
+  const injected = consume("multiselect");
+  if (injected.injected) {
+    return injected.cancelled ? PROMPT_CANCEL : (injected.value as Value[]);
+  }
+  return clackMultiselect<Value>(options);
 }
 
 /** A confirm prompt guarded by the response queue; returns the boolean or a cancel symbol. */

@@ -1,8 +1,17 @@
-import { cancel, isCancel, log, multiselect, select, text } from "@clack/prompts";
+import { cancel, log, multiselect, select, text } from "@clack/prompts";
 import { dim, pad, uniqueAliases } from "./env.js";
 import { aliasDir, isDirty, submoduleInitialized } from "./git.js";
+import { guardedMultiselect, isCancel, promptQueueActive } from "./prompt-adapter.js";
 import { gitlinkState, inferAliasFromCwd } from "./status.js";
 import type { ManageCommand, Repo, SourcesOptions } from "./types.js";
+
+/**
+ * Whether an interactive prompt can be completed: a real TTY, or a guarded test response queue
+ * standing in for one. Prompts must not open without this, or the awaited prompt never settles.
+ */
+function canPrompt(): boolean {
+  return Boolean(process.stdin.isTTY) || promptQueueActive();
+}
 
 /** Names of a repo's non-origin remotes, in declared order (origin is shown via its URL column). */
 function extraRemoteNames(repo: Repo): string[] {
@@ -26,7 +35,7 @@ export function printList(repos: Repo[]): void {
 }
 
 export async function selectInteractive(repos: Repo[], actionLabel: string): Promise<Repo[] | null> {
-  const choice = await multiselect({
+  const choice = await guardedMultiselect<string>({
     message: `Select source repos to ${actionLabel} (space to toggle, enter to confirm)`,
     options: repos.map((r) => ({
       value: r.alias,
@@ -207,6 +216,13 @@ export async function selectRepos(
   if (options.all) return repos;
 
   if (aliases.length === 0) {
+    // A prompt that cannot be completed would never settle, so name the missing selection instead.
+    if (!canPrompt()) {
+      log.error(
+        `No alias given and stdin is not a TTY. Pass an alias ("oms ${actionLabel} <alias>") or select every repo with "oms ${actionLabel} --all".`,
+      );
+      return null;
+    }
     return selectInteractive(repos, actionLabel);
   }
 
@@ -227,10 +243,39 @@ type AliasResolution =
   | { kind: "noop" }
   | { kind: "error" };
 
+/** Aliases a command can act on right now: commit wants dirty submodules, record wants moved pointers. */
+function commandCandidates(repos: Repo[], repoRoot: string, command: "commit" | "record"): string[] {
+  return repos
+    .filter((r) =>
+      command === "commit"
+        ? submoduleInitialized(repoRoot, r.alias) && isDirty(aliasDir(repoRoot, r.alias))
+        : gitlinkState(repoRoot, r.alias).pin === "moved",
+    )
+    .map((r) => r.alias);
+}
+
+/** Wording for the empty-candidate no-op and the sole-candidate auto-selection. */
+function candidateLabels(command: "commit" | "record"): { empty: string; sole: string } {
+  return command === "commit"
+    ? { empty: "Nothing to commit in any submodule.", sole: "dirty submodule" }
+    : { empty: "Nothing to record for any submodule.", sole: "moved pointer" };
+}
+
+/** Validate explicitly named aliases against the manifest, preserving the shared error wording. */
+function knownAliases(repos: Repo[], aliases: string[]): string[] | null {
+  const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
+  if (unknown.length > 0) {
+    log.error(
+      `Unknown alias${unknown.length > 1 ? "es" : ""} "${unknown.join(", ")}". Use "oms sync --list" to see registered aliases.`,
+    );
+    return null;
+  }
+  return uniqueAliases(aliases);
+}
+
 /**
- * Resolve a single alias for commit/record: explicit argument, then current-path inference, then an
- * interactive command-specific candidate list, then a non-interactive alias-required failure. Candidate
- * filters are command-specific (commit: dirty submodules; record: moved pointers). Interactive zero
+ * Resolve a single alias for commit: explicit argument, then current-path inference, then an
+ * interactive candidate list, then a non-interactive alias-required failure. Interactive zero
  * candidates is a no-op exit 0; one candidate auto-selects; several show a picker.
  */
 export async function resolveCommandAlias(
@@ -255,26 +300,15 @@ export async function resolveCommandAlias(
     return { kind: "error" };
   }
 
-  const candidates = repos
-    .filter((r) =>
-      command === "commit"
-        ? submoduleInitialized(repoRoot, r.alias) && isDirty(aliasDir(repoRoot, r.alias))
-        : gitlinkState(repoRoot, r.alias).pin === "moved",
-    )
-    .map((r) => r.alias);
+  const candidates = commandCandidates(repos, repoRoot, command);
+  const labels = candidateLabels(command);
 
   if (candidates.length === 0) {
-    log.info(
-      command === "commit"
-        ? "Nothing to commit in any submodule."
-        : "Nothing to record for any submodule.",
-    );
+    log.info(labels.empty);
     return { kind: "noop" };
   }
   if (candidates.length === 1) {
-    log.info(
-      `Selected "${candidates[0]}" (the only ${command === "commit" ? "dirty submodule" : "moved pointer"}).`,
-    );
+    log.info(`Selected "${candidates[0]}" (the only ${labels.sole}).`);
     return { kind: "alias", alias: candidates[0] };
   }
 
@@ -287,4 +321,66 @@ export async function resolveCommandAlias(
     return { kind: "error" };
   }
   return { kind: "alias", alias: choice as string };
+}
+
+/** How a record selection was made; `--all` and the picker allow per-alias skips, a named list does not. */
+export type AliasSetResolution =
+  | { kind: "aliases"; aliases: string[]; explicit: boolean }
+  | { kind: "noop" }
+  | { kind: "error" };
+
+/**
+ * Resolve the alias set for record: `--all` or an explicit list first, then current-path inference,
+ * then an interactive multi-select of moved pointers, then a non-interactive selection-required
+ * failure. `explicit` marks a selection the user named, whose per-alias failures must not be skipped.
+ */
+export async function resolveRecordAliases(
+  repos: Repo[],
+  repoRoot: string,
+  aliases: string[],
+  options: SourcesOptions,
+): Promise<AliasSetResolution> {
+  if (options.all) {
+    return { kind: "aliases", aliases: repos.map((r) => r.alias), explicit: false };
+  }
+
+  if (aliases.length > 0) {
+    const known = knownAliases(repos, aliases);
+    if (!known) return { kind: "error" };
+    return { kind: "aliases", aliases: known, explicit: true };
+  }
+
+  const inferred = inferAliasFromCwd(repoRoot, repos);
+  if (inferred) return { kind: "aliases", aliases: [inferred], explicit: true };
+
+  if (!canPrompt()) {
+    log.error(
+      `No alias given and stdin is not a TTY. Pass an alias ("oms record <alias>") or record every moved pointer with "oms record --all".`,
+    );
+    return { kind: "error" };
+  }
+
+  const candidates = commandCandidates(repos, repoRoot, "record");
+  const labels = candidateLabels("record");
+
+  if (candidates.length === 0) {
+    log.info(labels.empty);
+    return { kind: "noop" };
+  }
+  if (candidates.length === 1) {
+    log.info(`Selected "${candidates[0]}" (the only ${labels.sole}).`);
+    return { kind: "aliases", aliases: candidates, explicit: false };
+  }
+
+  const choice = await guardedMultiselect<string>({
+    message: "Select submodules to record (space to toggle, enter to confirm)",
+    options: candidates.map((a) => ({ value: a, label: a })),
+    required: true,
+  });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return { kind: "error" };
+  }
+  // Picker candidates are pre-filtered to moved pointers, so a chosen alias is already recordable.
+  return { kind: "aliases", aliases: choice, explicit: false };
 }
