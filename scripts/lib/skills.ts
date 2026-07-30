@@ -142,7 +142,7 @@ function classify(installed: string | null, current: string): SkillVersionState 
  * the baked reference is unavailable, when no skill is installed, or when every install matches.
  * @param workspaceRoot - workspace root for the project scope, or null to check the global scope only
  */
-export function skillVersionFindings(workspaceRoot: string | null): SkillVersionFinding[] {
+function skillVersionFindings(workspaceRoot: string | null): SkillVersionFinding[] {
   const reference = readSkillVersions();
   if (!reference) return [];
 
@@ -158,7 +158,9 @@ export function skillVersionFindings(workspaceRoot: string | null): SkillVersion
   const findings: SkillVersionFinding[] = [];
   for (const name of Object.keys(reference).sort()) {
     const current = reference[name];
-    if (!current) continue;
+    // The reference comes from a build artifact, so it is untrusted here: a non-semver value would
+    // make semver.compare throw and turn this informational report into a non-zero exit.
+    if (!current || !semver.valid(current)) continue;
     // Group by state and installed version so scopes that drifted the same way share one line, while
     // scopes at different versions stay distinct.
     const grouped = new Map<string, SkillVersionFinding>();
@@ -188,7 +190,10 @@ export function omsSkillsInstalled(workspaceRoot: string | null): boolean {
   if (names.length === 0) return false;
   for (const search of scopeSearches(workspaceRoot)) {
     for (const lockPath of search.lockPaths) {
-      if (lockedSkillNames(lockPath).size > 0) return true;
+      // Restricted to the names this build knows, so a lock entry for a renamed or removed skill
+      // cannot claim an install that skillVersionFindings would then report nothing about.
+      const locked = lockedSkillNames(lockPath);
+      if (names.some((name) => locked.has(name))) return true;
     }
     if (names.some((name) => locateInstalledSkill(search.bases, name))) return true;
   }

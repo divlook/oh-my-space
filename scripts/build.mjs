@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import esbuild from "esbuild";
+import semver from "semver";
 import { parse as parseYaml } from "yaml";
 
 /**
@@ -82,8 +83,20 @@ function readPublishedSkillVersions() {
     }
     const frontmatter = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     if (!frontmatter) continue;
-    const version = parseYaml(frontmatter[1])?.metadata?.version;
-    if (typeof version === "string") versions[entry.name] = version;
+    let version;
+    try {
+      version = parseYaml(frontmatter[1])?.metadata?.version;
+    } catch (error) {
+      console.error(`Could not parse frontmatter in skills/${entry.name}/SKILL.md: ${error.message}`);
+      process.exit(1);
+    }
+    if (version === undefined) continue;
+    // Fail here rather than shipping a version the CLI would have to skip at runtime.
+    if (typeof version !== "string" || semver.valid(version) === null) {
+      console.error(`skills/${entry.name}/SKILL.md: metadata.version must be a quoted semver string, got ${JSON.stringify(version)}`);
+      process.exit(1);
+    }
+    versions[entry.name] = version;
   }
   return Object.keys(versions).length > 0 ? versions : null;
 }
