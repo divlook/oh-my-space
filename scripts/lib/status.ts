@@ -249,6 +249,55 @@ export function pendingAddTopology(s: GitlinkState): boolean {
   return s.headOid === null && s.initialized && s.gitmodulesEntry;
 }
 
+/**
+ * Why one alias can or cannot have its root pointer recorded right now. A `benign` verdict is a normal
+ * no-op (the pointer simply has not moved); a `problem` verdict needs user action first.
+ */
+export type RecordVerdict =
+  | { kind: "recordable" }
+  | { kind: "benign"; message: string }
+  | { kind: "problem"; message: string };
+
+/**
+ * Classify one alias's recordability from its root gitlink state. This is the single source of truth for
+ * "can record now": `oms record` enforces it, and the interactive record picker derives its candidates
+ * from it so the picker cannot offer an alias that recording would then refuse.
+ *
+ * Conflicts are deliberately out of scope here — `record` treats a conflicted gitlink as a root-wide
+ * abort before any per-alias verdict, and `pin` already reports `conflict` for candidate filtering.
+ * @param state - the alias's current root gitlink state
+ * @param alias - the alias being classified
+ * @returns whether the alias can be recorded, or why it cannot
+ */
+export function recordVerdict(state: GitlinkState, alias: string): RecordVerdict {
+  if (state.headOid === null) {
+    const topology = pendingAddTopology(state)
+      ? ` Create the initial topology commit with "oms sync ${alias} --commit".`
+      : "";
+    return {
+      kind: "problem",
+      message: `${alias}: the root HEAD has no recorded gitlink. "oms record" only updates existing root gitlinks.${topology}`,
+    };
+  }
+  if (!state.pathExists) {
+    return {
+      kind: "problem",
+      message: `${alias}: pending submodule removal. Record the removal with "oms unsync ${alias} --commit".`,
+    };
+  }
+  if (state.split) {
+    return {
+      kind: "problem",
+      message: `${alias}: the staged oms/${alias} pointer differs from the working tree. Unstage or restage oms/${alias}, then retry.`,
+    };
+  }
+  // No pointer movement is a clean no-op, not a failure.
+  if (state.worktreeOid === null || state.worktreeOid === state.headOid) {
+    return { kind: "benign", message: `Nothing to record for ${alias}.` };
+  }
+  return { kind: "recordable" };
+}
+
 /** Root HEAD has a gitlink but both the working tree path and the .gitmodules entry are gone. */
 export function pendingRemovalTopology(s: GitlinkState): boolean {
   return s.headOid !== null && !s.pathExists && !s.gitmodulesEntry;

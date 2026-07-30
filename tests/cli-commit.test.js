@@ -544,6 +544,32 @@ test("pull aggregates the record hint when it moves more than one pointer", () =
   assert.doesNotMatch(oneOutput, /oms record --all/);
 });
 
+test("the record picker does not offer a staged-split pointer", () => {
+  const { cwd } = workspaceWithThree();
+  // A staged/worktree split reports pin "moved", so it must be excluded by the record verdict instead.
+  movePointer(cwd, "api");
+  git(cwd, "add", "oms/api");
+  movePointer(cwd, "api", "second");
+
+  // An empty queue makes the shell "interactive" without supplying a response: reaching a prompt would
+  // fail closed as exhausted, so exit 0 proves no candidate was offered.
+  const none = run(["record"], { cwd, env: queueEnv([]) });
+  const noneOutput = none.stdout + none.stderr;
+  assert.equal(none.status, 0, noneOutput);
+  assert.match(noneOutput, /Nothing to record for any submodule/);
+
+  // With a second, genuinely recordable alias, the split one is still not a candidate: the sole
+  // candidate auto-selects instead of a two-item prompt (which the empty queue would fail closed on).
+  movePointer(cwd, "web");
+  const one = run(["record"], { cwd, env: queueEnv([]) });
+  const oneOutput = one.stdout + one.stderr;
+  assert.match(oneOutput, /Selected "web" \(the only moved pointer\)/);
+  // The picker narrowed the selection to web, so api's staged gitlink is outside it and correctly
+  // aborts the run -- the same rule as an explicit "oms record web" with oms/api staged.
+  assert.equal(one.status, 1, oneOutput);
+  assert.match(oneOutput, /unrelated staged changes.*oms\/api/);
+});
+
 test("record with an omitted selection resolves through the multi-select prompt", () => {
   const { cwd } = workspaceWithThree();
   for (const alias of ["api", "web", "core"]) movePointer(cwd, alias);

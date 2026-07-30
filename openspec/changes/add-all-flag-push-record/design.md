@@ -222,6 +222,10 @@ resolveRecordAliases(...) → AliasSetResolution   record; new, guardedMultisele
 
 This follows the project's preference for extension over modification and leaves `commit`'s code path — and therefore its existing tests — untouched. Widening the shared function would have pulled `commit` into this change's regression surface for no benefit.
 
+The per-alias recordability judgement (`recordVerdict`) lives in `status.ts` beside `gitlinkState` and `pendingAddTopology`, not in `commit.ts`, so the record picker can derive its candidates from the same function `oms record` enforces. Encoding "recordable" separately in the picker is what makes the two drift: `pin === "moved"` is satisfied by a staged/worktree split (`split` implies `staged`, and `staged` implies `moved`), so a filter built on `pin` alone offers an alias that recording then refuses. The record filter therefore composes both — `pin` for the conflicted/missing/uninitialized cases it already classifies, and the verdict for split and unmoved pointers.
+
+Note that the picker narrows the selection, so a staged gitlink for an alias the picker excluded is outside the selection and still aborts the run on the unrelated-staged check. That is the same rule an explicitly named alias follows, and it is deliberate: only `--all` puts every declared alias inside the selection.
+
 ### 10. Skips are reported through the existing set-command machinery
 
 `record` adopts `OperationResult` / `printSummary()` / `exitFromResults()` rather than growing a bespoke summary, because the mapping falls out cleanly and produces the exit codes decided below for free:

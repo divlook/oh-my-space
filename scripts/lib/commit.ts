@@ -20,55 +20,10 @@ import {
   gitOperationInProgress,
   gitlinkState,
   isDirtyCounts,
-  pendingAddTopology,
   printRootFollowup,
+  recordVerdict,
 } from "./status.js";
-import type { GitlinkState } from "./status.js";
 import type { CommitOptions, OperationResult, SourcesOptions } from "./types.js";
-
-/**
- * Why one alias can or cannot be recorded right now. A `benign` verdict is a normal no-op (the pointer
- * simply has not moved); a `problem` verdict needs user action before that alias can be recorded.
- */
-type RecordVerdict =
-  | { kind: "recordable" }
-  | { kind: "benign"; message: string }
-  | { kind: "problem"; message: string };
-
-/**
- * Classify one alias's recordability from its root gitlink state
- * @param state - the alias's current root gitlink state
- * @param alias - the alias being classified
- * @returns whether the alias can be recorded, or why it cannot
- */
-function recordVerdict(state: GitlinkState, alias: string): RecordVerdict {
-  if (state.headOid === null) {
-    const topology = pendingAddTopology(state)
-      ? ` Create the initial topology commit with "oms sync ${alias} --commit".`
-      : "";
-    return {
-      kind: "problem",
-      message: `${alias}: the root HEAD has no recorded gitlink. "oms record" only updates existing root gitlinks.${topology}`,
-    };
-  }
-  if (!state.pathExists) {
-    return {
-      kind: "problem",
-      message: `${alias}: pending submodule removal. Record the removal with "oms unsync ${alias} --commit".`,
-    };
-  }
-  if (state.split) {
-    return {
-      kind: "problem",
-      message: `${alias}: the staged oms/${alias} pointer differs from the working tree. Unstage or restage oms/${alias}, then retry.`,
-    };
-  }
-  // No pointer movement is a clean no-op, not a failure.
-  if (state.worktreeOid === null || state.worktreeOid === state.headOid) {
-    return { kind: "benign", message: `Nothing to record for ${alias}.` };
-  }
-  return { kind: "recordable" };
-}
 
 /**
  * Root commit subject for a pointer record, mirroring topologyCommitMessage: a single alias is named

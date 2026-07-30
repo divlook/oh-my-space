@@ -26,7 +26,8 @@ The system SHALL resolve omitted alias selection for supported alias commands us
 - **WHEN** a supported alias command omits the alias outside any `oms/<alias>/` tree in an interactive terminal
 - **THEN** the command builds a command-specific valid candidate list
 - **AND** `oms commit` candidates are dirty submodules, presented as a single-select choice
-- **AND** `oms record` candidates are moved submodule pointers, excluding pending removals, presented as a multi-select choice
+- **AND** `oms record` candidates are moved submodule pointers that record can actually commit, excluding pending removals and staged pointer splits, presented as a multi-select choice
+- **AND** the candidate filter is derived from the same recordability judgement `oms record` enforces, so the picker never offers an alias that recording would refuse
 
 #### Scenario: Interactive single candidate auto-selects
 - **WHEN** an interactive alias-less command has exactly one valid candidate
@@ -73,7 +74,7 @@ The system SHALL expose deterministic prompt responses only when `OMS_TEST_MODE=
 ## ADDED Requirements
 
 ### Requirement: Whole-workspace selection for submodule-set commands
-The system SHALL accept an optional alias list and a `--all` flag on `oms push` and `oms record`, matching the selection model already provided by `oms sync`, `oms status`, `oms fetch`, `oms pull`, and `oms unsync`. `--all` SHALL select every repo declared in the selected manifest without prompting. An omitted alias list SHALL resolve through interactive selection in an interactive terminal, and SHALL fail with an actionable message in a non-interactive shell for every submodule-set command.
+The system SHALL accept an optional alias list and a `--all` flag on `oms push` and `oms record`, matching the selection model already provided by `oms sync`, `oms status`, `oms fetch`, `oms pull`, and `oms unsync`. `--all` SHALL select every repo declared in the selected manifest without prompting. For the prompting set commands — `oms sync`, `oms fetch`, `oms pull`, `oms push`, and `oms unsync` — an omitted alias list SHALL resolve through interactive selection in an interactive terminal and SHALL fail with an actionable message in a non-interactive shell. `oms status` SHALL continue to treat an omitted alias list as whole-workspace selection without prompting, and `oms record` SHALL resolve an omitted selection through the alias-resolution rules for its own command.
 
 #### Scenario: Push selects every declared repo
 - **WHEN** the user runs `oms push --all` with declared aliases `api` and `web`

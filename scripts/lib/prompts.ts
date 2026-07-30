@@ -2,7 +2,7 @@ import { cancel, log, multiselect, select, text } from "@clack/prompts";
 import { dim, pad, uniqueAliases } from "./env.js";
 import { aliasDir, isDirty, submoduleInitialized } from "./git.js";
 import { guardedMultiselect, isCancel, promptQueueActive } from "./prompt-adapter.js";
-import { gitlinkState, inferAliasFromCwd } from "./status.js";
+import { gitlinkState, inferAliasFromCwd, recordVerdict } from "./status.js";
 import type { ManageCommand, Repo, SourcesOptions } from "./types.js";
 
 /**
@@ -243,14 +243,22 @@ type AliasResolution =
   | { kind: "noop" }
   | { kind: "error" };
 
-/** Aliases a command can act on right now: commit wants dirty submodules, record wants moved pointers. */
+/**
+ * Aliases a command can act on right now: commit wants dirty submodules, record wants pointers it can
+ * actually record. `pin === "moved"` alone is not enough for record — a staged/worktree split also
+ * reports `moved`, so the record filter composes `pin` with the shared record verdict rather than
+ * re-deriving recordability and drifting from what `oms record` enforces.
+ */
 function commandCandidates(repos: Repo[], repoRoot: string, command: "commit" | "record"): string[] {
   return repos
-    .filter((r) =>
-      command === "commit"
-        ? submoduleInitialized(repoRoot, r.alias) && isDirty(aliasDir(repoRoot, r.alias))
-        : gitlinkState(repoRoot, r.alias).pin === "moved",
-    )
+    .filter((r) => {
+      if (command === "commit") {
+        return submoduleInitialized(repoRoot, r.alias) && isDirty(aliasDir(repoRoot, r.alias));
+      }
+      // pin covers conflicted/missing/uninitialized; the verdict covers split and unmoved pointers.
+      const state = gitlinkState(repoRoot, r.alias);
+      return state.pin === "moved" && recordVerdict(state, r.alias).kind === "recordable";
+    })
     .map((r) => r.alias);
 }
 
@@ -381,6 +389,6 @@ export async function resolveRecordAliases(
     cancel("Cancelled.");
     return { kind: "error" };
   }
-  // Picker candidates are pre-filtered to moved pointers, so a chosen alias is already recordable.
+  // Candidates are filtered by the shared record verdict, so a chosen alias is already recordable.
   return { kind: "aliases", aliases: choice, explicit: false };
 }
