@@ -9,3 +9,8 @@ node_modules/
 dist/
 # claude
 .claude/plans/
+
+# ci
+# Verification marker written by the CI workflow; also left behind when the
+# fingerprint and marker steps are reproduced locally.
+.ci-verified
