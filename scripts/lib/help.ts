@@ -35,8 +35,13 @@ export const recordHelp = `
 Scope: commits an existing root gitlink pointer update for one alias in the ROOT repository only
 (chore(oms): update <alias> submodule to <sha>). It never adds or removes a submodule registration.
 An explicit alias takes precedence over an alias inferred from the current configured oms/<alias>/ path.
-Example:
+Several aliases are recorded in one root commit (chore(oms): update submodules). A named alias that
+cannot be recorded fails; with --all an unrecordable alias is reported and skipped (exit 2) while the
+remaining moved pointers are still recorded.
+Examples:
   $ oms record api
+  $ oms record api web         # both pointers in one root commit
+  $ oms record --all           # record every moved pointer
 `;
 export const syncHelp = `
 Root topology changes (.gitmodules, oms/<alias>) are left unstaged by default; create the topology
@@ -64,6 +69,9 @@ for review is not the same as recording a pointer commit: "--commit" is unsuppor
 with "oms push <alias>", then record the existing root pointer update with "oms record <alias>".
 Examples:
   $ oms push api
+  $ oms push api web           # push several aliases
+  $ oms push --all             # push every registered source repo
+  $ oms push                   # pick the aliases interactively
   $ oms record api             # record the moved root pointer
 `;
 export const agentInstallHelp = `

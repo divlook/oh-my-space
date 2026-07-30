@@ -3,7 +3,7 @@ import { aliasDir, currentBranch, isDirty, runSub, submoduleInitialized } from "
 import { loadForSubmodules } from "./manifest.js";
 import { exitFromResults, printSummary } from "./operation-results.js";
 import { resolveRemotes, selectRepos } from "./prompts.js";
-import { printRootFollowup } from "./status.js";
+import { printRootFollowups } from "./status.js";
 import type { ManageCommand, OperationResult, PushOptions, RemoteOptions, Repo, SourcesOptions } from "./types.js";
 
 function fetchRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
@@ -49,7 +49,6 @@ function pullRepo(repo: Repo, repoRoot: string, remote: string): OperationResult
   }
   // Pull synchronizes only the submodule branch; the root gitlink is never staged or committed.
   log.success(`${repo.alias}/${branch}: pulled from ${remote}`);
-  printRootFollowup(repoRoot, repo.alias);
   return "pulled";
 }
 
@@ -80,7 +79,6 @@ function pushRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationRes
   }
   // Push synchronizes only the submodule branch; the root gitlink is never staged or committed.
   log.success(`${repo.alias}/${branch}: pushed to ${remotes.join(", ")}`);
-  printRootFollowup(repoRoot, repo.alias);
   return "pushed";
 }
 
@@ -119,6 +117,9 @@ export async function runManage(
     else if (command === "pull") results.push(pullRepo(repo, repoRoot, remotes[0]));
     else results.push(pushRepo(repo, repoRoot, remotes));
   }
+  // Pull and push can move root pointers; hint once for the whole run so a wide selection that moved
+  // several pointers does not print one "oms record <alias>" line per alias.
+  if (command !== "fetch") printRootFollowups(repoRoot, picked.map((r) => r.alias));
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results);
 }

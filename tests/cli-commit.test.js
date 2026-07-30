@@ -25,6 +25,7 @@ import {
   run,
   versionPattern,
   updateEnv,
+  queueEnv,
   installContext,
   tempFixture,
   tempWorkspace,
@@ -337,6 +338,256 @@ test("record rejects a staged gitlink for a different alias", () => {
   assert.match(output, /unrelated staged changes.*oms\/web/);
 });
 
+// --- multi-alias record ---
+
+/** A workspace with api/web/core synced and their topology committed, so every gitlink exists in HEAD. */
+function workspaceWithThree() {
+  const bares = { api: initBareUpstream(), web: initBareUpstream(), core: initBareUpstream() };
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor(Object.entries(bares).map(([alias, bare]) => ({ alias, bare }))));
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  git(cwd, "add", "-A");
+  git(cwd, "commit", "-m", "add submodules");
+  return { cwd, bares };
+}
+
+/** Advance one submodule's working commit so its root pointer becomes moved. */
+function movePointer(cwd, alias, content = "x") {
+  const wt = join(cwd, "oms", alias);
+  writeFileSync(join(wt, "f.txt"), content);
+  git(wt, "add", "-A");
+  git(wt, "commit", "-m", "work");
+}
+
+test("record with several aliases creates one plural root commit", () => {
+  const { cwd } = workspaceWithThree();
+  for (const alias of ["api", "web", "core"]) movePointer(cwd, alias);
+
+  const result = run(["record", "api", "web", "core"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): update submodules");
+  // One commit carrying all three gitlinks.
+  const committed = gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD");
+  for (const alias of ["api", "web", "core"]) assert.match(committed, new RegExp(`oms/${alias}`));
+  assert.equal(gitOut(cwd, "rev-list", "--count", "HEAD"), "3"); // template + topology + one record
+});
+
+test("record --all records every moved pointer and leaves unmoved ones alone", () => {
+  const { cwd } = workspaceWithThree();
+  movePointer(cwd, "web");
+
+  const result = run(["record", "--all"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  // Only web moved, so the singular message is used and the unmoved aliases raise no problem.
+  assert.match(gitOut(cwd, "log", "-1", "--pretty=%s"), /update web submodule/);
+  const committed = gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD");
+  assert.match(committed, /oms\/web/);
+  assert.doesNotMatch(committed, /oms\/(api|core)/);
+});
+
+test("record --all with nothing moved is a no-op", () => {
+  const { cwd } = workspaceWithThree();
+  const before = gitOut(cwd, "rev-parse", "HEAD");
+
+  const result = run(["record", "--all"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Nothing to record for any submodule/);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), before);
+});
+
+test("record --all skips an alias with no recorded gitlink and still records the rest", () => {
+  const { cwd, bares } = workspaceWithThree();
+  const extra = initBareUpstream();
+  // Declared but never synced: no gitlink in root HEAD, so it cannot be recorded.
+  writeSources(
+    cwd,
+    sourcesFor([
+      ...Object.entries(bares).map(([alias, bare]) => ({ alias, bare })),
+      { alias: "extra", bare: extra },
+    ]),
+  );
+  movePointer(cwd, "api");
+  movePointer(cwd, "web");
+
+  const result = run(["record", "--all"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output); // a skipped problem makes the run non-zero
+  assert.match(output, /extra: the root HEAD has no recorded gitlink/);
+  assert.match(output, /Summary: recorded 2, failed 1/);
+  // The recordable aliases were still committed.
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): update submodules");
+  const committed = gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD");
+  assert.match(committed, /oms\/api/);
+  assert.match(committed, /oms\/web/);
+});
+
+test("record --all skips a pending removal and a staged pointer split", () => {
+  const { cwd } = workspaceWithThree();
+  movePointer(cwd, "api");
+  // web: staged pointer, then moved again -> staged differs from the working tree.
+  movePointer(cwd, "web");
+  git(cwd, "add", "oms/web");
+  movePointer(cwd, "web", "second");
+  // core: pending removal (removal left unstaged by unsync).
+  assert.equal(run(["unsync", "core"], { cwd }).status, 0);
+
+  const result = run(["record", "--all"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /web: the staged oms\/web pointer differs from the working tree/);
+  assert.match(output, /core: pending submodule removal/);
+  // api was still recorded, and web's staged pointer was left in place.
+  assert.match(gitOut(cwd, "log", "-1", "--pretty=%s"), /update api submodule/);
+  assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /oms\/web/);
+});
+
+test("a named alias that cannot be recorded fails instead of being skipped", () => {
+  const { cwd, bares } = workspaceWithThree();
+  const extra = initBareUpstream();
+  writeSources(
+    cwd,
+    sourcesFor([
+      ...Object.entries(bares).map(([alias, bare]) => ({ alias, bare })),
+      { alias: "extra", bare: extra },
+    ]),
+  );
+  movePointer(cwd, "api");
+  const before = gitOut(cwd, "rev-parse", "HEAD");
+
+  // Naming the alias is an explicit request, so it is an error and nothing is recorded.
+  const result = run(["record", "api", "extra"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /extra: the root HEAD has no recorded gitlink/);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), before);
+});
+
+test("a staged gitlink for a skipped alias is not an unrelated staged path", () => {
+  const { cwd } = workspaceWithThree();
+  movePointer(cwd, "api");
+  // web is staged and split, so it is skipped -- but it is inside the selection, not unrelated.
+  movePointer(cwd, "web");
+  git(cwd, "add", "oms/web");
+  movePointer(cwd, "web", "second");
+
+  const result = run(["record", "--all"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.doesNotMatch(output, /unrelated staged changes/);
+  // api recorded; web's staged pointer survived untouched.
+  assert.match(gitOut(cwd, "log", "-1", "--pretty=%s"), /update api submodule/);
+  assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /oms\/web/);
+});
+
+test("record fails for a staged path outside the selected alias set", () => {
+  const { cwd } = workspaceWithThree();
+  movePointer(cwd, "api");
+  movePointer(cwd, "web");
+  writeFileSync(join(cwd, "note.txt"), "x");
+  git(cwd, "add", "note.txt");
+
+  const result = run(["record", "api", "web"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /unrelated staged changes.*note\.txt/);
+});
+
+test("record aborts entirely when the root repository is in detached HEAD", () => {
+  const { cwd } = workspaceWithThree();
+  for (const alias of ["api", "web"]) movePointer(cwd, alias);
+  const before = gitOut(cwd, "rev-parse", "HEAD");
+  git(cwd, "checkout", "--detach");
+
+  const result = run(["record", "--all"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /detached HEAD/);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), before); // no commit created
+});
+
+test("pull aggregates the record hint when it moves more than one pointer", () => {
+  const { cwd, bares } = workspaceWithThree();
+  // Advance two upstreams so pulling moves those two root pointers.
+  for (const alias of ["api", "web"]) {
+    const clone = tempFixture(`oms-up-${alias}-`);
+    execFileSync("git", ["clone", bares[alias], clone], { stdio: "ignore", env: testEnv });
+    configIdentity(clone);
+    writeFileSync(join(clone, "upstream.txt"), "x");
+    git(clone, "add", "-A");
+    git(clone, "commit", "-m", "upstream work");
+    git(clone, "push", "origin", "main");
+  }
+
+  const many = run(["pull", "--all"], { cwd });
+  const manyOutput = many.stdout + many.stderr;
+  assert.equal(many.status, 0, manyOutput);
+  assert.match(manyOutput, /Run "oms record --all" to record 2 root pointer updates/);
+  assert.doesNotMatch(manyOutput, /oms record api/);
+
+  // A single moved pointer keeps the per-alias hint.
+  assert.equal(run(["record", "--all"], { cwd }).status, 0);
+  const clone = tempFixture("oms-up-core-");
+  execFileSync("git", ["clone", bares.core, clone], { stdio: "ignore", env: testEnv });
+  configIdentity(clone);
+  writeFileSync(join(clone, "upstream.txt"), "x");
+  git(clone, "add", "-A");
+  git(clone, "commit", "-m", "upstream work");
+  git(clone, "push", "origin", "main");
+
+  const one = run(["pull", "--all"], { cwd });
+  const oneOutput = one.stdout + one.stderr;
+  assert.equal(one.status, 0, oneOutput);
+  assert.match(oneOutput, /Run "oms record core" to record the root pointer update/);
+  assert.doesNotMatch(oneOutput, /oms record --all/);
+});
+
+test("the record picker does not offer a staged-split pointer", () => {
+  const { cwd } = workspaceWithThree();
+  // A staged/worktree split reports pin "moved", so it must be excluded by the record verdict instead.
+  movePointer(cwd, "api");
+  git(cwd, "add", "oms/api");
+  movePointer(cwd, "api", "second");
+
+  // An empty queue makes the shell "interactive" without supplying a response: reaching a prompt would
+  // fail closed as exhausted, so exit 0 proves no candidate was offered.
+  const none = run(["record"], { cwd, env: queueEnv([]) });
+  const noneOutput = none.stdout + none.stderr;
+  assert.equal(none.status, 0, noneOutput);
+  assert.match(noneOutput, /Nothing to record for any submodule/);
+
+  // With a second, genuinely recordable alias, the split one is still not a candidate: the sole
+  // candidate auto-selects instead of a two-item prompt (which the empty queue would fail closed on).
+  movePointer(cwd, "web");
+  const one = run(["record"], { cwd, env: queueEnv([]) });
+  const oneOutput = one.stdout + one.stderr;
+  assert.match(oneOutput, /Selected "web" \(the only moved pointer\)/);
+  // The picker narrowed the selection to web, so api's staged gitlink is outside it and correctly
+  // aborts the run -- the same rule as an explicit "oms record web" with oms/api staged.
+  assert.equal(one.status, 1, oneOutput);
+  assert.match(oneOutput, /unrelated staged changes.*oms\/api/);
+});
+
+test("record with an omitted selection resolves through the multi-select prompt", () => {
+  const { cwd } = workspaceWithThree();
+  for (const alias of ["api", "web", "core"]) movePointer(cwd, alias);
+
+  // Two of the three moved pointers are chosen; core stays unrecorded.
+  const result = run(["record"], {
+    cwd,
+    env: queueEnv([{ type: "multiselect", values: ["api", "web"] }]),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): update submodules");
+  const committed = gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD");
+  assert.match(committed, /oms\/api/);
+  assert.match(committed, /oms\/web/);
+  assert.doesNotMatch(committed, /oms\/core/);
+});
+
 test("record rejects a staged/worktree pointer split", () => {
   const { cwd, wt } = workspaceWithApi();
   // Stage the gitlink at c1, then advance the submodule to c2 so index != worktree.
@@ -532,6 +783,57 @@ test("push --remote with an unknown remote fails for that repo", () => {
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
   assert.match(output, /unknown remote\(s\): nope/);
+});
+
+test("push --all pushes every declared repo and summarizes the result", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+
+  // Advance both submodules so each push has something to deliver.
+  const heads = {};
+  for (const alias of ["api", "web"]) {
+    const wt = join(cwd, "oms", alias);
+    writeFileSync(join(wt, "feature.txt"), "x");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-m", "feature");
+    heads[alias] = gitOut(wt, "rev-parse", "HEAD");
+  }
+
+  const result = run(["push", "--all"], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Summary: pushed 2/);
+  // Both upstreams received the new commit.
+  assert.equal(gitOut(a, "rev-parse", "main"), heads.api);
+  assert.equal(gitOut(b, "rev-parse", "main"), heads.web);
+});
+
+test("push with an omitted alias list resolves through the multi-select prompt", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+
+  const before = { api: gitOut(a, "rev-parse", "main"), web: gitOut(b, "rev-parse", "main") };
+  const heads = {};
+  for (const alias of ["api", "web"]) {
+    const wt = join(cwd, "oms", alias);
+    writeFileSync(join(wt, "feature.txt"), "x");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-m", "feature");
+    heads[alias] = gitOut(wt, "rev-parse", "HEAD");
+  }
+
+  // Only api is selected, so web's upstream must stay where it was.
+  const result = run(["push"], { cwd, env: queueEnv([{ type: "multiselect", values: ["api"] }]) });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.equal(gitOut(a, "rev-parse", "main"), heads.api);
+  assert.equal(gitOut(b, "rev-parse", "main"), before.web);
 });
 
 test("pull rejects more than one --remote", () => {

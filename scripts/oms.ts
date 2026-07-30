@@ -144,10 +144,11 @@ program
 program
   .command("record")
   .description("Commit an existing root gitlink pointer update for the selected submodule (root repo only).")
-  .argument("[alias]", "registered source alias (omit to infer from the current oms/<alias>/ directory)")
+  .argument("[aliases...]", "registered source aliases (omit to infer from the current oms/<alias>/ directory)")
+  .option("--all", "record every moved source repo pointer")
   .addHelpText("after", `${recordHelp}${workspaceContextHelp}${exitHelp}`)
-  .action(async (alias: string | undefined) => {
-    await exitWith(runRecord(alias));
+  .action(async (aliases: string[], options: SourcesOptions) => {
+    await exitWith(runRecord(aliases, options));
   });
 
 const branchCommand = program
@@ -237,12 +238,13 @@ program
   .description(
     "Push the submodule branch only (creating the remote branch on first push); never stages or commits the root gitlink. Use \"oms record <alias>\" for root pointer commits (defaults to origin).",
   )
-  .argument("<aliases...>", "repo aliases to push")
+  .argument("[aliases...]", "repo aliases to push (omit for interactive multi-select)")
+  .option("--all", "push every registered source repo")
   .option("--commit", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--record", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRepeatable, [])
   .addHelpText("after", `${pushHelp}${workspaceContextHelp}${exitHelp}`)
-  .action(async (aliases: string[], options: PushOptions & RemoteOptions) => {
+  .action(async (aliases: string[], options: SourcesOptions & PushOptions & RemoteOptions) => {
     await exitWith(runManage("push", aliases, options));
   });
 
