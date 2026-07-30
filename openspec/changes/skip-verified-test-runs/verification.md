@@ -43,3 +43,58 @@ Both entries logged `Cache not found for input keys`, executed the suite, and sa
 The two keys share the fingerprint `1c622268d73f…` and differ only in the resolved runtime, confirming that one matrix entry does not vouch for the other. `ImageOS` resolved to `ubuntu24`.
 
 `.nvmrc` pins `24`, which resolved to `v24.18.0` rather than the `v24.11.0` used in the local simulation. Keying on the output of `node -v` rather than the pinned file is therefore load-bearing, not defensive: a marker written under one Node 24 patch release must not vouch for another.
+
+### Push 2 — `d964e1f`, changes only `openspec/`
+
+Run [30549474747](https://github.com/divlook/oh-my-space/actions/runs/30549474747). Both entries logged `Cache restored from key` for the fingerprint `1c622268d73f…` saved by push 1, then skipped `Install dependencies`, `Test`, `Pack dry run`, `Record verification marker`, and `Save verification marker`, and ran `Report reused verification`.
+
+| Entry | Job | Marker restored |
+| --- | ---: | ---: |
+| minimum-supported | 11 s | 378 B |
+| development | 9 s | 382 B |
+
+Both jobs reported `success` rather than a skipped or pending conclusion, so a status check is produced on a hit. The restored marker size confirms the file itself was downloaded: `Report reused verification` reads it with `cat`, which is why `lookup-only: true` was rejected during implementation. The marker is 378-382 bytes, matching the design's "a few hundred bytes".
+
+The jobs fell from 55-56 s to 9-11 s, better than the roughly 15 s the design anticipated.
+
+### Push 3 — `73a6799`, changes `.gitignore`
+
+Run [30549610461](https://github.com/divlook/oh-my-space/actions/runs/30549610461). `.gitignore` is outside the exclusion list, so the fingerprint changed to `87fd18b73dc2…`. Both entries logged `Cache not found for input keys`, executed the suite, and saved a new marker.
+
+| Entry | Key | Test | Job |
+| --- | --- | ---: | ---: |
+| minimum-supported | `ci-verified-v1-ubuntu24-X64-nodev20.19.0-87fd18b73dc2…` | 38 s | 52 s |
+| development | `ci-verified-v1-ubuntu24-X64-nodev24.18.0-87fd18b73dc2…` | 55 s | 75 s |
+
+### One run per push
+
+Three pushes produced three runs, all `event=pull_request`:
+
+| Commit | Event | Conclusion |
+| --- | --- | --- |
+| `e10fd17` | `pull_request` | success |
+| `d964e1f` | `pull_request` | success |
+| `73a6799` | `pull_request` | success |
+
+Pushing the branch before the pull request existed produced no run at all, and no push-triggered twin appeared for any commit.
+
+## Comparison with the baseline
+
+| | Pull request #62 | This pull request |
+| --- | ---: | ---: |
+| Pushes | 4 | 3 |
+| Workflow runs | 8 | 3 |
+| Job executions | 16 | 6 |
+| Suite executions | 16 | 4 |
+| Necessary suite executions | 4 | 4 |
+| Redundant suite executions | 12 | 0 |
+
+Every suite execution in this pull request corresponded to distinct test-relevant content. The documentation-only push consumed 9-11 s per entry instead of 55-56 s.
+
+## Changeset
+
+No changeset is required. The change is limited to CI configuration and repository hygiene; `oms` behaviour, its published files, and its public interface are unchanged.
+
+## Outstanding
+
+Task 6.5 — confirming that `release.yml` still executes the canonical full suite once this lands on `main` — requires merging the pull request and is not yet verified.
