@@ -96,6 +96,27 @@ export type InstallContext = {
   warnings: string[];
 };
 
+/** Where an installed skill was found: the user's home directory, or the workspace. */
+export type SkillScope = "global" | "project";
+
+/**
+ * How an installed skill compares to the version baked into this build. "unverified" means a lock
+ * file records the install but no `SKILL.md` could be located for it.
+ */
+export type SkillVersionState = "current" | "older" | "newer" | "unverified";
+
+export type SkillVersionFinding = {
+  /** Published skill name, e.g. "oms-branch". */
+  name: string;
+  state: SkillVersionState;
+  /** Installed version, or null when absent, malformed, or the file could not be located. */
+  installed: string | null;
+  /** The version this build shipped. */
+  current: string;
+  /** Scopes this finding applies to; scopes that already match are not reported. */
+  scopes: SkillScope[];
+};
+
 export type RuntimeEvidence = {
   packageRoot: string;
   realPackageRoot: string;
