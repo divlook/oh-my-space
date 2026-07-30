@@ -830,8 +830,8 @@ const SKILL_NAMES = ["oms-workspace", "oms-pointer", "oms-branch"];
  * into the build, so a content change that skips the bump would leave installed copies unreported.
  */
 const SKILL_SNAPSHOTS = {
-  "oms-workspace": { version: "1.0.0", contentHash: "73558ed9f5a464dc9c75559a993e1c5b6fa2be7d4819cde8bf3e4719ee180b36" },
-  "oms-pointer": { version: "1.0.0", contentHash: "101bda6ecb3afaafece8dce7622f83aff799c54207ace4f1ab794eff34023226" },
+  "oms-workspace": { version: "1.1.0", contentHash: "656342eea5e0817ce67b3f571dd39c495fb035f25be37ad2041670c8a1463c70" },
+  "oms-pointer": { version: "1.1.0", contentHash: "6bcf180ba49f8c4d463dcc63d9a5e7b59747b0308c8c6763881c4b0132f156a1" },
   "oms-branch": { version: "1.0.0", contentHash: "f76e37f5522ca57ac85b51d7b517992dd89096a4d7a6c2006ff3bfb730e735c7" },
 };
 

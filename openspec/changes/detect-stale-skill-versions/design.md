@@ -150,7 +150,7 @@ Diagnosis is one line per drifted skill; the remedy is one line total, since `np
 
 `tests/cli-tools.test.js` gains a per-skill `(version, contentHash)` snapshot. The hash covers everything except `metadata` — `name`, `description`, and the body — so a `description` change forces a bump while bumping the version does not perturb its own hash.
 
-A CI check diffing `skills/` against `main` was rejected: it needs `fetch-depth: 0` and a new workflow step, does not fire locally, and the workflow is deliberately minimal (a recently archived change optimised test execution).
+A CI check diffing `skills/` against `main` was rejected: it needs `fetch-depth: 0` and a new workflow step, and it does not fire locally, so a contributor would only learn of a missed bump after opening a pull request. The snapshot lives in the suite that already asserts on `skills/*/SKILL.md`, which `ci.yml` deliberately keeps inside its verification fingerprint.
 
 This cannot be fully automated. Whether a content change deserves a bump, and which component moves, is a judgement. The snapshot's job is to make that judgement a deliberate act that shows up in a diff.
 
