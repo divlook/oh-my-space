@@ -25,6 +25,7 @@ import {
   run,
   versionPattern,
   updateEnv,
+  queueEnv,
   installContext,
   tempFixture,
   tempWorkspace,
@@ -642,6 +643,47 @@ test("sync --commit isolates unrelated staged root paths through the temporary i
   assert.doesNotMatch(staged, /oms\/api/);
   // keep.txt is not in the commit.
   assert.doesNotMatch(gitOut(cwd, "show", "--stat", "--pretty=format:", "HEAD"), /keep\.txt/);
+});
+
+test("omitted selection fails with an actionable message in a non-interactive shell", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
+  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+
+  // Every set command shares one selection resolver, so one guard covers all of them. Without it the
+  // prompt opens and never settles, ending in Node's unsettled-top-level-await exit rather than a
+  // usage error naming the missing selection.
+  for (const command of ["sync", "fetch", "pull", "unsync", "push"]) {
+    const result = run([command], { cwd });
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, 1, `${command}: ${output}`);
+    assert.match(output, /not a TTY/, command);
+    assert.match(output, new RegExp(`oms ${command} --all`), command);
+  }
+});
+
+test("guarded multiselect drives an omitted selection and fails closed when malformed", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
+
+  // An injected multiselect response stands in for the TTY and narrows the selection to one alias.
+  const picked = run(["sync"], { cwd, env: queueEnv([{ type: "multiselect", values: ["api"] }]) });
+  assert.equal(picked.status, 0, picked.stdout + picked.stderr);
+  assert.equal(existsSync(join(cwd, "oms", "api")), true);
+  assert.equal(existsSync(join(cwd, "oms", "web")), false);
+
+  // A non-string entry in "values" is rejected before any prompt opens.
+  const malformed = run(["sync"], { cwd, env: queueEnv([{ type: "multiselect", values: ["api", 7] }]) });
+  assert.equal(malformed.status, 1, malformed.stdout + malformed.stderr);
+  assert.match(malformed.stdout + malformed.stderr, /must be an array of strings/);
+
+  // A select response cannot satisfy a multiselect prompt.
+  const wrongType = run(["sync"], { cwd, env: queueEnv([{ type: "select", value: "api" }]) });
+  assert.equal(wrongType.status, 1, wrongType.stdout + wrongType.stderr);
 });
 
 test("multi-alias sync --commit creates one plural topology commit", () => {

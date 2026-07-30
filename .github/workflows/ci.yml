@@ -1,10 +1,14 @@
 name: CI
 
+# Pull requests are the only trigger. A branch push would run in a separate
+# Actions cache scope, so verification markers written by one trigger are
+# unreadable from the other and every push would be verified twice.
 on:
   pull_request:
-  push:
-    branches-ignore:
-      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -23,6 +27,16 @@ jobs:
             kind: nvmrc
             node-version-file: .nvmrc
     name: test (${{ matrix.name }})
+    env:
+      MARKER_PATH: .ci-verified
+      # Tracked paths that cannot affect test outcomes. Everything not listed
+      # here contributes to the fingerprint, so an unrecognised path causes an
+      # unnecessary run rather than a missed one.
+      #
+      # Never widen this to a markdown glob: tests/cli-tools.test.js reads and
+      # asserts on the content of skills/*/SKILL.md. Root documents are named
+      # individually for that reason.
+      EXCLUDE_PATHS: '^(openspec|docs|\.claude)/|^(README|CHANGELOG|AGENTS|CLAUDE)\.md$'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -40,9 +54,72 @@ jobs:
         with:
           node-version-file: ${{ matrix.node-version-file }}
           cache: npm
+      - name: Compute verification key
+        id: key
+        run: |
+          # git ls-tree -r emits "<mode> <type> <object>\t<path>" sorted by path,
+          # so the digest covers content, mode, and layout deterministically.
+          # The pattern is read through ENVIRON to keep awk from processing its
+          # backslash escapes.
+          fingerprint=$(
+            git ls-tree -r HEAD \
+              | awk -F'\t' 'BEGIN { re = ENVIRON["EXCLUDE_PATHS"] } $2 !~ re' \
+              | sha256sum \
+              | cut -c1-64
+          )
+          # The resolved runtime, not the pinned request: .nvmrc says "24", which
+          # must not let a Node 24.11 result vouch for Node 24.12.
+          node_version=$(node -v)
+          # ImageOS (for example "ubuntu24") tracks runner image drift that
+          # RUNNER_OS ("Linux") would hide.
+          image="${ImageOS:-$RUNNER_OS}"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          echo "node-version=$node_version" >> "$GITHUB_OUTPUT"
+          echo "key=ci-verified-v1-${image}-${RUNNER_ARCH}-node${node_version}-${fingerprint}" >> "$GITHUB_OUTPUT"
+      - name: Look up verification marker
+        id: marker
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.MARKER_PATH }}
+          key: ${{ steps.key.outputs.key }}
+          # No restore-keys: a prefix match would let a marker for different
+          # content satisfy the lookup.
       - name: Install dependencies
+        if: ${{ steps.marker.outputs.cache-hit != 'true' }}
         run: npm ci
       - name: Test
+        if: ${{ steps.marker.outputs.cache-hit != 'true' }}
         run: npm test
       - name: Pack dry run
+        if: ${{ steps.marker.outputs.cache-hit != 'true' }}
         run: npm pack --dry-run --ignore-scripts
+      - name: Record verification marker
+        if: ${{ steps.marker.outputs.cache-hit != 'true' }}
+        run: |
+          {
+            echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "verified_commit=${{ github.sha }}"
+            echo "head_commit=${{ github.event.pull_request.head.sha }}"
+            echo "node_version=${{ steps.key.outputs.node-version }}"
+            echo "fingerprint=${{ steps.key.outputs.fingerprint }}"
+          } > "$MARKER_PATH"
+      - name: Save verification marker
+        if: ${{ steps.marker.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.MARKER_PATH }}
+          key: ${{ steps.key.outputs.key }}
+      - name: Report reused verification
+        if: ${{ steps.marker.outputs.cache-hit == 'true' }}
+        run: |
+          {
+            echo "### Verification reused"
+            echo
+            echo "The test-relevant content of this commit was already verified, so"
+            echo "dependency install, the canonical full suite, and package inspection"
+            echo "were skipped. Verified by:"
+            echo
+            echo '```'
+            cat "$MARKER_PATH"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

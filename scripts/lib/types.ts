@@ -65,6 +65,7 @@ export type OperationResult =
   | "pulled"
   | "pushed"
   | "unsynced"
+  | "recorded"
   | "failed";
 
 export type RemoveOutcome = "removed" | "nothing-to-remove" | "failed";

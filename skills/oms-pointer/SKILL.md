@@ -26,6 +26,10 @@ When a submodule's working commit moves — because you ran `oms commit` to comm
 
 `oms pull <alias>` fast-forwards the submodule branch and moves its working commit, so it moves the root pointer the same way a commit does. Record it with `oms record <alias>` afterward, exactly as after `oms commit`.
 
+## Several moved pointers at once
+
+A wide pull or push (`oms pull --all`, `oms push --all`) can move several root pointers in one run, and the command then hints `oms record --all` instead of one hint per alias. Record them together with `oms record --all` (or name them: `oms record <alias> <alias>`); they land in one root commit. With `--all`, an alias that cannot be recorded is reported and skipped while the rest are still recorded, and the command exits non-zero — read the skipped reasons rather than assuming everything was recorded.
+
 ## Do not commit the root pointer by mistake
 
 Do not stage and commit the root gitlink yourself to capture a pointer move — that is what `oms record <alias>` is for, and doing it by hand is the mistake this workflow exists to prevent. Run `oms status --json` to confirm whether a pointer is unrecorded before and after.
