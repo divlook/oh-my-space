@@ -97,6 +97,26 @@ Every suite execution corresponded to distinct test-relevant content. Documentat
 
 No changeset is required. The change is limited to CI configuration and repository hygiene; `oms` behaviour, its published files, and its public interface are unchanged.
 
-## Outstanding
+## Release validation after the merge
 
-Task 6.5 — confirming that `release.yml` still executes the canonical full suite once this lands on `main` — requires merging the pull request and is not yet verified.
+Pull request #63 merged as `a2cb6df`. Release run [30551814453](https://github.com/divlook/oh-my-space/actions/runs/30551814453), triggered by `push` on `main`, completed successfully in 51 s and executed the canonical full suite:
+
+| Step | Duration |
+| --- | ---: |
+| Install dependencies | 3 s |
+| Test | 38 s |
+| Pack dry run | 1 s |
+| Create release PR or publish | 1 s |
+
+`release.yml` is unchanged and carries no marker steps, so the default-branch content was verified on its own rather than by reusing the pull request's verification. The merge produced no CI run, since CI no longer triggers on `push`.
+
+### Why `release.yml` was left alone
+
+Memoizing the release run is technically possible — caches written on `refs/heads/main` are restorable by later `main` runs — but was measured to be poor value. Across the last eighteen first-parent `main` commits, only 2 of 17 consecutive pairs share a fingerprint, so the hit rate is about 12 percent, further reduced by the seven-day cache eviction given that `main` pushes are typically days apart. Each hit would save roughly 40 s on the one path where a wrong skip is most consequential.
+
+A larger redundancy exists on the publish path: a publishing release run executes the suite twice, once from the explicit `Test` step and once from `prepack` inside `changeset publish`. Run 30018300154 shows this shape. Removing the explicit step would conflict with the `Main content is always verified` requirement, because a `main` push with nothing to publish would then be verified by neither, and direct pushes to `main` are not blocked by the repository ruleset. That trade belongs to its own change.
+
+## Known limitations
+
+- **Markers do not cross pull requests.** They live in the `refs/pull/N/merge` scope, so the first push of every pull request misses even when identical content was verified elsewhere. Base-branch restore does not help, because `release.yml` writes no markers to `main`. The memo accelerates iteration within a pull request, not the first run of one.
+- **Branches predating this change still produce a push twin.** For `push` events GitHub reads the workflow file at the pushed commit, so a branch created before the merge keeps the old `push` trigger until it picks up the new `main`. Observed on `feature/explore-all-option-for`, which produced both a `push` and a `pull_request` run at 14:19, before the 14:27 merge. The twin disappears once the branch merges or rebases onto `main`.

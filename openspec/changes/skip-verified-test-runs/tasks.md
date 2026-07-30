@@ -36,7 +36,7 @@
 - [x] 6.2 Push a follow-up commit that changes only an excluded path and confirm both entries hit, skip verification, and report the vouching run from step 6.1
 - [x] 6.3 Push a follow-up commit that changes a non-excluded path and confirm both entries miss and execute the suite again
 - [x] 6.4 Confirm exactly one workflow run is created per push, with no branch-push twin
-- [ ] 6.5 Confirm the `Release` workflow still executes the canonical full suite after the merge lands on `main`
+- [x] 6.5 Confirm the `Release` workflow still executes the canonical full suite after the merge lands on `main`
 
 ## 7. Record results
 
