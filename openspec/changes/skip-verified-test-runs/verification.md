@@ -80,7 +80,9 @@ Pushing the branch before the pull request existed produced no run at all, and n
 
 ## Comparison with the baseline
 
-| | Pull request #62 | This pull request |
+Comparing pull request #62's four pushes against the three verification pushes above:
+
+| | Pull request #62 | Pushes 1-3 here |
 | --- | ---: | ---: |
 | Pushes | 4 | 3 |
 | Workflow runs | 8 | 3 |
@@ -89,7 +91,7 @@ Pushing the branch before the pull request existed produced no run at all, and n
 | Necessary suite executions | 4 | 4 |
 | Redundant suite executions | 12 | 0 |
 
-Every suite execution in this pull request corresponded to distinct test-relevant content. The documentation-only push consumed 9-11 s per entry instead of 55-56 s.
+Every suite execution corresponded to distinct test-relevant content. Documentation-only pushes consumed 9-13 s per entry instead of 55-56 s, and each further documentation-only push on this branch has reused a marker rather than re-running the suite.
 
 ## Changeset
 
