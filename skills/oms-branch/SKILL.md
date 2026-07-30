@@ -1,6 +1,9 @@
 ---
 name: oms-branch
 description: Use when discovering, starting, switching, or deleting a branch inside an `oms/<alias>/` submodule — `oms branch list` to inspect choices, `oms branch switch` for local branches, `oms branch checkout` for remote branches, and `oms branch delete` for safe local deletion.
+metadata:
+  author: oh-my-space
+  version: "1.0.0"
 ---
 
 # Choose the right branch command inside a submodule

@@ -3,7 +3,9 @@ import { cancel, isCancel, log, select } from "@clack/prompts";
 import semver from "semver";
 import { PACKAGE_NAME, REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
 import { readPackageVersion, runtimePlatform, testEnv } from "./env.js";
+import { findWorkspaceRoot } from "./git.js";
 import { detectInstallContext, formatCommand } from "./install-context.js";
+import { omsSkillsInstalled, reportSkillVersions } from "./skills.js";
 import type { InstallContext, PackageManager, UpdateCommand, UpdateOptions } from "./types.js";
 
 async function fetchLatestPackageVersion(): Promise<string> {
@@ -170,6 +172,9 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
     if (prerelease) printPrereleaseStatus(currentVersion, latestVersion);
     if (comparison === 0) {
       if (prerelease) printPrereleaseGuidance(detectInstallContext());
+      // This binary is current, so the versions baked into it are the current reference and the
+      // skill comparison is exact here — unlike after an upgrade, where the new values are unknown.
+      reportSkillVersions(findWorkspaceRoot());
       log.success("oms is up to date.");
       return 0;
     }
@@ -228,5 +233,10 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
   }
   verifyPostUpdate(latestVersion);
   log.success("Update command completed.");
+  // The newly installed CLI is not loaded in this process, so its skill versions are unknown here.
+  // Point at doctor, which the new binary answers exactly, rather than guessing.
+  if (omsSkillsInstalled(findWorkspaceRoot())) {
+    log.info('oms skills are installed. Run "oms doctor" to check whether they need updating for this version.');
+  }
   return 0;
 }

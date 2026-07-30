@@ -60,6 +60,21 @@ export function readBuildCommit(): string | null {
   return info?.commit ?? null;
 }
 
+/**
+ * The published skill versions baked in at build time, or null when unavailable so callers skip
+ * skill reporting rather than guessing (a build without skills/ has nothing to compare against).
+ */
+export function readSkillVersions(): Record<string, string> | null {
+  const mocked = testEnv("OMS_TEST_SKILL_VERSIONS");
+  if (mocked !== undefined) {
+    return mocked === "" ? null : (JSON.parse(mocked) as Record<string, string>);
+  }
+  const info = readJson<{ skillVersions?: Record<string, string> | null }>(
+    join(dirname(moduleFilePath), "build-info.json"),
+  );
+  return info?.skillVersions ?? null;
+}
+
 /** Clickable GitHub permalink for a repo doc, pinned to the build commit; falls back to the version tag. */
 export function docUrl(relPath: string): string {
   const ref = readBuildCommit() ?? `v${readPackageVersion()}`;

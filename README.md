@@ -185,6 +185,29 @@ The three skills are named by the Git domain each manages:
 
 Skill firing is best-effort — an agent loads a skill only when it judges the skill's description relevant — so the skills complement, rather than replace, `oms <command> --help` and the always-on marker block inside `oms/`. Each skill defers exact `oms status --json` field semantics to `oms status --help`, the version-matched authoritative source that ships with the installed CLI.
 
+### Keeping installed skills current
+
+The skills install from this repository while the CLI installs from npm, so an installed copy can fall behind the `oms` you are running. Each skill declares its own version in its `SKILL.md` frontmatter:
+
+```yaml
+metadata:
+  author: oh-my-space
+  version: "1.0.0"
+```
+
+The version moves by what changed: **major** when the guardrail kernel or the scope contract changes, **minor** when instructions or the trigger description change, **patch** for wording only.
+
+`oms doctor` compares the installed copies against the versions the running CLI was built with and reports any that differ, along with the command that resolves it:
+
+```
+●  oms-branch: skill 1.0.0 is older than 1.1.0 (global)
+│  Update: npx skills update oms-branch
+```
+
+Passing skill names makes `npx skills update` non-interactive and covers the global and project scopes together, so no scope flag is needed. A copy installed before versions existed reports its version as unknown and is treated as older. If a skill is *newer* than the CLI knows, `oms doctor` names `oms update` instead — the CLI is the side that is behind. `oms update` runs the same check when `oms` is already up to date, and points back at `oms doctor` after it upgrades the CLI, since the freshly installed version is not loaded in that process.
+
+These findings are informational: they never change an exit code, because a stale skill degrades the guidance an agent receives rather than breaking anything `oms` does, and the global scope reflects state outside the workspace.
+
 ## Command reference
 
 `oms.yaml` declares each source repo with `alias`, a `remotes` mapping (which must include `origin`), and optional `branch` (the baseline).
@@ -192,7 +215,7 @@ Skill firing is best-effort — an agent loads a skill only when it judges the s
 | Command | Runs in | Does | Notes |
 | --- | --- | --- | --- |
 | `oms init` | current directory | Writes a starter `oms.yaml`. | The directory must be outside Git or the root Git top-level. A nested Git-work-tree directory is rejected before writes, even with `--force`. Otherwise refuses an existing manifest unless `--force` is used. Does not gitignore `oms/`. |
-| `oms doctor` | workspace root or child path | Checks the nearest `oms.yaml`, Git root identity, and each alias's submodule state. | Diagnoses a nested manifest directly instead of treating it as a valid root. Returns exit 2 if any warning is raised. |
+| `oms doctor` | workspace root or child path | Checks the nearest `oms.yaml`, Git root identity, and each alias's submodule state, and reports installed [workspace skills](#keeping-installed-skills-current) whose version differs from the running CLI. | Diagnoses a nested manifest directly instead of treating it as a valid root. Returns exit 2 if any warning is raised; skill version findings are informational and leave the exit code alone. |
 | `oms sync <alias>` / `--all` | workspace root | Registers missing repos with `git submodule add`, initializes registered-but-uninitialized ones, fetches, and attaches the baseline branch. | Reproduces the recorded pointer on a fresh clone. Topology changes (`.gitmodules`, `oms/<alias>`) are left unstaged by default; commit them via the prompt or `--commit` (`chore(oms): add ...`). |
 | `oms status [alias...]` / `--all` | anywhere under root | Prints branch, pointer state (`ok`/`moved`/`uninit`/`missing`/`conflict`), dirtiness, and ahead/behind for each submodule. | `moved` means the working commit differs from the recorded pointer — record it with `oms record`. `--json` prints one machine-readable object on stdout for tooling and agents. |
 | `oms commit [alias]` | workspace root or inside `oms/<alias>/` | Commits source changes inside the selected submodule only; never the root gitlink. | `-m <message>` is required (repeatable). Commits existing staged changes as-is, otherwise stages all with `git add -A`. Infers a configured alias from the current `oms/<alias>/` directory; an explicit alias wins. |

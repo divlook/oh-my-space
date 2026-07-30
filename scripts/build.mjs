@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import esbuild from "esbuild";
+import semver from "semver";
+import { parse as parseYaml } from "yaml";
 
 /**
  * Top-level runtime dependencies that must be inlined into the bundle (never
@@ -42,7 +44,10 @@ try {
   // not a git repo (e.g. building from a published tarball) — fall back at runtime
 }
 mkdirSync("dist", { recursive: true });
-writeFileSync("dist/build-info.json", JSON.stringify({ commit }) + "\n");
+writeFileSync(
+  "dist/build-info.json",
+  JSON.stringify({ commit, skillVersions: readPublishedSkillVersions() }) + "\n",
+);
 
 // The inlined deps are vendored into the bundle; MIT/ISC require their notices to
 // ship with it. esbuild's legalComments only collects inline source comments, which
@@ -52,6 +57,49 @@ writeFileSync("dist/THIRD-PARTY-NOTICES.txt", buildThirdPartyNotices(result.meta
 
 // Guarantee the bin is executable; do not rely on esbuild's implicit shebang exec bit.
 chmodSync("dist/oms.js", 0o755);
+
+/**
+ * Reads the published skill versions from each skills/<name>/SKILL.md frontmatter so the CLI can
+ * compare an installed copy against what this build shipped. The versions are derived here rather
+ * than duplicated in source, so SKILL.md stays the single place a version is maintained.
+ * @returns {Record<string, string> | null} name-to-version map, or null when unavailable
+ */
+function readPublishedSkillVersions() {
+  let entries;
+  try {
+    entries = readdirSync("skills", { withFileTypes: true });
+  } catch {
+    // No skills/ directory — building from the published tarball, which ships only dist/.
+    return null;
+  }
+  const versions = {};
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    let raw;
+    try {
+      raw = readFileSync(`skills/${entry.name}/SKILL.md`, "utf8");
+    } catch {
+      continue;
+    }
+    const frontmatter = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!frontmatter) continue;
+    let version;
+    try {
+      version = parseYaml(frontmatter[1])?.metadata?.version;
+    } catch (error) {
+      console.error(`Could not parse frontmatter in skills/${entry.name}/SKILL.md: ${error.message}`);
+      process.exit(1);
+    }
+    if (version === undefined) continue;
+    // Fail here rather than shipping a version the CLI would have to skip at runtime.
+    if (typeof version !== "string" || semver.valid(version) === null) {
+      console.error(`skills/${entry.name}/SKILL.md: metadata.version must be a quoted semver string, got ${JSON.stringify(version)}`);
+      process.exit(1);
+    }
+    versions[entry.name] = version;
+  }
+  return Object.keys(versions).length > 0 ? versions : null;
+}
 
 /**
  * Builds the third-party attribution text reproducing every bundled package's
