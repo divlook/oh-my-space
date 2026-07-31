@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { log } from "@clack/prompts";
 import {
   GITIGNORE_ENTRY,
@@ -15,13 +14,16 @@ import {
   aliasDir,
   submoduleInitialized,
   submodulePath,
+  productionGitRunner,
+  runGit,
+  type RawGitRunner,
 } from "./git.js";
 import { abortOnLegacyRenameAt, abortOnLegacyWorktree, emitLegacyRenameHintWalkUp, loadRepos } from "./manifest.js";
 import { reportSkillVersions } from "./skills.js";
 import { pinState } from "./status.js";
 import { gitignoreIgnoresOms } from "./workspace-ignore.js";
 
-export async function runDoctor(): Promise<number> {
+export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): Promise<number> {
   const loaded = loadRepos();
   if (!loaded) {
     emitLegacyRenameHintWalkUp();
@@ -33,11 +35,8 @@ export async function runDoctor(): Promise<number> {
   log.success(`Workspace manifest directory: ${repoRoot}`);
   log.success(`${MANIFEST_FILENAME}: ${repos.length} repo(s) configured`);
 
-  const git = spawnSync("git", ["--version"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (git.status !== 0) {
+  const git = runGit(process.cwd(), ["--version"], false, undefined, gitRunner);
+  if (!git.success) {
     log.error("git: not found");
     return 1;
   }

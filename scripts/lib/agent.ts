@@ -38,7 +38,7 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 /** Classify the OMS marker state of a file: missing, exactly one valid block, or malformed. */
-function analyzeManagedBlock(content: string): ManagedBlockState {
+export function analyzeManagedBlock(content: string): ManagedBlockState {
   const starts = countOccurrences(content, OMS_MARKER_START);
   const ends = countOccurrences(content, OMS_MARKER_END);
   if (starts === 0 && ends === 0) return { kind: "missing" };
@@ -63,7 +63,7 @@ function normalizeTrailingNewline(content: string): string {
 }
 
 /** Compute the post-install content for a target file: create, append after two blank lines, or replace. */
-function installManagedBlock(existing: string | null): string {
+export function installManagedBlock(existing: string | null): string {
   if (existing === null || existing.trim() === "") return `${OMS_INSTRUCTION_BLOCK}\n`;
   const state = analyzeManagedBlock(existing);
   if (state.kind === "valid") {

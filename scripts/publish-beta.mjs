@@ -1,4 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const PACKAGE_JSON = "package.json";
@@ -16,9 +17,10 @@ const packageLockOriginal = readFileSync(PACKAGE_LOCK, "utf8");
 const packageJson = JSON.parse(packageJsonOriginal);
 const baseVersion = args.baseVersion ?? packageJson.version;
 let shouldRestore = false;
+let activeChild;
 
-process.once("SIGINT", () => restoreAndExit(130));
-process.once("SIGTERM", () => restoreAndExit(143));
+process.once("SIGINT", () => restoreAndExit("SIGINT", 130));
+process.once("SIGTERM", () => restoreAndExit("SIGTERM", 143));
 
 if (!isStableSemver(baseVersion)) {
   fail(`--base-version must be a stable semver version, got ${baseVersion}`);
@@ -42,10 +44,10 @@ try {
   writePackageVersions(betaVersion);
   shouldRestore = true;
   if (args.publish) {
-    run("npm", ["publish", "--tag", "beta"]);
-    run("npm", ["view", PACKAGE_NAME, "dist-tags"]);
+    await run("npm", ["publish", "--tag", "beta"]);
+    await run("npm", ["view", PACKAGE_NAME, "dist-tags"]);
   } else {
-    run("npm", ["pack", "--dry-run"]);
+    await run("npm", ["pack", "--dry-run"]);
     console.log("Dry-run complete. Re-run with --publish to publish this beta version.");
   }
 } catch (error) {
@@ -77,11 +79,17 @@ function requireValue(argv, index, option) {
 }
 
 /** Runs a command inheriting stdio and exits on failure. */
-function run(command, args) {
-  const result = spawnSync(command, args, { stdio: "inherit", shell: process.platform === "win32" });
-  if (result.status === 0) return;
-  const detail = result.status === null ? `signal ${result.signal ?? "unknown"}` : `exit ${result.status}`;
-  throw new Error(`${command} ${args.join(" ")} failed with ${detail}`);
+async function run(command, args) {
+  const child = spawn(command, args, { stdio: "inherit", shell: process.platform === "win32" });
+  activeChild = child;
+  try {
+    const [status, signal] = await once(child, "exit");
+    if (status === 0) return;
+    const detail = status === null ? `signal ${signal ?? "unknown"}` : `exit ${status}`;
+    throw new Error(`${command} ${args.join(" ")} failed with ${detail}`);
+  } finally {
+    activeChild = undefined;
+  }
 }
 
 /** Writes the temporary beta version to package metadata. */
@@ -104,8 +112,9 @@ function restorePackageFiles() {
 }
 
 /** Restores package metadata before exiting from a signal. */
-function restoreAndExit(code) {
+function restoreAndExit(signal, code) {
   restorePackageFiles();
+  activeChild?.kill(signal);
   process.exit(code);
 }
 

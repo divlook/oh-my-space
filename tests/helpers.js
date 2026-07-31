@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,9 +15,17 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import assert from "node:assert/strict";
 import semver from "semver";
+import { normalizedTestEnvironment } from "../scripts/verification/environment.mjs";
 
 const workerRoot = mkdtempSync(join(tmpdir(), "oms-tests-"));
 const retainFixtures = process.env.OMS_TEST_RETAIN_FIXTURES === "1";
+
+function copyFixture(template, prefix) {
+  const destination = tempFixture(prefix);
+  rmSync(destination, { recursive: true });
+  cpSync(template, destination, { recursive: true });
+  return destination;
+}
 
 function tempFixture(prefix) {
   return mkdtempSync(join(workerRoot, prefix));
@@ -33,21 +42,7 @@ process.on("exit", () => {
 const cli = resolve("dist/oms.js");
 const publishBetaScript = resolve("scripts/publish-beta.mjs");
 
-const testEnv = {
-  ...process.env,
-  // Allow file-protocol clones, keep test commits unsigned, and provide a commit
-  // identity so commits succeed even on hosts (CI) without a global git identity.
-  // These are process-scoped (GIT_CONFIG_*), never written to disk.
-  GIT_CONFIG_COUNT: "4",
-  GIT_CONFIG_KEY_0: "protocol.file.allow",
-  GIT_CONFIG_VALUE_0: "always",
-  GIT_CONFIG_KEY_1: "commit.gpgsign",
-  GIT_CONFIG_VALUE_1: "false",
-  GIT_CONFIG_KEY_2: "user.email",
-  GIT_CONFIG_VALUE_2: "test@example.com",
-  GIT_CONFIG_KEY_3: "user.name",
-  GIT_CONFIG_VALUE_3: "Test",
-};
+const testEnv = normalizedTestEnvironment();
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [cli, ...args], {
@@ -166,11 +161,7 @@ function getApiWorkspaceTemplate() {
  * Returns the bare repo path. Optionally creates additional branches.
  */
 function initBareUpstream({ branches = ["main"] } = {}) {
-  const bare = tempFixture("oms-source-");
-  execFileSync("git", ["clone", "--bare", getUpstreamTemplate(), bare], {
-    stdio: "ignore",
-    env: testEnv,
-  });
+  const bare = copyFixture(getUpstreamTemplate(), "oms-source-");
   for (const b of branches) {
     if (b === "main") continue;
     git(bare, "branch", b, "main");
@@ -180,9 +171,7 @@ function initBareUpstream({ branches = ["main"] } = {}) {
 
 /** A git workspace (parent repo) with an initial commit — the host for submodules. */
 function initGitWorkspace() {
-  const cwd = tempWorkspace();
-  execFileSync("git", ["clone", getWorkspaceTemplate(), cwd], { stdio: "ignore", env: testEnv });
-  git(cwd, "remote", "remove", "origin");
+  const cwd = copyFixture(getWorkspaceTemplate(), "oms-test-");
   configIdentity(cwd);
   return cwd;
 }
@@ -226,12 +215,7 @@ function gitTopLevelStubEnv(mode) {
 /** A workspace with `api` synced and its initial gitlink recorded in the root HEAD. */
 function workspaceWithApi() {
   const bare = initBareUpstream();
-  const cwd = tempWorkspace();
-  execFileSync("git", ["clone", "--recurse-submodules", getApiWorkspaceTemplate(), cwd], {
-    stdio: "ignore",
-    env: testEnv,
-  });
-  git(cwd, "remote", "remove", "origin");
+  const cwd = copyFixture(getApiWorkspaceTemplate(), "oms-test-");
   configIdentity(cwd);
   writeSources(cwd, sourceFor("api", bare));
   git(cwd, "config", "-f", ".gitmodules", "submodule.oms/api.url", `file://${bare}`);
