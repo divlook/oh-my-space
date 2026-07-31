@@ -68,7 +68,7 @@
 - [x] 8.3 Verify that the release job's explicit `npm test` record lets the later Changesets publish reuse tests while still rebuilding and smoke-checking the artifact.
 - [x] 8.4 Benchmark real-Git concurrency two, four, and six under comparable local conditions and select the faster stable explicit value.
 - [x] 8.5 Run three complete M2/Node 24 `npm test` measurements and confirm a median of at most 60 seconds with no run above 75 seconds.
-- [ ] 8.6 Run cache-miss Node 20.19 and Node 24 CI jobs and confirm each Test step completes within 60 seconds.
+- [x] 8.6 Run cache-miss Node 20.19 and Node 24 CI jobs and confirm each Test step completes within 60 seconds.
 - [x] 8.7 If a target is missed, reduce non-destructive CLI process boundaries first and then retain representative real-Git root transaction stages while preserving all mapped contracts.
 - [x] 8.8 Exercise canonical test, focused test, direct pack, direct publish simulation, beta dry-run, beta publish simulation, Changesets release simulation, force mode, and every verification fallback end to end.
 - [x] 8.9 Run strict OpenSpec validation and record final timings, selected concurrency, package contents, marker behavior, environment keys, and contract mapping evidence.

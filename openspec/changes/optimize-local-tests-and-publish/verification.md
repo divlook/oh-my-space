@@ -83,6 +83,13 @@ Concurrency six is the explicit winner. The final three comparable complete Node
 - Release still runs explicit `npm test`; subsequent Changesets publication can reuse that worktree-local record while `prepack` rebuilds and smoke-checks the artifact.
 - `openspec validate optimize-local-tests-and-publish --type change --strict --no-interactive` passed.
 
-## Remaining External Confirmation
+## Exact Cache-Miss CI Confirmation
 
-A pushed revision must still receive cache-miss GitHub-hosted Node 20.19 and Node 24 Test steps at or below 60 seconds. The exact local matrix equivalents pass, and representative GitHub timings pass, but this worktree cannot produce its own GitHub Actions run before it is committed and pushed.
+Pull request run [30637289914](https://github.com/divlook/oh-my-space/actions/runs/30637289914) passed from a fresh branch with no matching verification marker:
+
+| Matrix entry | Resolved Node | Test step |
+| --- | --- | ---: |
+| minimum-supported | 20.19.0 | 34 s |
+| development | 24.18.1 | 35 s |
+
+Both exact change Test steps completed below the 60-second limit.
