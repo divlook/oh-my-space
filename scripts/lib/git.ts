@@ -3,6 +3,39 @@ import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DATA_DIRNAME, MANIFEST_FILENAME, MIN_GIT_MAJOR, MIN_GIT_MINOR } from "./constants.js";
 import type { GitResult, WorkspaceOptions } from "./types.js";
+export type RawGitRunner = (cwd: string, args: string[], input?: Buffer | null) => GitResult;
+
+/** Production raw Git boundary used by orchestration and injectable tests. */
+export const productionGitRunner: RawGitRunner = (cwd, args, input) => {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "buffer",
+    ...(input === null ? { stdio: ["inherit", "pipe", "pipe"] } : { input }),
+  });
+  return {
+    exitCode: result.status,
+    success: result.status === 0,
+    stdout: result.stdout ? result.stdout.toString("utf8") : "",
+    stderr: result.stderr ? result.stderr.toString("utf8") : "",
+  };
+};
+
+function environmentGitRunner(env: NodeJS.ProcessEnv): RawGitRunner {
+  return (cwd, args, input) => {
+    const result = spawnSync("git", args, {
+      cwd,
+      env,
+      encoding: "buffer",
+      ...(input === null ? { stdio: ["inherit", "pipe", "pipe"] } : { input }),
+    });
+    return {
+      exitCode: result.status,
+      success: result.status === 0,
+      stdout: result.stdout ? result.stdout.toString("utf8") : "",
+      stderr: result.stderr ? result.stderr.toString("utf8") : "",
+    };
+  };
+}
 
 /** Remove credentials from URLs while retaining useful host, path, and failure context. */
 export function redactSensitiveUrls(value: string): string {
@@ -11,33 +44,32 @@ export function redactSensitiveUrls(value: string): string {
     .replace(/([?&](?:(?:access|auth|bearer|id|oauth|refresh)?[_-]?token|(?:api|private)?[_-]?key|auth(?:orization)?|(?:client|consumer)?[_-]?secret|credential|jwt|pass(?:word|wd)?|signature)=)[^&\s]+/gi, "$1[redacted]");
 }
 
-export function runGit(cwd: string, args: string[], inheritOutput = false, env?: NodeJS.ProcessEnv): GitResult {
-  const redactOutput = inheritOutput && process.env.OMS_REDACT_GIT_DIAGNOSTICS === "1";
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: inheritOutput && !redactOutput ? "inherit" : [redactOutput ? "inherit" : "ignore", "pipe", "pipe"],
-    ...(env ? { env } : {}),
-  });
-
-  const stdout = inheritOutput && !redactOutput ? "" : (result.stdout ?? "");
-  const stderr = inheritOutput && !redactOutput ? "" : (result.stderr ?? "");
-  if (redactOutput) {
-    if (stdout) process.stdout.write(redactSensitiveUrls(stdout));
-    if (stderr) process.stderr.write(redactSensitiveUrls(stderr));
+export function runGit(
+  cwd: string,
+  args: string[],
+  inheritOutput = false,
+  env?: NodeJS.ProcessEnv,
+  runner: RawGitRunner = env ? environmentGitRunner(env) : productionGitRunner,
+): GitResult {
+  const result = runner(cwd, args, inheritOutput ? null : undefined);
+  if (inheritOutput) {
+    const redactOutput = process.env.OMS_REDACT_GIT_DIAGNOSTICS === "1";
+    if (result.stdout) process.stdout.write(redactOutput ? redactSensitiveUrls(result.stdout) : result.stdout);
+    if (result.stderr) process.stderr.write(redactOutput ? redactSensitiveUrls(result.stderr) : result.stderr);
+    return { ...result, stdout: "", stderr: "" };
   }
-
-  return {
-    exitCode: result.status,
-    success: result.status === 0,
-    stdout: inheritOutput ? "" : stdout,
-    stderr: inheritOutput ? "" : stderr,
-  };
+  return result;
 }
 
 /** Run git inside the submodule working tree at oms/<alias>/. */
-export function runSub(repoRoot: string, alias: string, args: string[], inheritOutput = false): GitResult {
-  return runGit(aliasDir(repoRoot, alias), args, inheritOutput);
+export function runSub(
+  repoRoot: string,
+  alias: string,
+  args: string[],
+  inheritOutput = false,
+  runner: RawGitRunner = productionGitRunner,
+): GitResult {
+  return runGit(aliasDir(repoRoot, alias), args, inheritOutput, undefined, runner);
 }
 
 export function parseGitVersion(s: string): { major: number; minor: number } | null {
@@ -193,53 +225,53 @@ export function submoduleInitialized(repoRoot: string, alias: string): boolean {
 }
 
 /** Short branch name, or null when HEAD is detached. */
-export function currentBranch(dir: string): string | null {
-  const r = runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+export function currentBranch(dir: string, runner: RawGitRunner = productionGitRunner): string | null {
+  const r = runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"], false, undefined, runner);
   if (!r.success) return null;
   const b = r.stdout.trim();
   return b && b !== "HEAD" ? b : null;
 }
 
-export function shortSha(dir: string): string {
-  const r = runGit(dir, ["rev-parse", "--short", "HEAD"]);
+export function shortSha(dir: string, runner: RawGitRunner = productionGitRunner): string {
+  const r = runGit(dir, ["rev-parse", "--short", "HEAD"], false, undefined, runner);
   return r.success ? r.stdout.trim() : "???????";
 }
 
-export function localBranchExists(dir: string, branch: string): boolean {
-  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).success;
+export function localBranchExists(dir: string, branch: string, runner: RawGitRunner = productionGitRunner): boolean {
+  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], false, undefined, runner).success;
 }
 
 /** Full 40-hex OID of a local branch tip, or null when the branch does not exist. */
-export function localBranchOid(dir: string, branch: string): string | null {
-  const r = runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
+export function localBranchOid(dir: string, branch: string, runner: RawGitRunner = productionGitRunner): string | null {
+  const r = runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], false, undefined, runner);
   const oid = r.stdout.trim();
   return r.success && /^[0-9a-f]{40}$/.test(oid) ? oid : null;
 }
 
 /** Abbreviated OID for an arbitrary revision, or a sentinel when it cannot be read. */
-export function shortOid(dir: string, rev: string): string {
-  const r = runGit(dir, ["rev-parse", "--short", rev]);
+export function shortOid(dir: string, rev: string, runner: RawGitRunner = productionGitRunner): string {
+  const r = runGit(dir, ["rev-parse", "--short", rev], false, undefined, runner);
   return r.success && r.stdout.trim().length > 0 ? r.stdout.trim() : "???????";
 }
 
 /** Branch name that origin/HEAD points to (e.g. "main"), or null when the default is unset or dangling. */
-export function resolveOriginHead(dir: string): string | null {
-  const r = runGit(dir, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+export function resolveOriginHead(dir: string, runner: RawGitRunner = productionGitRunner): string | null {
+  const r = runGit(dir, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], false, undefined, runner);
   if (!r.success) return null;
   const ref = r.stdout.trim();
   const name = ref.startsWith("origin/") ? ref.slice("origin/".length) : "";
   if (!name) return null;
   // A default that points at a nonexistent remote-tracking branch is not a usable baseline.
-  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${name}`]).success ? name : null;
+  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${name}`], false, undefined, runner).success ? name : null;
 }
 
-export function remoteBranchExists(dir: string, branch: string): boolean {
-  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]).success;
+export function remoteBranchExists(dir: string, branch: string, runner: RawGitRunner = productionGitRunner): boolean {
+  return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`], false, undefined, runner).success;
 }
 
 /** Local branch short names (refs/heads), e.g. ["main", "dev"]. Empty on failure or none. */
-export function listLocalBranches(dir: string): string[] {
-  const r = runGit(dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+export function listLocalBranches(dir: string, runner: RawGitRunner = productionGitRunner): string[] {
+  const r = runGit(dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads"], false, undefined, runner);
   if (!r.success) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
 }
@@ -255,13 +287,14 @@ export type LocalBranchInfo = {
 /** Enumerate local refs and each branch's exact configured upstream and divergence. */
 export function inspectLocalBranches(
   dir: string,
+  runner: RawGitRunner = productionGitRunner,
 ): { ok: true; branches: LocalBranchInfo[] } | { ok: false; diagnostic: string } {
   const refs = runGit(dir, [
     "for-each-ref",
     "--sort=refname",
     "--format=%(refname:short)\t%(upstream:short)",
     "refs/heads",
-  ]);
+  ], false, undefined, runner);
   if (!refs.success) return { ok: false, diagnostic: redactSensitiveUrls(refs.stderr.trim()) };
 
   const branches = refs.stdout
@@ -272,7 +305,7 @@ export function inspectLocalBranches(
       const [name, configuredUpstream = ""] = line.split("\t");
       const upstream = configuredUpstream || null;
       if (upstream === null) return { name, upstream, ahead: null, behind: null };
-      const divergence = runGit(dir, ["rev-list", "--left-right", "--count", `${name}...${upstream}`]);
+      const divergence = runGit(dir, ["rev-list", "--left-right", "--count", `${name}...${upstream}`], false, undefined, runner);
       const counts = divergence.success ? divergence.stdout.trim().split(/\s+/).map(Number) : [];
       if (counts.length !== 2 || counts.some((count) => !Number.isFinite(count))) {
         return { name, upstream, ahead: null, behind: null };
@@ -286,13 +319,14 @@ export function inspectLocalBranches(
 export function inspectRemoteBranches(
   dir: string,
   remote: string,
+  runner: RawGitRunner = productionGitRunner,
 ): { ok: true; branches: string[] } | { ok: false; diagnostic: string } {
   const r = runGit(dir, [
     "for-each-ref",
     "--sort=refname",
     "--format=%(refname)",
     `refs/remotes/${remote}`,
-  ]);
+  ], false, undefined, runner);
   if (!r.success) return { ok: false, diagnostic: redactSensitiveUrls(r.stderr.trim()) };
   const prefix = `refs/remotes/${remote}/`;
   const branches = r.stdout
@@ -306,8 +340,8 @@ export function inspectRemoteBranches(
 }
 
 /** Remote branch short names under origin, with the "origin/" prefix stripped and origin/HEAD excluded. */
-export function listRemoteBranches(dir: string): string[] {
-  const r = runGit(dir, ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"]);
+export function listRemoteBranches(dir: string, runner: RawGitRunner = productionGitRunner): string[] {
+  const r = runGit(dir, ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"], false, undefined, runner);
   if (!r.success) return [];
   return r.stdout
     .split("\n")
@@ -317,7 +351,7 @@ export function listRemoteBranches(dir: string): string[] {
     .filter((s) => s !== "HEAD");
 }
 
-export function isDirty(dir: string): boolean {
-  const r = runGit(dir, ["status", "--porcelain"]);
+export function isDirty(dir: string, runner: RawGitRunner = productionGitRunner): boolean {
+  const r = runGit(dir, ["status", "--porcelain"], false, undefined, runner);
   return r.success && r.stdout.trim().length > 0;
 }

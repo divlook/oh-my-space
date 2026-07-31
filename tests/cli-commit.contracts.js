@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
-import test from "node:test";
+import test from "./sharded-test.js";
 import assert from "node:assert/strict";
 import semver from "semver";
 import { parse as parseYaml } from "yaml";
@@ -692,8 +692,11 @@ test("record leaves the gitlink staged when the root commit fails", () => {
   const hook = join(cwd, ".git", "hooks", "pre-commit");
   writeFileSync(hook, "#!/usr/bin/env bash\nexit 1\n");
   execFileSync("chmod", ["+x", hook]);
+  const hookEnv = { ...testEnv, GIT_CONFIG_COUNT: "5" };
+  delete hookEnv.GIT_CONFIG_KEY_5;
+  delete hookEnv.GIT_CONFIG_VALUE_5;
 
-  const result = run(["record", "api"], { cwd });
+  const result = run(["record", "api"], { cwd, env: hookEnv });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
   assert.match(output, /left in place/);

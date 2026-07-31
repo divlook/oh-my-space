@@ -7,6 +7,8 @@
 node_modules/
 
 dist/
+.test-dist/
+.oms-verification.json
 # claude
 .claude/plans/
 

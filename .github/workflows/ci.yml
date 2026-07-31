@@ -29,14 +29,6 @@ jobs:
     name: test (${{ matrix.name }})
     env:
       MARKER_PATH: .ci-verified
-      # Tracked paths that cannot affect test outcomes. Everything not listed
-      # here contributes to the fingerprint, so an unrecognised path causes an
-      # unnecessary run rather than a missed one.
-      #
-      # Never widen this to a markdown glob: tests/cli-tools.test.js reads and
-      # asserts on the content of skills/*/SKILL.md. Root documents are named
-      # individually for that reason.
-      EXCLUDE_PATHS: '^(openspec|docs|\.claude)/|^(README|CHANGELOG|AGENTS|CLAUDE)\.md$'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -57,16 +49,7 @@ jobs:
       - name: Compute verification key
         id: key
         run: |
-          # git ls-tree -r emits "<mode> <type> <object>\t<path>" sorted by path,
-          # so the digest covers content, mode, and layout deterministically.
-          # The pattern is read through ENVIRON to keep awk from processing its
-          # backslash escapes.
-          fingerprint=$(
-            git ls-tree -r HEAD \
-              | awk -F'\t' 'BEGIN { re = ENVIRON["EXCLUDE_PATHS"] } $2 !~ re' \
-              | sha256sum \
-              | cut -c1-64
-          )
+          fingerprint=$(node scripts/verification/fingerprint.mjs --ci)
           # The resolved runtime, not the pinned request: .nvmrc says "24", which
           # must not let a Node 24.11 result vouch for Node 24.12.
           node_version=$(node -v)

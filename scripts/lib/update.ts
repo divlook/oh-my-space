@@ -31,7 +31,7 @@ async function fetchLatestPackageVersion(): Promise<string> {
   }
 }
 
-function latestFromRegistryJson(data: unknown): string {
+export function latestFromRegistryJson(data: unknown): string {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error("npm registry response was not a JSON object");
   }
@@ -46,7 +46,7 @@ function latestFromRegistryJson(data: unknown): string {
   return latest;
 }
 
-function compareVersions(currentVersion: string, latestVersion: string): number {
+export function compareVersions(currentVersion: string, latestVersion: string): number {
   const current = semver.valid(currentVersion);
   if (!current) throw new Error(`Installed version is not valid semver: ${currentVersion}`);
   const latest = semver.valid(latestVersion);
@@ -54,7 +54,7 @@ function compareVersions(currentVersion: string, latestVersion: string): number 
   return semver.compare(current, latest);
 }
 
-function isPrereleaseVersion(version: string): boolean {
+export function isPrereleaseVersion(version: string): boolean {
   const parsed = semver.valid(version);
   if (!parsed) throw new Error(`Installed version is not valid semver: ${version}`);
   return semver.prerelease(parsed) !== null;
@@ -77,7 +77,7 @@ function printGuidance(context: InstallContext): void {
   for (const command of context.guidance) log.message(`  ${command}`);
 }
 
-function channelInstallCommand(manager: PackageManager, tag: "beta" | "latest"): string {
+export function channelInstallCommand(manager: PackageManager, tag: "beta" | "latest"): string {
   if (manager === "npm") return `npm install -g ${PACKAGE_NAME}@${tag}`;
   if (manager === "pnpm") return `pnpm add -g ${PACKAGE_NAME}@${tag}`;
   if (manager === "yarn") return `yarn global add ${PACKAGE_NAME}@${tag}`;

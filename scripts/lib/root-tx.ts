@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import {
   closeSync,
   constants as fsConstants,
@@ -16,7 +15,7 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { runGit, submodulePath } from "./git.js";
+import { productionGitRunner, runGit, submodulePath, type RawGitRunner } from "./git.js";
 import { isTestMode } from "./env.js";
 import { reconcileGitmodules, type AliasMetadataPlan } from "./gitmodules-reconcile.js";
 import type { GitResult } from "./types.js";
@@ -274,21 +273,10 @@ function synthesizeGitmodules(
 }
 
 /** Hash-object a buffer into the object store and return its OID. */
-function hashObject(repoRoot: string, content: Buffer): string | null {
-  const proc = runGitWithInput(repoRoot, ["hash-object", "-w", "--stdin"], content);
+function hashObject(repoRoot: string, content: Buffer, runner: RawGitRunner = productionGitRunner): string | null {
+  const proc = runner(repoRoot, ["hash-object", "-w", "--stdin"], content);
   const oid = proc.stdout.trim();
   return proc.success && /^[0-9a-f]{40}$/.test(oid) ? oid : null;
-}
-
-/** Run git with buffered stdin (for hash-object --stdin); mirrors runGit's result shape. */
-function runGitWithInput(cwd: string, args: string[], input: Buffer): GitResult {
-  const result = spawnSync("git", args, { cwd, input, encoding: "buffer" });
-  return {
-    exitCode: result.status,
-    success: result.status === 0,
-    stdout: result.stdout ? result.stdout.toString("utf8") : "",
-    stderr: result.stderr ? result.stderr.toString("utf8") : "",
-  };
 }
 
 function runGitEnv(cwd: string, args: string[], env: NodeJS.ProcessEnv): GitResult {
@@ -307,6 +295,8 @@ export type FinalizeInput = {
   message: string;
   /** Exact working-tree oms.yaml bytes to stage, or null to keep HEAD's version. */
   omsYamlBytes: Buffer | null;
+  /** Raw Git boundary for deterministic transaction tests. */
+  gitRunner?: RawGitRunner;
 };
 
 export type FinalizeResult =
@@ -320,7 +310,8 @@ export type FinalizeResult =
  */
 export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   const { repoRoot } = input;
-  const objectFormat = runGit(repoRoot, ["rev-parse", "--show-object-format"]);
+  const gitRunner = input.gitRunner ?? productionGitRunner;
+  const objectFormat = runGit(repoRoot, ["rev-parse", "--show-object-format"], false, undefined, gitRunner);
   if (!objectFormat.success || objectFormat.stdout.trim() !== "sha1") {
     return { ok: false, exitCode: 2, reason: "OMS root finalization currently requires Git SHA-1 object format" };
   }
@@ -353,7 +344,7 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   };
 
   if (synthesized.trim().length > 0 || input.addAliases.length > 0) {
-    const blob = hashObject(repoRoot, Buffer.from(synthesized));
+    const blob = hashObject(repoRoot, Buffer.from(synthesized), gitRunner);
     if (!blob) return fail("could not write synthesized .gitmodules");
     if (!runGitEnv(repoRoot, ["update-index", "--add", "--cacheinfo", `100644,${blob},.gitmodules`], env).success) {
       return fail("could not stage synthesized .gitmodules");
@@ -380,7 +371,7 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   }
 
   if (input.omsYamlBytes !== null) {
-    const blob = hashObject(repoRoot, input.omsYamlBytes);
+    const blob = hashObject(repoRoot, input.omsYamlBytes, gitRunner);
     if (!blob) return fail("could not write oms.yaml blob");
     if (!runGitEnv(repoRoot, ["update-index", "--add", "--cacheinfo", `100644,${blob},oms.yaml`], env).success) {
       return fail("could not stage oms.yaml");

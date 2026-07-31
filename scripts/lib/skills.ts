@@ -90,7 +90,7 @@ function locateInstalledSkill(bases: string[], name: string): string | null {
 }
 
 /** Valid semver from an installed skill's frontmatter, or null when absent or malformed. */
-function installedSkillVersion(skillPath: string): string | null {
+export function installedSkillVersion(skillPath: string): string | null {
   let raw: string;
   try {
     raw = readFileSync(skillPath, "utf8");
@@ -130,7 +130,7 @@ function scopeSearches(workspaceRoot: string | null): ScopeSearch[] {
 }
 
 /** Compares an installed version against the reference; a missing or malformed version counts as older. */
-function classify(installed: string | null, current: string): SkillVersionState {
+export function classify(installed: string | null, current: string): SkillVersionState {
   if (installed === null) return "older";
   const comparison = semver.compare(installed, current);
   if (comparison === 0) return "current";
