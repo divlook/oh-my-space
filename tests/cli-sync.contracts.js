@@ -86,12 +86,14 @@ test("sync registers a submodule on its baseline branch and tracks it in the par
   assert.match(modules, /branch = main/);
   assert.equal(gitOut(join(cwd, "oms", "probe"), "branch", "--show-current"), "main");
 
-  // Default sync leaves topology changes in the working tree, unstaged (not auto-staged). Git collapses
-  // the untracked submodule directory to `oms/` until the gitlink is recorded.
+  // Default sync records the topology in one root commit, so nothing is left staged or dirty.
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add probe submodule");
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
-  const status = gitOut(cwd, "status", "--porcelain");
-  assert.match(status, /\.gitmodules/);
-  assert.match(status, /oms\//);
+  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+  // The gitlink and .gitmodules are what that commit contains.
+  const committed = gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD");
+  assert.match(committed, /\.gitmodules/);
+  assert.match(committed, /oms\/probe/);
 
   // Submodules are tracked, so oms/ must not be gitignored.
   if (existsSync(join(cwd, ".gitignore"))) {
@@ -219,7 +221,7 @@ test("push lazily creates the remote branch without staging the root pointer", (
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
   // Commit the initial pointer so we can observe the later move cleanly.
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add api");
@@ -250,7 +252,7 @@ test("push --commit is unsupported and fails before pushing", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add api");
 
@@ -325,7 +327,7 @@ test("status reports branch, pin state, and dirtiness", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
   // Record the gitlink so the root HEAD has a pointer; otherwise the pin is `missing` (pending add).
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add api submodule");
@@ -485,7 +487,7 @@ test("status --json narrows repos and pointer arrays to the selected aliases", (
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
   // Move both pointers.
@@ -588,20 +590,6 @@ test("status --json keeps valid JSON and exits non-zero when a repo read fails",
 
 // --- root-safe sync/unsync topology and pull/push ---
 
-test("sync leaves topology unstaged while preserving unrelated staged root changes", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  writeFileSync(join(cwd, "keep.txt"), "x");
-  git(cwd, "add", "keep.txt"); // unrelated, pre-staged
-
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
-  const staged = gitOut(cwd, "diff", "--cached", "--name-only");
-  assert.match(staged, /keep\.txt/); // preserved
-  assert.doesNotMatch(staged, /\.gitmodules/); // topology unstaged
-  assert.doesNotMatch(staged, /oms\/api/);
-});
-
 test("sync --commit creates a single-alias add topology commit", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
@@ -612,16 +600,101 @@ test("sync --commit creates a single-alias add topology commit", () => {
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
 });
 
+test("the topology commit default does not depend on stdin being a terminal", () => {
+  // Every run() here is non-interactive (spawnSync gives a pipe), which is exactly the shell that
+  // previously skipped the prompt and silently left the topology unstaged.
+  const bare = initBareUpstream();
+
+  const plain = initGitWorkspace();
+  writeSources(plain, sourceFor("api", bare));
+  assert.equal(run(["sync", "api"], { cwd: plain }).status, 0);
+
+  const flagged = initGitWorkspace();
+  writeSources(flagged, sourceFor("api", bare));
+  assert.equal(run(["sync", "api", "--commit"], { cwd: flagged }).status, 0);
+
+  // No flag and --commit must be indistinguishable.
+  for (const cwd of [plain, flagged]) {
+    assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+    assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+    assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  }
+  assert.equal(
+    gitOut(plain, "rev-list", "--count", "HEAD"),
+    gitOut(flagged, "rev-list", "--count", "HEAD"),
+  );
+});
+
+test("unsync commits the removal topology by default", () => {
+  const { cwd } = workspaceWithApi();
+  const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
+
+  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): remove api submodule");
+  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), before + 1);
+  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+  assert.match(readFileSync(join(cwd, "oms.yaml"), "utf8"), /alias: api/);
+});
+
+test("--no-commit leaves topology unstaged and preserves unrelated staged paths", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  writeFileSync(join(cwd, "unrelated.txt"), "keep me staged");
+  git(cwd, "add", "unrelated.txt");
+  const headBefore = gitOut(cwd, "rev-parse", "HEAD");
+
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
+  assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^unrelated\.txt$/m);
+  assert.doesNotMatch(gitOut(cwd, "diff", "--cached", "--name-only"), /\.gitmodules/);
+  assert.match(gitOut(cwd, "status", "--porcelain"), /\.gitmodules/);
+});
+
+test("multi-alias sync still produces one plural topology commit by default", () => {
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
+  const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
+
+  assert.equal(run(["sync", "api", "web"], { cwd }).status, 0);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add submodules");
+  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), before + 1);
+});
+
+test("delegated preparation sync commits its topology", () => {
+  // branch list prepares an unregistered alias through runSync with no commit option. Under the old
+  // default that left the topology unstaged, which made the alias partially registered and broke the
+  // next invocation; the single queue entry drives only the sync-or-cancel selector.
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+
+  const result = run(["branch", "list", "api"], {
+    cwd,
+    env: queueEnv([{ type: "select", value: "sync" }]),
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+});
+
 test("sync --commit records pending add topology left by an earlier no-commit sync", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  // --no-commit is what actually leaves pending topology now; without it the first sync commits and
+  // the second call finds nothing to record, making every assertion below vacuous.
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), ""); // left unstaged
+  const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
 
   const result = run(["sync", "api", "--commit"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  // A new commit, not the one an earlier default-commit sync would already have made.
+  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), before + 1);
 });
 
 test("sync --commit isolates unrelated staged root paths through the temporary index", () => {
@@ -727,12 +800,15 @@ test("unsync --commit creates a removal topology commit", () => {
 
 test("unsync --commit records pending removal left by an earlier no-commit unsync", () => {
   const { cwd } = workspaceWithApi();
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0); // removal left unstaged
+  // --no-commit is what leaves the removal pending; a plain unsync now records it immediately.
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
   assert.equal(existsSync(join(cwd, "oms", "api")), false);
+  const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
 
   const result = run(["unsync", "api", "--commit"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): remove api submodule");
+  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), before + 1);
 });
 
 test("unsync --commit rejects partial removal topology it cannot complete", () => {
@@ -749,7 +825,7 @@ test("unsync --commit rejects partial removal topology it cannot complete", () =
 
 test("sync restores an uncommitted unsync instead of adding over the recorded gitlink", () => {
   const { cwd } = workspaceWithApi();
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
   assert.equal(existsSync(join(cwd, "oms", "api")), false);
 
   const result = run(["sync", "api"], { cwd });
@@ -766,15 +842,18 @@ test("sync restore is scoped to the selected alias and preserves unrelated .gitm
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
   writeFileSync(join(cwd, ".gitmodules"), `${readFileSync(join(cwd, ".gitmodules"), "utf8")}# keep web edit\n`);
 
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  // The removal must stay uncommitted, or the gitlink leaves HEAD and the next sync takes the
+  // fresh-add path instead of restorePendingRemoval — the scoped restore this test exists for.
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
   const result = run(["sync", "api"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
+  assert.match(output, /restored pending removal/);
 
   const modules = readFileSync(join(cwd, ".gitmodules"), "utf8");
   assert.match(modules, /oms\/api/);
@@ -789,23 +868,29 @@ test("sync restore preserves .gitmodules section order for a clean multi-alias r
   const c = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }, { alias: "docs", bare: c }]));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
 
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
-  assert.equal(run(["unsync", "web"], { cwd }).status, 0);
+  // Both removals stay uncommitted so the restores below are real restores, not fresh adds.
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "web", "--no-commit"], { cwd }).status, 0);
   const result = run(["sync", "api"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
+  assert.match(output, /restored pending removal/);
   assert.equal(run(["sync", "web"], { cwd }).status, 0);
 
+  // The subject of this test: restore rebuilds sections in their original order rather than appending.
+  const sections = [...readFileSync(join(cwd, ".gitmodules"), "utf8")
+    .matchAll(/^\[submodule "oms\/([^"]+)"\]/gm)].map((m) => m[1]);
+  assert.deepEqual(sections, ["api", "web", "docs"]);
   assert.equal(gitOut(cwd, "status", "--porcelain"), "");
 });
 
 test("sync restore removes a metadata-only alias directory before initialization", () => {
   const { cwd } = workspaceWithApi();
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
   mkdirSync(join(cwd, "oms", "api"), { recursive: true });
   writeFileSync(join(cwd, "oms", "api", ".DS_Store"), "metadata");
 
@@ -836,7 +921,7 @@ test("sync restores representative partial removal states", () => {
 
 test("sync restore fails before add when a non-submodule path occupies the alias", () => {
   const { cwd } = workspaceWithApi();
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
   mkdirSync(join(cwd, "oms", "api"), { recursive: true });
   writeFileSync(join(cwd, "oms", "api", "file.txt"), "not a submodule");
 
@@ -849,7 +934,7 @@ test("sync restore fails before add when a non-submodule path occupies the alias
 
 test("sync restore fails safely when a regular file occupies the alias", () => {
   const { cwd } = workspaceWithApi();
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
   mkdirSync(join(cwd, "oms"), { recursive: true });
   writeFileSync(join(cwd, "oms", "api"), "not a submodule");
 
@@ -915,9 +1000,9 @@ test("sync restore fails before add during an in-progress root operation", () =>
 test("sync restore reconciles manifest metadata as unstaged .gitmodules edits", () => {
   const { cwd, bare } = workspaceWithApi();
   writeSources(cwd, sourceFor("api", `${bare}/`));
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
 
-  const result = run(["sync", "api"], { cwd });
+  const result = run(["sync", "api", "--no-commit"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /reconciled \.gitmodules/);
@@ -928,7 +1013,9 @@ test("sync restore reconciles manifest metadata as unstaged .gitmodules edits", 
 
 test("unsync refuses and preserves a non-submodule path occupying the alias", () => {
   const { cwd } = workspaceWithApi();
-  // Leave a pending removal (api unregistered), then drop a non-submodule file at oms/api.
+  // Remove api (the default commits the removal), then drop a non-submodule file at oms/api. The
+  // occupied-path preflight reads the registration and directory state, never root HEAD, so whether
+  // the removal was committed makes no difference to what this test asserts.
   assert.equal(run(["unsync", "api"], { cwd }).status, 0);
   mkdirSync(join(cwd, "oms", "api"), { recursive: true });
   writeFileSync(join(cwd, "oms", "api", "file.txt"), "not a submodule");
@@ -951,7 +1038,8 @@ const skipUnreadable =
 
 test("unsync refuses when oms/<alias> is unreadable", skipUnreadable, () => {
   const { cwd } = workspaceWithApi();
-  // Leave a pending removal (api unregistered), then make oms/api unreadable.
+  // Remove api (the default commits the removal), then make oms/api unreadable. As above, the
+  // preflight does not consult root HEAD, so the committed removal does not change the outcome.
   assert.equal(run(["unsync", "api"], { cwd }).status, 0);
   mkdirSync(join(cwd, "oms", "api"), { recursive: true });
   chmodSync(join(cwd, "oms", "api"), 0o000);
@@ -970,7 +1058,7 @@ test("unsync refuses when oms/<alias> is unreadable", skipUnreadable, () => {
 
 test("sync restore fails safely when oms/<alias> is unreadable", skipUnreadable, () => {
   const { cwd } = workspaceWithApi();
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
   mkdirSync(join(cwd, "oms", "api"), { recursive: true });
   chmodSync(join(cwd, "oms", "api"), 0o000);
   try {
@@ -1054,16 +1142,18 @@ test("unsync refuses before deinit/rm when the root gitlink is conflicted", () =
   assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
 });
 
-test("unsync still removes a normal registered submodule and leaves removal topology", () => {
+test("unsync --no-commit removes a normal registered submodule and leaves the removal topology", () => {
   const { cwd } = workspaceWithApi();
-  const result = run(["unsync", "api"], { cwd });
+  const result = run(["unsync", "api", "--no-commit"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout + result.stderr, /api: unsynced/);
   assert.equal(existsSync(join(cwd, "oms", "api")), false);
-  // The removal is left unstaged by default (existing topology finalization policy); --commit records it.
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
+
   assert.equal(run(["unsync", "api", "--commit"], { cwd }).status, 0);
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): remove api submodule");
+  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), before + 1);
 });
 
 test("pull rejects a dirty submodule before running", () => {
@@ -1185,15 +1275,20 @@ test("status help documents the schemaVersion 1 field contract", () => {
   assert.doesNotMatch(result.stdout, /repos,\s*pointers/i);
 });
 
-test("sync and unsync help document the default-unstage and --commit topology behavior", () => {
+test("sync and unsync help document the commit-by-default topology behavior", () => {
   const sync = run(["sync", "--help"]);
-  assert.match(sync.stdout, /left unstaged by default/);
-  assert.match(sync.stdout, /--commit/);
+  assert.match(sync.stdout, /committed by default/);
+  assert.match(sync.stdout, /--no-commit/);
+  assert.match(sync.stdout, /oms sync api --no-commit/);
+  // --commit stays documented as an accepted no-op so existing invocations keep working.
   assert.match(sync.stdout, /oms sync api --commit/);
+  assert.doesNotMatch(sync.stdout, /left unstaged by default/);
 
   const unsync = run(["unsync", "--help"]);
-  assert.match(unsync.stdout, /left unstaged by default/);
+  assert.match(unsync.stdout, /committed by default/);
+  assert.match(unsync.stdout, /oms unsync api --no-commit/);
   assert.match(unsync.stdout, /oms unsync api --commit/);
+  assert.doesNotMatch(unsync.stdout, /left unstaged by default/);
 });
 
 test("agent install help documents the managed instruction files", () => {
@@ -1210,7 +1305,7 @@ test("unsync removes the submodule, keeps oms.yaml, and re-sync works", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
 
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add api");
 
@@ -1223,9 +1318,8 @@ test("unsync removes the submodule, keeps oms.yaml, and re-sync works", () => {
   }
   assert.match(readFileSync(join(cwd, "oms.yaml"), "utf8"), /alias: api/);
 
-  // unsync now leaves the removal unstaged by default; commit it so re-sync starts from a clean index.
-  git(cwd, "add", "-A");
-  git(cwd, "commit", "-m", "remove api");
+  // unsync commits the removal itself, so re-sync already starts from a clean index.
+  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
 
   const resynced = run(["sync", "api"], { cwd });
   assert.equal(resynced.status, 0, resynced.stdout + resynced.stderr);
@@ -1240,7 +1334,7 @@ test("unsync of all aliases leaves no orphan .gitmodules section", () => {
   const c = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }, { alias: "docs", bare: c }]));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
 
@@ -1257,7 +1351,7 @@ test("a dirty submodule among several is surfaced and only it remains", () => {
   const c = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }, { alias: "docs", bare: c }]));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
 
@@ -1282,7 +1376,7 @@ test("a committed pointer reproduces on a fresh clone via sync", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add api submodule");
   const pin = gitOut(cwd, "rev-parse", `:oms/api`);

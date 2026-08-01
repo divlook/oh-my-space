@@ -150,7 +150,10 @@ function getApiWorkspaceTemplate() {
 
   apiWorkspaceTemplate = initGitWorkspace();
   writeSources(apiWorkspaceTemplate, sourceFor("api", getUpstreamTemplate()));
-  assert.equal(run(["sync", "api"], { cwd: apiWorkspaceTemplate }).status, 0);
+  // --no-commit pins the fixture's shape: the topology commit is hand-authored below so this template
+  // keeps its own subject and commit count. Tests that assert on sync's own commit create their own
+  // workspace; a shared fixture must not change shape when sync's default does.
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd: apiWorkspaceTemplate }).status, 0);
   git(apiWorkspaceTemplate, "add", "-A");
   git(apiWorkspaceTemplate, "commit", "-m", "add api submodule");
   return apiWorkspaceTemplate;
