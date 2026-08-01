@@ -59,11 +59,15 @@ The alias operation remains successful. Detached `HEAD` at the recorded pointer 
 
 `repo-ops.ts` will wrap `attachBranch` in one helper that converts its result into sync logging and operation success or failure. All four call sites use that wrapper, even though fresh add cannot currently reach `diverged`; retaining the call keeps the invariant local if Git's clone behavior or the add path changes later.
 
-A `failed` attachment remains an operation failure with the original Git diagnostic and preserved-state guidance. A `diverged` attachment is reported and continues. This prevents each call site from inventing its own exit-code policy.
+A `failed` attachment becomes an operation failure with the original Git diagnostic and preserved-state guidance. That is a change: previously `attachBranch` returned `void` and sync ignored a refused `git switch`, so this path reported the alias as added or updated and exited 0. A `diverged` attachment is reported and continues. This prevents each call site from inventing its own exit-code policy.
+
+The wrapper also decides what the per-alias result line may claim. It can prove only that the checkout and the root gitlink were left alone — whether the detached commit is the recorded pointer depends on the caller's situation — so the divergence note states exactly that, and the result line omits the baseline suffix once `HEAD` stayed detached rather than naming a branch the submodule is not on.
 
 ### 4. Shared preparation delegates to the same primitive
 
 `initializeRegisteredAlias` will delete its inline `localBranchOid`/`HEAD` comparison and call `attachBranch` directly. A `diverged` result leaves `HEAD` detached so the command's existing detached-HEAD handling can either continue safely (`fetch`), collect intent (`commit`, `pull`, `push`), or perform the requested branch action (`branch switch`, `branch checkout`).
+
+A `failed` result is different: Git refused the branch operation, so nothing downstream can assume the alias is prepared. Preparation reports the diagnostic and exits non-zero. This is the one preparation behavior this change alters — previously `attachBranch` returned `void` and a refused `git switch` was swallowed, leaving the command to continue against an unprepared alias. The spec delta, the changeset, and a preparation regression cover it, since a new non-zero exit for eight commands is not an implementation detail.
 
 ### 5. Regression coverage reproduces remote-tip drift
 
@@ -80,6 +84,8 @@ Companion cases cover a missing baseline created at `HEAD`, an existing baseline
 ## Risks / Trade-offs
 
 - [Behavior change] Workflows that used `oms sync` as an implicit pull will stop advancing. Mitigation: output names the deliberate switch and pull commands, README clarifies the boundary, and the minor changeset names the reversal.
+- [New failure exit] The eight preparing commands can now stop on a refused baseline attachment they previously ignored. Mitigation: reachable only when Git itself refuses the branch operation, reported with the original diagnostic, and named in the changeset.
+- [Suppressed Git progress] Capturing `submodule update --init` output keeps remote URLs out of sync's report but drops Git's own `registered for path` / `checked out` lines from successful runs. Mitigation: the captured diagnostic is printed whenever that step fails, and the changeset names the output change.
 - [Detached checkout remains visible] Some tools treat detached `HEAD` as undesirable even when it is the recorded state. Mitigation: sync explains why it stayed detached and provides explicit recovery without sacrificing reproducibility.
 - [Result propagation] Changing `attachBranch` from `void` requires auditing every caller. Mitigation: TypeScript exhaustiveness and one sync wrapper make ignored outcomes compile-visible; the four call sites are enumerated above.
 - [OID lookup failure] A missing or unreadable `HEAD` prevents a safe comparison. Mitigation: fail closed as `failed`; never switch when equality cannot be proven.

@@ -5,6 +5,8 @@
 - [x] 1.3 Remove the duplicate branch-tip comparison from `initializeRegisteredAlias` in `scripts/lib/alias-preparation.ts` and route initialization through the shared attachment result without changing the preparation matrix.
 - [x] 1.4 Add one attachment/reporting wrapper in `scripts/lib/repo-ops.ts` and route pending-removal restore, fresh add, registered initialization, and initialized update through it.
 - [x] 1.5 Make the sync wrapper continue successfully on divergence with abbreviated current/baseline OIDs and explicit `oms branch switch <alias> <baseline>` and `oms pull <alias>` guidance, while preserving a non-zero result and Git diagnostics for attachment failure.
+- [x] 1.6 Report only what the wrapper can prove on divergence — the unchanged checkout and root gitlink, not that the commit is the recorded pointer — and omit the baseline from the sync result line whenever `HEAD` stayed detached.
+- [x] 1.7 Specify the preparation attachment-failure exit in the spec delta, the changeset, and `design.md`, since it is the one preparation behavior this change alters.
 
 ## 2. Exercise the Behavior End to End
 
@@ -20,6 +22,8 @@
 - [x] 3.4 Run the existing shared alias-preparation contracts to confirm commit, fetch, pull, push, branch list, branch switch, branch checkout, and branch delete retain their preparation behavior.
 - [x] 3.5 Update the README `oms sync` command reference and any matching `oms sync` help claim to state that sync reproduces the recorded pointer and does not advance to a newer baseline tip.
 - [x] 3.6 Add a minor changeset that explicitly names the reversal for users who previously relied on sync as an implicit pull and directs them to `oms pull`; do not add a migration document.
+- [x] 3.7 Add a preparation regression for a refused baseline attachment: the command exits non-zero with Git's diagnostic, the submodule stays detached at its checked-out commit, and root topology is unchanged.
+- [x] 3.8 Assert the baseline suffix from both sides — present when the alias attached, absent when `HEAD` stayed detached.
 
 ## 4. Final Verification
 

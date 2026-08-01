@@ -44,8 +44,12 @@ covers sync attaching a *detached* `HEAD` to a baseline whose tip has moved.
   drifted baseline. The fresh-add path cannot be, since it has no recorded pointer yet.
 - Fix the README claim either way: if sync stops moving the pointer, "Reproduces the recorded
   pointer on a fresh clone" becomes true; if the decision goes the other way, that sentence must go.
-- **Not in scope**: the eight preparing commands. `unify-alias-preparation` already fixed them, and
-  this change should converge `sync` onto that rule, not revisit it.
+- Routing preparation through the shared primitive gives it an attachment outcome it never had: Git
+  refusing to create or switch the baseline. Preparation stops with that diagnostic rather than
+  continuing past a failed attachment, which is a new non-zero exit for the eight preparing commands.
+- **Otherwise not in scope**: the preparation matrix. `unify-alias-preparation` already fixed the
+  divergence rule for those commands, and this change converges `sync` onto it rather than revisiting
+  classification, offers, or their detached-HEAD choices.
 
 ## Capabilities
 
@@ -55,13 +59,16 @@ None. This corrects one existing behavior and specifies a case the current requi
 
 ### Modified Capabilities
 
-- `ai-submodule-workflow`: one requirement modified.
+- `ai-submodule-workflow`: two requirements modified.
   - **MODIFIED** "Existing submodule metadata reconciliation" — extend the working-branch protection
     beyond the attached case. Sync attaches a detached submodule `HEAD` only where the attachment
     cannot change the checked-out commit, so it never moves an initialized submodule off the recorded
     root pointer, and it reports a baseline that has diverged instead of silently following it.
+  - **MODIFIED** "Shared alias preparation across commands" — state the attachment failure outcome the
+    shared primitive now surfaces: automatic initialization reports Git's diagnostic and exits
+    non-zero instead of continuing past a baseline it could not attach.
 
-    The delta must restate every scenario name this requirement already carries, or `openspec
+    Each delta must restate every scenario name its requirement already carries, or `openspec
     archive` reads an omission as a deletion and aborts.
 
 ## Impact
