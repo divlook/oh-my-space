@@ -6,7 +6,6 @@ import { canPrompt, guardedMultiselect, guardedSelect, guardedText, isCancel } f
 import { gitlinkState, inferAliasFromCwd, recordVerdict } from "./status.js";
 import type { ManageCommand, Repo, SourcesOptions } from "./types.js";
 
-
 /** Names of a repo's non-origin remotes, in declared order (origin is shown via its URL column). */
 function extraRemoteNames(repo: Repo): string[] {
   return Object.keys(repo.remotes).filter((name) => name !== "origin");

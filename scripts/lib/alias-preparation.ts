@@ -1,4 +1,4 @@
-import { cancel, log, text } from "@clack/prompts";
+import { cancel, log } from "@clack/prompts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -14,7 +14,7 @@ import {
   submoduleInitialized,
   submodulePath,
 } from "./git.js";
-import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
+import { canPrompt, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
 import { runSync } from "./repo-ops.js";
 import { attachBranch, gitmodulesBranch } from "./submodule-config.js";
 import { assertRootTopologySafe, gitlinkState } from "./status.js";
@@ -55,7 +55,6 @@ export type PrepareOptions = {
    */
   requiresSettledTopology?: boolean;
 };
-
 
 /** Whether one committed or indexed `.gitmodules` snapshot registers this alias's canonical path. */
 function snapshotRegisters(repoRoot: string, alias: string, snapshot: "HEAD" | "index"): boolean {
@@ -292,14 +291,12 @@ export async function resolveDetachedHead(
   }
 
   if (choice === CREATE) {
-    // Raw text prompt: the guarded seam gains a `text` entry in unify-prompt-seam, which is also
-    // what makes this branch reachable from tests.
-    const name = await text({ message: `${repo.alias}: new branch name`, placeholder: "work/detached" });
+    const name = await guardedText({ message: `${repo.alias}: new branch name`, placeholder: "work/detached" });
     if (isCancel(name)) {
       cancel(`Cancelled. ${repo.alias} is still detached at ${verdict.oid}.`);
       return { ok: false, code: 1 };
     }
-    const trimmed = String(name).trim();
+    const trimmed = name.trim();
     if (!trimmed) {
       log.error(`${repo.alias}: branch name is empty.`);
       return { ok: false, code: 1 };

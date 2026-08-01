@@ -212,6 +212,7 @@ export async function guardedText(
 ): Promise<string | symbol> {
   const injected = consume("text");
   if (injected.injected) {
+    // Same union narrowing as guardedMultiselect; the mismatch is already rejected in `consume`.
     if (!injected.cancelled && "useDefault" in injected) {
       throw new PromptQueueError("A queued default is valid only for a select prompt.");
     }

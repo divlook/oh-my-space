@@ -20,7 +20,6 @@ type RemoteState = "fresh" | "stale" | "unavailable";
 type RemoteInventory = { name: string; state: RemoteState; branches: string[]; warning: string | null };
 type AliasResult = { kind: "repo"; repo: Repo } | { kind: "error"; code: number };
 
-
 const PREPARE = { command: "branch list", topologyOffer: true } as const;
 
 async function resolveAlias(repos: Repo[], repoRoot: string, aliasArg: string | undefined): Promise<AliasResult> {

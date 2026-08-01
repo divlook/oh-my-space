@@ -9,10 +9,13 @@
 | `branch-list.ts:31` | `interactive()` | — | duplicate helper | delete, import shared |
 | `prompts.ts:118` `pickBranch` | raw `isTTY` | raw `select` + `text` | decision gate | migrate |
 | `agent.ts:95` `resolveAgentTarget` | raw `isTTY` | raw `select` | decision gate | migrate |
+| `alias-preparation.ts:296` `resolveDetachedHead` | shared predicate already | raw `text` | decision gate | migrate |
 | `prompts.ts:182` `resolveRemotes` | raw `isTTY` | raw `select` + `multiselect` | **default** | leave |
 | `update.ts:213` `runUpdate` | raw `isTTY` | `confirmUpdate` | **safety gate** | leave |
 
 `topology-commit.ts:90` is absent from this table because `change-topology-commit-default` deletes it. `prompts.ts:86` and `:306` are absent because `unify-alias-preparation` rewrites those resolvers. This is why the seam work sequences last: migrating them earlier would be work thrown away.
+
+`alias-preparation.ts:296` is the one row that arrived rather than disappeared: `unify-alias-preparation` wrote that prompt behind the shared predicate and left it on clack's raw `text`, deferring the migration here by comment because the seam had no `text` entry to move it onto yet. Its predicate needs nothing; only the prompt does.
 
 ### Why the two exemptions are not oversights
 

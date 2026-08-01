@@ -109,7 +109,7 @@ async function resolveAgentTarget(target: string | undefined): Promise<AgentTarg
     cancel("Cancelled.");
     return null;
   }
-  return choice as AgentTarget;
+  return choice;
 }
 
 /** Validate that no selected file has malformed markers before any write (atomic pre-write check). */

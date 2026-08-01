@@ -23,7 +23,6 @@ import { runCheckout, runSwitch } from "./branch-ops.js";
 
 type BranchDeleteOptions = { force?: boolean };
 
-
 /** Quote a dynamic argument for safe reuse in a POSIX shell command line. */
 function shq(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;

@@ -21,7 +21,8 @@ Move each gate and its prompts in the same step. A migrated predicate with an un
 - [x] 3.1 `pickBranch` (`prompts.ts:113`): switch the gate at `:118` to `canPrompt()`, the `select` at `:130` to `guardedSelect`, and the `text` at `:136` to `guardedText`. Keep the `CREATE_NEW_BRANCH` sentinel, the trim, and the empty-name rejection exactly as they are.
 - [x] 3.2 `resolveAgentTarget` (`agent.ts:95`): switch the gate to `canPrompt()` and the `select` at `:99` to `guardedSelect`. The non-interactive `--target is required` error is already policy-correct and its message does not change.
 - [x] 3.3 Confirm `agent.ts` uses the adapter's `isCancel`, not clack's, so an injected cancel is not read as a real selection — the same file-wide import correction `prompts.ts` already carries.
-- [x] 3.4 Add tests for paths that were previously unreachable: `oms branch switch api` driven through the queue to create a new branch; the same flow with an empty name, asserting the rejection; `oms agent install` and `oms agent uninstall` target selection through the queue; an injected cancel at each new prompt.
+- [x] 3.4 `resolveDetachedHead` (`alias-preparation.ts:296`): its create-a-branch path still called clack's `text` directly behind the migrated gate, a migration `unify-alias-preparation` deferred here by comment. Switch it to `guardedText` and delete that deferral comment, so no prompt behind `canPrompt()` is left unguarded.
+- [x] 3.5 Add tests for paths that were previously unreachable: `oms branch switch api` driven through the queue to create a new branch; the same flow with an empty name, asserting the rejection; `oms agent install` and `oms agent uninstall` target selection through the queue; the detached-HEAD create-a-branch path; an injected cancel at each new prompt.
 
 ## 4. Bounded fetch recovery
 

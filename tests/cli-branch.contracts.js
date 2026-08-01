@@ -293,12 +293,18 @@ test("bare branch selector dispatches into the switch flow", () => {
   // The sole configured alias auto-selects, so the flow now advances to branch selection. Switch
   // consults no remote, so the absence of a fetch step is what proves it entered the switch flow
   // rather than checkout, which fetches origin before prompting.
-  const res = run(["branch"], { cwd, env: queueEnv([{ type: "select", value: "switch" }]) });
+  const res = run(["branch"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "switch" },
+      { type: "select", value: "main" },
+    ]),
+  });
   const out = res.stdout + res.stderr;
-  assert.equal(res.status, 1, out);
+  assert.equal(res.status, 0, out);
   assert.match(out, /Selected "api" \(the only configured source repo\)/);
   assert.doesNotMatch(out, /git fetch origin --prune/);
-  assert.match(out, /is exhausted/);
+  assert.match(out, /api: on main/);
 });
 
 test("bare branch selector dispatches into the checkout flow", () => {
@@ -307,12 +313,18 @@ test("bare branch selector dispatches into the checkout flow", () => {
   syncedSubmodule(cwd, "api", bare);
   // Checkout is remote-tracking, so it fetches origin before prompting for a branch. That fetch
   // step is what distinguishes it from the switch flow now that the sole configured alias auto-selects.
-  const res = run(["branch"], { cwd, env: queueEnv([{ type: "select", value: "checkout" }]) });
+  const res = run(["branch"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "checkout" },
+      { type: "select", value: "main" },
+    ]),
+  });
   const out = res.stdout + res.stderr;
-  assert.equal(res.status, 1, out);
+  assert.equal(res.status, 0, out);
   assert.match(out, /Selected "api" \(the only configured source repo\)/);
   assert.match(out, /git fetch origin --prune/);
-  assert.match(out, /is exhausted/);
+  assert.match(out, /api: on main/);
 });
 
 test("branch switch creates a branch through queued select and text prompts", () => {
