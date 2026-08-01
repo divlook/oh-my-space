@@ -7,7 +7,6 @@ import {
   localBranchExists,
   localBranchOid,
   remoteBranchExists,
-  runGit,
   runSub,
   shortOid,
   submoduleInitialized,

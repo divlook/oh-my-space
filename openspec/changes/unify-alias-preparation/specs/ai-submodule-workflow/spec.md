@@ -256,6 +256,35 @@ The system SHALL provide `oms commit <alias> -m <message>` to create commits onl
 - **THEN** the command does not create a root repository topology commit
 - **AND** the command prints a hint to run `oms sync api --commit`
 
+### Requirement: Branch list scope and actionable failures
+`oms branch list` SHALL keep all automatic mutations within preparation and remote-tracking refresh for the selected submodule, and SHALL fail terminally only when a useful local inventory cannot be produced safely. Preparation for `oms branch list` SHALL include attaching a detached submodule `HEAD` where doing so cannot move the working tree, so that the shared preparation path is not weakened for one command.
+
+#### Scenario: Listing preserves branch and root state
+- **WHEN** branch listing completes in fresh or degraded mode
+- **AND** the user did not delegate preparation to the existing sync workflow
+- **THEN** it does not delete, merge, or push a branch
+- **AND** the only branch it switches or creates is the attachment of a detached `HEAD` performed by preparation
+- **AND** that attachment leaves the checked-out commit unchanged, so it never moves the submodule off the recorded pointer
+- **AND** does not change, stage, or commit a root gitlink or root file
+- **AND** does not print an `oms record` hint
+
+#### Scenario: Local ref inspection fails
+- **WHEN** OMS cannot inspect local refs in the prepared selected repository
+- **THEN** OMS exits 2
+- **AND** identifies the failed inspection and preserved repository state
+- **AND** provides a bounded diagnostic or repair action
+
+#### Scenario: Credential-bearing diagnostics are redacted
+- **WHEN** a preserved Git diagnostic contains URL userinfo, an embedded token, or another credential-bearing URL component
+- **THEN** OMS redacts the credential before displaying the diagnostic
+- **AND** retains non-sensitive failure context and actionable guidance
+
+#### Scenario: Degraded remote freshness is not a terminal failure
+- **WHEN** local branch inspection succeeds
+- **AND** one or more declared remotes are stale or unavailable after automatic retry
+- **THEN** OMS prints the usable inventory and explicit degraded states
+- **AND** exits 0
+
 ### Requirement: Pull and push submodule-only synchronization
 The system SHALL keep `oms pull` and `oms push` focused only on synchronizing submodules, while existing root gitlink pointer-update staging and commits are created only by `oms record <alias>`. Sync and unsync root commits are a separate topology workflow. `oms pull` and `oms push` SHALL prepare their selected aliases through the shared preparation path before operating.
 

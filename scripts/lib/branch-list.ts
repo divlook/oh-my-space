@@ -1,6 +1,4 @@
 import { cancel, log } from "@clack/prompts";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { aliasRegistration, prepareAlias } from "./alias-preparation.js";
 import { reportBaselines } from "./branch-baseline.js";
 import {
@@ -8,18 +6,13 @@ import {
   currentBranch,
   inspectLocalBranches,
   inspectRemoteBranches,
-  isRegisteredSubmodule,
   redactSensitiveUrls,
-  runGit,
   runSub,
   shortOid,
-  submoduleInitialized,
   submodulePath,
 } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
 import { guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
-import { runSync } from "./repo-ops.js";
-import { assertRootTopologySafe, gitlinkState } from "./status.js";
 import { ensureRemotes } from "./submodule-config.js";
 import type { Repo } from "./types.js";
 

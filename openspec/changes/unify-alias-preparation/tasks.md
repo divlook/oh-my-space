@@ -9,9 +9,10 @@ Do this first: it is the authority the rest of the change appeals to.
 
 ## 2. Extract the shared preparation module
 
-Behavior-preserving for `branch list` throughout; its contract tests are the regression gate.
+Behavior-preserving for `branch list` throughout, except that it gains the shared detached-`HEAD`
+attachment; its contract tests are the regression gate.
 
-- [x] 2.1 Create `scripts/lib/alias-preparation.ts` and move `aliasRegistration` (`branch-list.ts:44`), `snapshotRegisters` (`:35`), `initializeRegisteredAlias` (`:71`), `syncAndContinue` (`:93`), and `prepareAlias` (`:104`) into it unchanged.
+- [x] 2.1 Create `scripts/lib/alias-preparation.ts` and move `aliasRegistration` (`branch-list.ts:44`), `snapshotRegisters` (`:35`), `initializeRegisteredAlias` (`:71`), `syncAndContinue` (`:93`), and `prepareAlias` (`:104`) into it. **Applied:** all move unchanged except `initializeRegisteredAlias`, which now attaches the baseline after `git submodule update --init` so a just-initialized alias is not left detached. It attaches only where the checkout cannot move — the branch is absent, so `attachBranch` creates it at HEAD, or the branch is already at HEAD, so the switch is a pure relabel. A baseline branch ahead of the recorded pointer stays detached and falls to the detached-`HEAD` scenarios, because switching to it would move the submodule off the pointer and dirty the root gitlink.
 - [x] 2.2 Give `prepareAlias` a capability parameter that says whether this command may offer topology-creating registration, replacing the hardcoded offer. Route `unregistered` to the offer or to the refusal message accordingly.
 - [x] 2.3 Add `attachDetachedHead()`: when `currentBranch()` is null, find local branches whose tip equals HEAD via `inspectLocalBranches` (`git.ts`); switch to one silently when found; otherwise return a verdict the caller turns into an interactive choice or a non-interactive failure.
 - [x] 2.4 Add a batch entry point that takes several repos, partitions them by classification, and asks at most one preparation question for the whole set.

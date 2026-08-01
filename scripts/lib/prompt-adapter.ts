@@ -168,6 +168,8 @@ export async function guardedMultiselect<Value>(
 ): Promise<Value[] | symbol> {
   const injected = consume("multiselect");
   if (injected.injected) {
+    // `consume` rejects a select entry for a multiselect prompt first, so this narrows the shared
+    // `Consumed` union rather than guarding a reachable runtime path.
     if (!injected.cancelled && "useDefault" in injected) {
       throw new PromptQueueError("A queued default is valid only for a select prompt.");
     }
@@ -182,6 +184,7 @@ export async function guardedConfirm(
 ): Promise<boolean | symbol> {
   const injected = consume("confirm");
   if (injected.injected) {
+    // Same union narrowing as guardedMultiselect; the mismatch is already rejected in `consume`.
     if (!injected.cancelled && "useDefault" in injected) {
       throw new PromptQueueError("A queued default is valid only for a select prompt.");
     }

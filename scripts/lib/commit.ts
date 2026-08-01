@@ -6,7 +6,6 @@ import {
   runGit,
   runSub,
   shortSha,
-  submoduleInitialized,
   submodulePath,
 } from "./git.js";
 import { prepareAlias, resolveDetachedHead } from "./alias-preparation.js";

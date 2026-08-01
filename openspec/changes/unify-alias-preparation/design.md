@@ -68,7 +68,10 @@ Only the last row is consistent today. The first two rows need human intent in n
 - Automatic completion of every preparation step that does not touch root topology.
 - Selection decided by repository state, never by whether stdin is a terminal.
 - A written rule that tells the next command which side of the matrix it is on.
-- No behavior change for `oms branch list`, whose contract this extracts.
+- `oms branch list`, whose contract this extracts, keeps that contract except for gaining the shared
+  detached-`HEAD` attachment: an alias it just initialized ends up on its baseline instead of
+  detached. The attachment cannot move the checked-out commit, so listing still never moves the
+  submodule off the recorded pointer and still never touches root state.
 
 **Non-Goals:**
 
