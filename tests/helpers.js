@@ -246,6 +246,29 @@ function workspaceWithMovedApi() {
   git(wt, "commit", "-m", "work");
   return { cwd, bare, wt };
 }
+/** A fresh root clone pinned at A while the configured baseline has advanced to B. */
+function workspaceCloneWithDriftedBaseline(alias = "api") {
+  const bare = initBareUpstream();
+  const source = initGitWorkspace();
+  syncedSubmodule(source, alias, bare);
+  const pin = gitOut(source, "rev-parse", `:oms/${alias}`);
+
+  const scratch = tempFixture("oms-drift-source-");
+  execFileSync("git", ["clone", bare, scratch], { stdio: "ignore", env: testEnv });
+  configIdentity(scratch);
+  writeFileSync(join(scratch, "advanced.txt"), "baseline advanced\n");
+  git(scratch, "add", "advanced.txt");
+  git(scratch, "commit", "-m", "advance baseline");
+  git(scratch, "push", "origin", "main");
+  const tip = gitOut(scratch, "rev-parse", "HEAD");
+
+  const cwd = tempFixture("oms-drift-clone-");
+  execFileSync("git", ["clone", source, cwd], { stdio: "ignore", env: testEnv });
+  configIdentity(cwd);
+  return { alias, bare, cwd, pin, tip, wt: join(cwd, "oms", alias) };
+}
+
+
 
 /** A multi-repo oms.yaml mapping each alias to its own bare origin. */
 function sourcesFor(entries) {
@@ -307,6 +330,7 @@ export {
   workspaceWithApi,
   statusJson,
   workspaceWithMovedApi,
+  workspaceCloneWithDriftedBaseline,
   sourcesFor,
   gitmodulesSectionCount,
   syncedSubmodule,

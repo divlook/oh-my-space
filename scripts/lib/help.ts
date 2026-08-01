@@ -47,6 +47,10 @@ Examples:
   $ oms record --all           # record every moved pointer
 `;
 export const syncHelp = `
+Sync reproduces the root repository's recorded submodule pointer. It attaches the baseline only when
+that does not move the checkout; a newer baseline stays detached with explicit switch and pull
+guidance instead of being followed as an implicit pull.
+
 Root topology changes (.gitmodules, oms/<alias>) are committed by default, identically whether or not
 stdin is a terminal. Pass --no-commit to leave them unstaged for review instead.
 Examples:

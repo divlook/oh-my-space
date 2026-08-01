@@ -14,24 +14,70 @@ export function gitmodulesBranch(repoRoot: string, alias: string): string | null
   return b.length > 0 ? b : null;
 }
 
+/** Outcome of attaching a detached submodule without changing its checked-out commit. */
+export type AttachBranchResult =
+  | { kind: "already-attached"; branch: string }
+  | { kind: "attached"; branch: string; oid: string }
+  | { kind: "diverged"; branch: string; headOid: string; branchOid: string }
+  | { kind: "failed"; branch: string; diagnostic: string };
+
 /**
  * Keep the submodule on a branch instead of a detached HEAD. Only acts when HEAD is detached,
  * so a branch the user is already working on is never disturbed. When no local branch exists
  * yet, a branch is created at the current (pinned) commit — the checked-out commit is preserved,
  * which keeps the parent's recorded pointer reproducible.
  */
-export function attachBranch(repoRoot: string, alias: string, branch: string): void {
-  if (currentBranch(aliasDir(repoRoot, alias)) !== null) return;
+export function attachBranch(repoRoot: string, alias: string, branch: string): AttachBranchResult {
+  const dir = aliasDir(repoRoot, alias);
+  const current = currentBranch(dir);
+  if (current !== null) return { kind: "already-attached", branch: current };
 
-  if (localBranchExists(aliasDir(repoRoot, alias), branch)) {
-    runSub(repoRoot, alias, ["switch", branch]);
-    return;
+  const head = runGit(dir, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const headOid = head.stdout.trim();
+  if (!head.success || !/^[0-9a-f]{40}$/.test(headOid)) {
+    return {
+      kind: "failed",
+      branch,
+      diagnostic: redactSensitiveUrls(head.stderr.trim()) || "could not resolve detached HEAD",
+    };
   }
+
+  if (localBranchExists(dir, branch)) {
+    const tip = runGit(dir, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
+    const branchOid = tip.stdout.trim();
+    if (!tip.success || !/^[0-9a-f]{40}$/.test(branchOid)) {
+      return {
+        kind: "failed",
+        branch,
+        diagnostic: redactSensitiveUrls(tip.stderr.trim()) || `could not resolve local branch "${branch}"`,
+      };
+    }
+    if (branchOid !== headOid) return { kind: "diverged", branch, headOid, branchOid };
+
+    const switched = runSub(repoRoot, alias, ["switch", branch]);
+    if (!switched.success) {
+      return {
+        kind: "failed",
+        branch,
+        diagnostic: redactSensitiveUrls(switched.stderr.trim()) || `git switch "${branch}" failed`,
+      };
+    }
+    return { kind: "attached", branch, oid: headOid };
+  }
+
   // Create the branch at the current HEAD (the pinned commit) so the worktree stays put.
-  if (!runSub(repoRoot, alias, ["switch", "-c", branch]).success) return;
-  if (remoteBranchExists(aliasDir(repoRoot, alias), branch)) {
+  const created = runSub(repoRoot, alias, ["switch", "-c", branch]);
+  if (!created.success) {
+    return {
+      kind: "failed",
+      branch,
+      diagnostic: redactSensitiveUrls(created.stderr.trim()) || `git switch -c "${branch}" failed`,
+    };
+  }
+  if (remoteBranchExists(dir, branch)) {
     runSub(repoRoot, alias, ["branch", "--set-upstream-to", `origin/${branch}`, branch]);
   }
+  return { kind: "attached", branch, oid: headOid };
 }
 
 /**

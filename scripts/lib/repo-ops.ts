@@ -11,6 +11,7 @@ import {
   isDirty,
   isRegisteredSubmodule,
   remoteBranchExists,
+  redactSensitiveUrls,
   resolveOriginHead,
   runGit,
   runSub,
@@ -155,6 +156,27 @@ function cleanupRestorableAliasDir(repoRoot: string, alias: string): RestorableC
   return "ok";
 }
 
+/** Attach a sync baseline without moving HEAD, and translate the result into sync semantics. */
+function attachSyncBranch(repoRoot: string, alias: string, branch: string): boolean {
+  const result = attachBranch(repoRoot, alias, branch);
+  switch (result.kind) {
+    case "already-attached":
+    case "attached":
+      return true;
+    case "diverged":
+      log.warn(
+        `${alias}: kept detached HEAD at ${result.headOid.slice(0, 7)} because baseline "${result.branch}" points at ${result.branchOid.slice(0, 7)}. The recorded pointer was preserved. To move deliberately, run "oms branch switch ${alias} ${result.branch}", then run "oms pull ${alias}" to advance from its remote.`,
+      );
+      return true;
+    case "failed":
+      if (result.diagnostic) log.error(result.diagnostic);
+      log.error(`${alias}: could not attach detached HEAD to "${result.branch}". Repository state was preserved.`);
+      return false;
+  }
+  const exhaustive: never = result;
+  return exhaustive;
+}
+
 function restorePendingRemoval(repo: Repo, repoRoot: string): { result: OperationResult; restored: boolean } {
   const alias = repo.alias;
   const path = submodulePath(alias);
@@ -190,14 +212,16 @@ function restorePendingRemoval(repo: Repo, repoRoot: string): { result: Operatio
   runGit(repoRoot, ["submodule", "sync", "--", path]);
 
   log.step(`${alias}: git submodule update --init ${path}`);
-  const upd = runGit(repoRoot, ["submodule", "update", "--init", "--", path], true);
+  const upd = runGit(repoRoot, ["submodule", "update", "--init", "--", path]);
   if (!upd.success) {
+    const diagnostic = redactSensitiveUrls(upd.stderr.trim());
+    if (diagnostic) log.error(diagnostic);
     log.error(`${alias}: git submodule update --init failed (exit ${upd.exitCode})`);
     return { result: "failed", restored: true };
   }
   ensureRemotes(repoRoot, alias, repo.remotes);
   const branch = gitmodulesBranch(repoRoot, alias) ?? repo.branch;
-  if (branch) attachBranch(repoRoot, alias, branch);
+  if (branch && !attachSyncBranch(repoRoot, alias, branch)) return { result: "failed", restored: true };
   log.success(`${alias}: restored pending removal`);
   return { result: "added", restored: true };
 }
@@ -262,21 +286,23 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
     }
     ensureRemotes(repoRoot, alias, repo.remotes);
     const branch = repo.branch ?? currentBranch(aliasDir(repoRoot, alias));
-    if (branch) attachBranch(repoRoot, alias, branch);
+    if (branch && !attachSyncBranch(repoRoot, alias, branch)) return "failed";
     log.success(`${alias}: added${branch ? ` (branch=${branch})` : ""}`);
     return "added";
   }
 
   if (!submoduleInitialized(repoRoot, alias)) {
     log.step(`${alias}: git submodule update --init ${path}`);
-    const upd = runGit(repoRoot, ["submodule", "update", "--init", "--", path], true);
+    const upd = runGit(repoRoot, ["submodule", "update", "--init", "--", path]);
     if (!upd.success) {
+      const diagnostic = redactSensitiveUrls(upd.stderr.trim());
+      if (diagnostic) log.error(diagnostic);
       log.error(`${alias}: git submodule update --init failed (exit ${upd.exitCode})`);
       return "failed";
     }
     ensureRemotes(repoRoot, alias, repo.remotes);
     const branch = gitmodulesBranch(repoRoot, alias) ?? repo.branch;
-    if (branch) attachBranch(repoRoot, alias, branch);
+    if (branch && !attachSyncBranch(repoRoot, alias, branch)) return "failed";
     log.success(`${alias}: initialized${branch ? ` (branch=${branch})` : ""}`);
     return "added";
   }
@@ -310,7 +336,7 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
     }
   }
   const branch = repo.branch ?? originHead;
-  if (branch) attachBranch(repoRoot, alias, branch);
+  if (branch && !attachSyncBranch(repoRoot, alias, branch)) return "failed";
   log.success(`${alias}: updated`);
   return "updated";
 }
