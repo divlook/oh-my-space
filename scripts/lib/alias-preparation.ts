@@ -112,11 +112,21 @@ function initializeRegisteredAlias(repoRoot: string, repo: Repo, command: string
     submodulePath(repo.alias),
   ]);
   if (update.success) {
-    // `git submodule update --init` checks the pinned commit out detached. Sync attaches the
-    // baseline afterwards (repo-ops.ts:278) and auto-initialization has to do the same, or every
-    // command that just initialized an alias immediately meets a detached HEAD it did not create.
+    // `git submodule update --init` checks the pinned commit out detached, so attach a baseline
+    // afterwards or every command that just initialized an alias meets a detached HEAD it did not
+    // create. Attach only where it cannot move the checkout, though: the clone leaves the baseline
+    // branch at the remote tip, which is ahead of the recorded pointer whenever someone pushed
+    // without recording it. A branch that does not exist locally is created at HEAD and one already
+    // at HEAD is a pure relabel; anything else stays detached for the caller's explicit
+    // detached-HEAD handling. Sync's own attach (repo-ops.ts:278) does not apply this rule.
     const branch = gitmodulesBranch(repoRoot, repo.alias) ?? repo.branch;
-    if (branch) attachBranch(repoRoot, repo.alias, branch);
+    if (branch) {
+      const dir = aliasDir(repoRoot, repo.alias);
+      const tip = localBranchOid(dir, branch);
+      if (tip === null || tip === runGit(dir, ["rev-parse", "--verify", "HEAD^{commit}"]).stdout.trim()) {
+        attachBranch(repoRoot, repo.alias, branch);
+      }
+    }
     return { ok: true };
   }
 
@@ -333,7 +343,7 @@ export async function prepareAliases(
   repos: Repo[],
   options: PrepareOptions & { explicitSelection: boolean },
 ): Promise<BatchPreparation> {
-  const { command, topologyOffer, explicitSelection } = options;
+  const { command, topologyOffer, requiresSettledTopology, explicitSelection } = options;
   const result: BatchPreparation = { ready: [], skipped: [], failed: [], cancelled: false };
   const unregistered: Repo[] = [];
 
@@ -414,7 +424,7 @@ export async function prepareAliases(
       }
       continue;
     }
-    const prepared = await prepareAlias(repoRoot, repo, { command, topologyOffer });
+    const prepared = await prepareAlias(repoRoot, repo, { command, topologyOffer, requiresSettledTopology });
     if (prepared.ok) result.ready.push(repo);
     else result.failed.push(repo);
   }

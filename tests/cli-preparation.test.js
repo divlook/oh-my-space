@@ -72,6 +72,47 @@ test("all eight preparing commands auto-initialize without changing root topolog
   }
 });
 
+test("auto-initialization leaves a pinned commit alone when the baseline branch is ahead", () => {
+  // A submodule clone creates its baseline branch at the remote tip, which is ahead of the recorded
+  // pointer whenever someone pushed without recording it. Attaching to it would move the checkout
+  // during preparation, so preparation leaves HEAD detached at the pinned commit instead.
+  const bare = initBareUpstream();
+  const source = initGitWorkspace();
+  writeSources(source, sourceFor("api", bare));
+  assert.equal(run(["sync", "api"], { cwd: source }).status, 0);
+  const wt = join(source, "oms", "api");
+  const pinned = gitOut(source, "rev-parse", "HEAD:oms/api");
+  git(wt, "commit", "--allow-empty", "-m", "upstream ahead of the pointer");
+  git(wt, "push", "origin", "main");
+  git(wt, "checkout", "--detach", pinned);
+  git(wt, "branch", "-f", "main", "origin/main");
+  assert.equal(gitOut(source, "status", "--short"), "");
+
+  const listed = tempFixture("oms-ahead-list-");
+  execFileSync("git", ["clone", source, listed], { stdio: "ignore", env: testEnv });
+  configIdentity(listed);
+  const beforeList = rootSnapshot(listed);
+  const list = run(["branch", "list", "api"], { cwd: listed });
+  assert.equal(list.status, 0, list.stdout + list.stderr);
+  assert.equal(gitOut(join(listed, "oms", "api"), "rev-parse", "HEAD"), pinned);
+  assert.equal(gitOut(join(listed, "oms", "api"), "branch", "--show-current"), "");
+  assert.equal(gitOut(listed, "status", "--short"), "");
+  assertRootSnapshot(listed, beforeList);
+
+  // Commit needs a branch, so it reports the detached HEAD instead of silently moving to the tip.
+  const committed = tempFixture("oms-ahead-commit-");
+  execFileSync("git", ["clone", source, committed], { stdio: "ignore", env: testEnv });
+  configIdentity(committed);
+  const beforeCommit = rootSnapshot(committed);
+  const result = run(["commit", "api", "-m", "x"], { cwd: committed });
+  const output = result.stdout + result.stderr;
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /detached HEAD/);
+  assert.match(output, /oms branch switch api/);
+  assert.equal(gitOut(join(committed, "oms", "api"), "rev-parse", "HEAD"), pinned);
+  assertRootSnapshot(committed, beforeCommit);
+});
+
 test("the five offer-side commands register once and continue", () => {
   for (const args of offerCommands) {
     const bare = initBareUpstream();
