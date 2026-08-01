@@ -10,7 +10,8 @@ import type { ManageCommand, OperationResult, PushOptions, RemoteOptions, Repo, 
 function fetchRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
   for (const remote of remotes) {
     log.step(`${repo.alias}: git fetch ${remote} --prune`);
-    const r = runSub(repoRoot, repo.alias, ["fetch", remote, "--prune"], true);
+    let r = runSub(repoRoot, repo.alias, ["fetch", remote, "--prune"], true);
+    if (!r.success) r = runSub(repoRoot, repo.alias, ["fetch", remote, "--prune"], true);
     if (!r.success) {
       log.error(`${repo.alias}: fetch ${remote} failed (exit ${r.exitCode})`);
       return "failed";

@@ -15,7 +15,7 @@ import {
 import { loadForSubmodules } from "./manifest.js";
 import { gitlinkState, submoduleOperationInProgress } from "./status.js";
 import { resolveBaselines, type ProtectedReason } from "./branch-baseline.js";
-import { guardedConfirm, guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
+import { canPrompt, guardedConfirm, guardedSelect, isCancel } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
 import { prepareAlias } from "./alias-preparation.js";
 import { runBranchList } from "./branch-list.js";
@@ -23,10 +23,6 @@ import { runCheckout, runSwitch } from "./branch-ops.js";
 
 type BranchDeleteOptions = { force?: boolean };
 
-/** True when prompts may run: a real TTY, or an active guarded test-response queue. */
-function interactive(): boolean {
-  return Boolean(process.stdin.isTTY) || promptQueueActive();
-}
 
 /** Quote a dynamic argument for safe reuse in a POSIX shell command line. */
 function shq(arg: string): string {
@@ -38,7 +34,7 @@ function shq(arg: string): string {
  * a non-interactive shell (the `oms agent` group pattern).
  */
 export async function runBranch(command: Command): Promise<number> {
-  if (!interactive()) {
+  if (!canPrompt()) {
     command.outputHelp();
     return 1;
   }
@@ -86,7 +82,7 @@ async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: str
     log.error(`No initialized submodules to delete a branch from. Run "oms sync" first.`);
     return { kind: "error", code: 1 };
   }
-  if (!interactive()) {
+  if (!canPrompt()) {
     log.error(`No alias given and stdin is not a TTY. Pass an alias: "oms branch delete <alias> <branch>".`);
     return { kind: "error", code: 1 };
   }
@@ -171,7 +167,7 @@ async function resolveTargetBranch(
     log.info(`${repo.alias}: no deletable local branches. Protected: ${summary || "none"}.`);
     return { kind: "noop" };
   }
-  if (!interactive()) {
+  if (!canPrompt()) {
     log.error(`No branch given and stdin is not a TTY. Pass a branch: "oms branch delete ${repo.alias} <branch>".`);
     return { kind: "error", code: 1 };
   }
@@ -276,7 +272,7 @@ async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: s
   }
 
   // Offer one force retry (default No); non-interactive prints an exact, shell-safe retry command.
-  if (!interactive()) {
+  if (!canPrompt()) {
     log.error(
       `${alias}: safe deletion failed (see the Git error above). To force-delete (discarding unmerged commits), run: oms branch delete ${shq(alias)} ${shq(branch)} --force`,
     );

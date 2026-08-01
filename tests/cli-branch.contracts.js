@@ -298,7 +298,7 @@ test("bare branch selector dispatches into the switch flow", () => {
   assert.equal(res.status, 1, out);
   assert.match(out, /Selected "api" \(the only configured source repo\)/);
   assert.doesNotMatch(out, /git fetch origin --prune/);
-  assert.match(out, /No branch given and stdin is not a TTY/);
+  assert.match(out, /is exhausted/);
 });
 
 test("bare branch selector dispatches into the checkout flow", () => {
@@ -312,7 +312,59 @@ test("bare branch selector dispatches into the checkout flow", () => {
   assert.equal(res.status, 1, out);
   assert.match(out, /Selected "api" \(the only configured source repo\)/);
   assert.match(out, /git fetch origin --prune/);
-  assert.match(out, /No branch given and stdin is not a TTY/);
+  assert.match(out, /is exhausted/);
+});
+
+test("branch switch creates a branch through queued select and text prompts", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  const result = run(["branch", "switch", "api"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "\0create-new-branch" },
+      { type: "text", value: "feature/queued" },
+    ]),
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(dir, "branch", "--show-current"), "feature/queued");
+});
+
+test("branch switch rejects empty queued names and cancels at either prompt", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  const create = { type: "select", value: "\0create-new-branch" };
+
+  const empty = run(["branch", "switch", "api"], {
+    cwd,
+    env: queueEnv([create, { type: "text", value: "   " }]),
+  });
+  assert.equal(empty.status, 1, empty.stdout + empty.stderr);
+  assert.match(empty.stdout + empty.stderr, /Branch name is empty/);
+
+  for (const responses of [[{ type: "cancel" }], [create, { type: "cancel" }]]) {
+    const cancelled = run(["branch", "switch", "api"], { cwd, env: queueEnv(responses) });
+    assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
+    assert.match(cancelled.stdout + cancelled.stderr, /Cancelled/);
+  }
+  assert.equal(gitOut(dir, "branch", "--show-current"), "main");
+});
+
+test("a malformed queued text value fails closed", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  const result = run(["branch", "switch", "api"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "\0create-new-branch" },
+      { type: "text", value: 42 },
+    ]),
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /text "value" must be a string/);
+  assert.equal(gitOut(dir, "branch", "--show-current"), "main");
 });
 
 test("bare branch prints help and exits 1 in a non-interactive shell", () => {

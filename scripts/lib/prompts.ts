@@ -1,18 +1,11 @@
-import { cancel, log, multiselect, select, text } from "@clack/prompts";
+import { cancel, log, multiselect, select } from "@clack/prompts";
 import { dim, pad, uniqueAliases } from "./env.js";
 import { aliasDir, isDirty, submoduleInitialized } from "./git.js";
 import { prepareAlias } from "./alias-preparation.js";
-import { guardedMultiselect, guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
+import { canPrompt, guardedMultiselect, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
 import { gitlinkState, inferAliasFromCwd, recordVerdict } from "./status.js";
 import type { ManageCommand, Repo, SourcesOptions } from "./types.js";
 
-/**
- * Whether an interactive prompt can be completed: a real TTY, or a guarded test response queue
- * standing in for one. Prompts must not open without this, or the awaited prompt never settles.
- */
-function canPrompt(): boolean {
-  return Boolean(process.stdin.isTTY) || promptQueueActive();
-}
 
 /** Names of a repo's non-origin remotes, in declared order (origin is shown via its URL column). */
 function extraRemoteNames(repo: Repo): string[] {
@@ -117,7 +110,7 @@ export async function pickBranch(
   message: string,
   allowCreate: boolean,
 ): Promise<string | null> {
-  if (!process.stdin.isTTY) {
+  if (!canPrompt()) {
     log.error(`No branch given and stdin is not a TTY. Pass a branch name explicitly.`);
     return null;
   }
@@ -129,25 +122,25 @@ export async function pickBranch(
     ...(allowCreate ? [{ value: CREATE_NEW_BRANCH, label: "+ create new branch" }] : []),
     ...branches.map((b) => ({ value: b, label: b })),
   ];
-  const choice = await select({ message, options });
+  const choice = await guardedSelect<string>({ message, options });
   if (isCancel(choice)) {
     cancel("Cancelled.");
     return null;
   }
   if (choice === CREATE_NEW_BRANCH) {
-    const name = await text({ message: "New branch name", placeholder: "feature/login" });
+    const name = await guardedText({ message: "New branch name", placeholder: "feature/login" });
     if (isCancel(name)) {
       cancel("Cancelled.");
       return null;
     }
-    const trimmed = (name as string).trim();
+    const trimmed = name.trim();
     if (!trimmed) {
       log.error("Branch name is empty.");
       return null;
     }
     return trimmed;
   }
-  return choice as string;
+  return choice;
 }
 
 /**

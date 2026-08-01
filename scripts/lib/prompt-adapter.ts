@@ -3,6 +3,7 @@ import {
   isCancel as clackIsCancel,
   multiselect as clackMultiselect,
   select as clackSelect,
+  text as clackText,
 } from "@clack/prompts";
 import { isTestMode } from "./env.js";
 
@@ -25,13 +26,14 @@ export function isCancel(value: unknown): value is symbol {
 /** A misconfigured test queue; thrown to force a fail-closed exit 1 without opening a real prompt. */
 export class PromptQueueError extends Error {}
 
-type PromptType = "select" | "confirm" | "multiselect";
+type PromptType = "select" | "confirm" | "multiselect" | "text";
 
 type ResponseEntry =
   | { type: "select"; value: string }
   | { type: "select"; default: true }
   | { type: "confirm"; value: boolean }
   | { type: "multiselect"; values: string[] }
+  | { type: "text"; value: string }
   | { type: "cancel" };
 
 let initialized = false;
@@ -68,6 +70,12 @@ function validateEntry(entry: unknown, index: number): ResponseEntry {
     }
     return { type: "multiselect", values: e.values as string[] };
   }
+  if (e.type === "text") {
+    if (typeof e.value !== "string") {
+      throw new PromptQueueError(`${ENV_NAME}[${index}] text "value" must be a string.`);
+    }
+    return { type: "text", value: e.value };
+  }
   throw new PromptQueueError(`${ENV_NAME}[${index}] has unknown type ${JSON.stringify(e.type)}.`);
 }
 
@@ -100,6 +108,11 @@ function ensureInit(): void {
 export function promptQueueActive(): boolean {
   ensureInit();
   return active;
+}
+
+/** True when either a terminal or the deterministic response queue can answer a prompt. */
+export function canPrompt(): boolean {
+  return Boolean(process.stdin.isTTY) || promptQueueActive();
 }
 
 type Consumed =
@@ -191,6 +204,20 @@ export async function guardedConfirm(
     return injected.cancelled ? PROMPT_CANCEL : (injected.value as boolean);
   }
   return clackConfirm(options);
+}
+
+/** A text prompt guarded by the response queue; returns the value or a cancel symbol. */
+export async function guardedText(
+  options: Parameters<typeof clackText>[0],
+): Promise<string | symbol> {
+  const injected = consume("text");
+  if (injected.injected) {
+    if (!injected.cancelled && "useDefault" in injected) {
+      throw new PromptQueueError("A queued default is valid only for a select prompt.");
+    }
+    return injected.cancelled ? PROMPT_CANCEL : (injected.value as string);
+  }
+  return clackText(options);
 }
 
 /** Reset queue state; test-only hook for in-process reuse (the CLI parses env once per process). */

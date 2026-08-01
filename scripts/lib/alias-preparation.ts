@@ -14,7 +14,7 @@ import {
   submoduleInitialized,
   submodulePath,
 } from "./git.js";
-import { guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
+import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
 import { runSync } from "./repo-ops.js";
 import { attachBranch, gitmodulesBranch } from "./submodule-config.js";
 import { assertRootTopologySafe, gitlinkState } from "./status.js";
@@ -56,9 +56,6 @@ export type PrepareOptions = {
   requiresSettledTopology?: boolean;
 };
 
-function interactive(): boolean {
-  return Boolean(process.stdin.isTTY) || promptQueueActive();
-}
 
 /** Whether one committed or indexed `.gitmodules` snapshot registers this alias's canonical path. */
 function snapshotRegisters(repoRoot: string, alias: string, snapshot: "HEAD" | "index"): boolean {
@@ -188,7 +185,7 @@ export async function prepareAlias(
     return { ok: false, code: 1 };
   }
   if (!topologyOffer) return refuseUnregistered(repo, command);
-  if (!interactive()) {
+  if (!canPrompt()) {
     log.error(
       `${repo.alias}: declared in oms.yaml but not registered in the root repository. No topology was changed. Run "oms sync ${repo.alias}", then retry "oms ${command} ${repo.alias}".`,
     );
@@ -271,7 +268,7 @@ export async function resolveDetachedHead(
   if (verdict.kind !== "needs-intent") return { ok: true };
 
   const baseline = repo.branch;
-  if (!interactive()) {
+  if (!canPrompt()) {
     log.error(
       `${repo.alias}: detached HEAD at ${verdict.oid} and no local branch points there, so "oms ${command}" has no branch to act on. Attach one with "oms branch switch ${repo.alias} <branch>".`,
     );
@@ -351,7 +348,7 @@ export async function prepareAliases(
   // Decide the topology question once, before any alias is touched.
   let registerUnregistered = false;
   if (unregistered.length > 0 && topologyOffer) {
-    if (!interactive()) {
+    if (!canPrompt()) {
       for (const repo of unregistered) {
         log.error(
           `${repo.alias}: declared in oms.yaml but not registered in the root repository. No topology was changed. Run "oms sync ${repo.alias}", then retry "oms ${command}".`,
@@ -412,7 +409,7 @@ export async function prepareAliases(
   for (const repo of repos) {
     if (result.failed.includes(repo)) continue;
     if (!registerUnregistered && unregistered.includes(repo)) {
-      if (topologyOffer && interactive()) {
+      if (topologyOffer && canPrompt()) {
         log.warn(`${repo.alias}: skipped (not registered).`);
         result.skipped.push(repo);
       } else if (!topologyOffer) {

@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cancel, isCancel, log, select } from "@clack/prompts";
+import { cancel, log } from "@clack/prompts";
 import { DATA_DIRNAME, MANIFEST_FILENAME } from "./constants.js";
 import { findWorkspaceRoot } from "./git.js";
 import type { AgentOptions, AgentTarget } from "./types.js";
+import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
 
 const OMS_MARKER_START = "<!-- OMS START -->";
 const OMS_MARKER_END = "<!-- OMS END -->";
@@ -92,11 +93,11 @@ async function resolveAgentTarget(target: string | undefined): Promise<AgentTarg
     }
     return target;
   }
-  if (!process.stdin.isTTY) {
+  if (!canPrompt()) {
     log.error(`--target is required in a non-interactive shell. Pass --target agents|claude|both.`);
     return null;
   }
-  const choice = await select({
+  const choice = await guardedSelect<AgentTarget>({
     message: "Which instruction file(s) should OMS manage?",
     options: [
       { value: "agents", label: `${DATA_DIRNAME}/AGENTS.md` },

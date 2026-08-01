@@ -12,7 +12,7 @@ import {
   submodulePath,
 } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
-import { guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
+import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
 import { ensureRemotes } from "./submodule-config.js";
 import type { Repo } from "./types.js";
 
@@ -20,9 +20,6 @@ type RemoteState = "fresh" | "stale" | "unavailable";
 type RemoteInventory = { name: string; state: RemoteState; branches: string[]; warning: string | null };
 type AliasResult = { kind: "repo"; repo: Repo } | { kind: "error"; code: number };
 
-function interactive(): boolean {
-  return Boolean(process.stdin.isTTY) || promptQueueActive();
-}
 
 const PREPARE = { command: "branch list", topologyOffer: true } as const;
 
@@ -45,7 +42,7 @@ async function resolveAlias(repos: Repo[], repoRoot: string, aliasArg: string | 
     const prepared = await prepareAlias(repoRoot, repo, PREPARE);
     return prepared.ok ? { kind: "repo", repo } : { kind: "error", code: prepared.code };
   }
-  if (!interactive()) {
+  if (!canPrompt()) {
     log.error('No alias given and stdin is not a TTY. Pass an alias: "oms branch list <alias>".');
     return { kind: "error", code: 1 };
   }
