@@ -2,7 +2,7 @@ import { cancel, log, multiselect, select, text } from "@clack/prompts";
 import { dim, pad, uniqueAliases } from "./env.js";
 import { aliasDir, isDirty, submoduleInitialized } from "./git.js";
 import { prepareAlias } from "./alias-preparation.js";
-import { guardedMultiselect, isCancel, promptQueueActive } from "./prompt-adapter.js";
+import { guardedMultiselect, guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
 import { gitlinkState, inferAliasFromCwd, recordVerdict } from "./status.js";
 import type { ManageCommand, Repo, SourcesOptions } from "./types.js";
 
@@ -84,7 +84,7 @@ export async function resolveInitializedAlias(
       );
       return null;
     }
-    const choice = await select({
+    const choice = await guardedSelect<string>({
       message: `Select a source repo for "oms ${actionLabel}"`,
       options: repos.map((candidate) => ({
         value: candidate.alias,
@@ -325,7 +325,7 @@ export async function resolveCommandAlias(
     return { kind: "error" };
   }
 
-  const choice = await select({
+  const choice = await guardedSelect<string>({
     message: `Select a submodule to ${command}`,
     options: candidates.map((a) => ({ value: a, label: a })),
   });

@@ -273,6 +273,17 @@ test("commit without an alias resolves by candidate count, not by the terminal",
   assert.equal(two.status, 1, twoOut);
   assert.match(twoOut, /not a TTY/);
   assert.match(twoOut, /api, web/);
+
+  // That same ambiguity resolves through the guarded queue rather than opening a real prompt.
+  const queued = run(["commit", "-m", "feat: picked"], {
+    cwd: many,
+    env: queueEnv([{ type: "select", value: "web" }]),
+  });
+  const queuedOut = queued.stdout + queued.stderr;
+  assert.equal(queued.status, 0, queuedOut);
+  assert.match(queuedOut, /web: committed/);
+  assert.equal(gitOut(join(many, "oms", "web"), "log", "-1", "--pretty=%s"), "feat: picked");
+  assert.notEqual(gitOut(join(many, "oms", "api"), "log", "-1", "--pretty=%s"), "feat: picked");
 });
 
 // --- oms record (root gitlink pointer commits only) ---
