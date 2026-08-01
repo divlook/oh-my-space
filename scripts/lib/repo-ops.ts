@@ -10,8 +10,8 @@ import {
   hasRegisteredSubmodules,
   isDirty,
   isRegisteredSubmodule,
-  remoteBranchExists,
   redactSensitiveUrls,
+  remoteBranchExists,
   resolveOriginHead,
   runGit,
   runSub,
@@ -156,25 +156,27 @@ function cleanupRestorableAliasDir(repoRoot: string, alias: string): RestorableC
   return "ok";
 }
 
+/** Whether sync may continue, and the branch its result line may name — null once HEAD stayed detached. */
+type SyncAttachment = { ok: false } | { ok: true; branch: string | null };
+
 /** Attach a sync baseline without moving HEAD, and translate the result into sync semantics. */
-function attachSyncBranch(repoRoot: string, alias: string, branch: string): boolean {
+function attachSyncBaseline(repoRoot: string, alias: string, branch: string | null | undefined): SyncAttachment {
+  if (!branch) return { ok: true, branch: null };
   const result = attachBranch(repoRoot, alias, branch);
-  switch (result.kind) {
-    case "already-attached":
-    case "attached":
-      return true;
-    case "diverged":
-      log.warn(
-        `${alias}: kept detached HEAD at ${result.headOid.slice(0, 7)} because baseline "${result.branch}" points at ${result.branchOid.slice(0, 7)}. The recorded pointer was preserved. To move deliberately, run "oms branch switch ${alias} ${result.branch}", then run "oms pull ${alias}" to advance from its remote.`,
-      );
-      return true;
-    case "failed":
-      if (result.diagnostic) log.error(result.diagnostic);
-      log.error(`${alias}: could not attach detached HEAD to "${result.branch}". Repository state was preserved.`);
-      return false;
+  if (result.kind === "failed") {
+    if (result.diagnostic) log.error(result.diagnostic);
+    log.error(`${alias}: could not attach detached HEAD to "${result.branch}". Repository state was preserved.`);
+    return { ok: false };
   }
-  const exhaustive: never = result;
-  return exhaustive;
+  if (result.kind === "diverged") {
+    // Only the checkout and the gitlink are provably untouched here; whether the detached commit is
+    // the recorded pointer depends on the caller's situation, which this wrapper cannot see.
+    log.warn(
+      `${alias}: kept detached HEAD at ${result.headOid.slice(0, 7)} because baseline "${result.branch}" points at ${result.branchOid.slice(0, 7)}. The checked-out commit and the root gitlink were left unchanged. To move deliberately, run "oms branch switch ${alias} ${result.branch}", then run "oms pull ${alias}" to advance from its remote.`,
+    );
+    return { ok: true, branch: null };
+  }
+  return { ok: true, branch: result.branch };
 }
 
 function restorePendingRemoval(repo: Repo, repoRoot: string): { result: OperationResult; restored: boolean } {
@@ -221,7 +223,7 @@ function restorePendingRemoval(repo: Repo, repoRoot: string): { result: Operatio
   }
   ensureRemotes(repoRoot, alias, repo.remotes);
   const branch = gitmodulesBranch(repoRoot, alias) ?? repo.branch;
-  if (branch && !attachSyncBranch(repoRoot, alias, branch)) return { result: "failed", restored: true };
+  if (!attachSyncBaseline(repoRoot, alias, branch).ok) return { result: "failed", restored: true };
   log.success(`${alias}: restored pending removal`);
   return { result: "added", restored: true };
 }
@@ -286,8 +288,9 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
     }
     ensureRemotes(repoRoot, alias, repo.remotes);
     const branch = repo.branch ?? currentBranch(aliasDir(repoRoot, alias));
-    if (branch && !attachSyncBranch(repoRoot, alias, branch)) return "failed";
-    log.success(`${alias}: added${branch ? ` (branch=${branch})` : ""}`);
+    const attachment = attachSyncBaseline(repoRoot, alias, branch);
+    if (!attachment.ok) return "failed";
+    log.success(`${alias}: added${attachment.branch ? ` (branch=${attachment.branch})` : ""}`);
     return "added";
   }
 
@@ -302,8 +305,9 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
     }
     ensureRemotes(repoRoot, alias, repo.remotes);
     const branch = gitmodulesBranch(repoRoot, alias) ?? repo.branch;
-    if (branch && !attachSyncBranch(repoRoot, alias, branch)) return "failed";
-    log.success(`${alias}: initialized${branch ? ` (branch=${branch})` : ""}`);
+    const attachment = attachSyncBaseline(repoRoot, alias, branch);
+    if (!attachment.ok) return "failed";
+    log.success(`${alias}: initialized${attachment.branch ? ` (branch=${attachment.branch})` : ""}`);
     return "added";
   }
 
@@ -336,7 +340,7 @@ function syncRepo(repo: Repo, repoRoot: string): OperationResult {
     }
   }
   const branch = repo.branch ?? originHead;
-  if (branch && !attachSyncBranch(repoRoot, alias, branch)) return "failed";
+  if (!attachSyncBaseline(repoRoot, alias, branch).ok) return "failed";
   log.success(`${alias}: updated`);
   return "updated";
 }

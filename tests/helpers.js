@@ -268,8 +268,6 @@ function workspaceCloneWithDriftedBaseline(alias = "api") {
   return { alias, bare, cwd, pin, tip, wt: join(cwd, "oms", alias) };
 }
 
-
-
 /** A multi-repo oms.yaml mapping each alias to its own bare origin. */
 function sourcesFor(entries) {
   const body = entries

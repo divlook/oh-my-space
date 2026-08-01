@@ -14,10 +14,13 @@ export function gitmodulesBranch(repoRoot: string, alias: string): string | null
   return b.length > 0 ? b : null;
 }
 
-/** Outcome of attaching a detached submodule without changing its checked-out commit. */
+/**
+ * Outcome of attaching a detached submodule without changing its checked-out commit. `branch` is the
+ * requested baseline in every variant, so callers can name it without tracking their own copy.
+ */
 export type AttachBranchResult =
   | { kind: "already-attached"; branch: string }
-  | { kind: "attached"; branch: string; oid: string }
+  | { kind: "attached"; branch: string }
   | { kind: "diverged"; branch: string; headOid: string; branchOid: string }
   | { kind: "failed"; branch: string; diagnostic: string };
 
@@ -29,8 +32,7 @@ export type AttachBranchResult =
  */
 export function attachBranch(repoRoot: string, alias: string, branch: string): AttachBranchResult {
   const dir = aliasDir(repoRoot, alias);
-  const current = currentBranch(dir);
-  if (current !== null) return { kind: "already-attached", branch: current };
+  if (currentBranch(dir) !== null) return { kind: "already-attached", branch };
 
   const head = runGit(dir, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const headOid = head.stdout.trim();
@@ -62,7 +64,7 @@ export function attachBranch(repoRoot: string, alias: string, branch: string): A
         diagnostic: redactSensitiveUrls(switched.stderr.trim()) || `git switch "${branch}" failed`,
       };
     }
-    return { kind: "attached", branch, oid: headOid };
+    return { kind: "attached", branch };
   }
 
   // Create the branch at the current HEAD (the pinned commit) so the worktree stays put.
@@ -77,7 +79,7 @@ export function attachBranch(repoRoot: string, alias: string, branch: string): A
   if (remoteBranchExists(dir, branch)) {
     runSub(repoRoot, alias, ["branch", "--set-upstream-to", `origin/${branch}`, branch]);
   }
-  return { kind: "attached", branch, oid: headOid };
+  return { kind: "attached", branch };
 }
 
 /**

@@ -1397,9 +1397,12 @@ test("a committed pointer reproduces on a fresh clone via sync", () => {
   assert.equal(existsSync(join(clone, "oms", "api", ".git")), false);
 
   const result = run(["sync", "api"], { cwd: clone });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
   assert.equal(gitOut(join(clone, "oms", "api"), "rev-parse", "HEAD"), pin);
   assert.equal(gitOut(join(clone, "oms", "api"), "branch", "--show-current"), "main");
+  // The result line names the baseline exactly when the alias ended up attached to it.
+  assert.match(output, /api: initialized \(branch=main\)/);
 });
 
 test("sync preserves a recorded pointer when the cloned baseline has advanced", () => {
@@ -1416,6 +1419,9 @@ test("sync preserves a recorded pointer when the cloned baseline has advanced", 
   assert.match(output, new RegExp(tip.slice(0, 7)));
   assert.match(output, new RegExp(`oms branch switch ${alias} main`));
   assert.match(output, new RegExp(`oms pull ${alias}`));
+  // The result line must not claim the baseline the alias was deliberately left off.
+  assert.match(output, new RegExp(`${alias}: initialized`));
+  assert.doesNotMatch(output, /initialized \(branch=/);
   assert.doesNotMatch(output, new RegExp(bare.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")));
 });
 
@@ -1490,7 +1496,7 @@ test("sync restore preserves the recorded pointer when its retained baseline div
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /restored pending removal/);
-  assert.match(output, /recorded pointer was preserved/);
+  assert.match(output, /kept detached HEAD at [0-9a-f]{7} because baseline "main"/);
   assert.equal(gitOut(wt, "rev-parse", "HEAD"), pin);
   assert.equal(gitOut(wt, "branch", "--show-current"), "");
 });
@@ -1503,7 +1509,7 @@ test("sync update preserves detached HEAD when the local baseline diverged", () 
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /updated/);
-  assert.match(output, /recorded pointer was preserved/);
+  assert.match(output, /kept detached HEAD at [0-9a-f]{7} because baseline "main"/);
   assert.equal(gitOut(wt, "rev-parse", "HEAD"), pin);
   assert.equal(gitOut(wt, "branch", "--show-current"), "");
   assert.equal(gitOut(cwd, "status", "--porcelain"), "");
