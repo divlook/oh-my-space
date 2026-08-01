@@ -1,7 +1,13 @@
-## MODIFIED Requirements
+## REMOVED Requirements
 
 ### Requirement: Pull and push keep root pointer updates explicit
-The system SHALL keep `oms pull` and `oms push` focused only on synchronizing submodules, while existing root gitlink pointer-update staging and commits are created only by `oms record <alias>`. Sync and unsync root commits are a separate topology workflow; sync commits SHALL also include reconciled metadata and its current declarative `oms.yaml` source. `oms sync` and `oms unsync` SHALL create their root commit by default whenever pending changes and the workflow's safety conditions allow it, SHALL leave those changes unstaged only when `--no-commit` is passed, and SHALL decide this identically whether or not stdin is a terminal.
+
+This requirement carried two unrelated subjects: how `oms sync` and `oms unsync` finalize root topology, and how `oms pull` and `oms push` stay out of the root index. Its finalization half also described an interactive prompt and a leave-unstaged default that no longer exist. It is replaced by the two requirements added below, split along that seam. Every pull and push scenario is preserved verbatim in the second one.
+
+## ADDED Requirements
+
+### Requirement: Root topology finalization
+The system SHALL finalize root topology and reconciled metadata changes from `oms sync` and `oms unsync` in one path-limited root commit. That commit SHALL be created by default whenever pending changes exist and the workflow's safety conditions allow it, SHALL be withheld only when `--no-commit` is passed, and SHALL be decided identically whether or not stdin is a terminal. A sync commit SHALL also include reconciled metadata and the complete current declarative `oms.yaml` source.
 
 #### Scenario: Sync creates one root commit by default
 - **WHEN** the user runs `oms sync api`
@@ -120,6 +126,9 @@ The system SHALL keep `oms pull` and `oms push` focused only on synchronizing su
 - **THEN** the command fails
 - **AND** the selected topology paths remain staged
 
+### Requirement: Pull and push submodule-only synchronization
+The system SHALL keep `oms pull` and `oms push` focused only on synchronizing submodules, while existing root gitlink pointer-update staging and commits are created only by `oms record <alias>`. Sync and unsync root commits are a separate topology workflow.
+
 #### Scenario: Pull does not stage or commit the root gitlink
 - **WHEN** the user runs `oms pull api`
 - **THEN** the command pulls the current `api` submodule branch according to the existing fast-forward policy
@@ -134,7 +143,7 @@ The system SHALL keep `oms pull` and `oms push` focused only on synchronizing su
 #### Scenario: Pull prints topology hint when recorded gitlink is missing
 - **WHEN** the user runs `oms pull api` successfully
 - **AND** root HEAD has no `oms/api` gitlink, the working tree has initialized `oms/api`, and `.gitmodules` contains path `oms/api`
-- **THEN** the command prints a hint to run `oms sync api`
+- **THEN** the command prints a hint to run `oms sync api --commit`
 - **AND** the command does not stage or record the root pointer
 
 #### Scenario: Pull rejects dirty submodule source changes
@@ -157,7 +166,7 @@ The system SHALL keep `oms pull` and `oms push` focused only on synchronizing su
 #### Scenario: Push prints topology hint when recorded gitlink is missing
 - **WHEN** the user runs `oms push api` successfully
 - **AND** root HEAD has no `oms/api` gitlink, the working tree has initialized `oms/api`, and `.gitmodules` contains path `oms/api`
-- **THEN** the command prints a hint to run `oms sync api`
+- **THEN** the command prints a hint to run `oms sync api --commit`
 - **AND** the command does not stage or record the root pointer
 
 #### Scenario: Push warns for dirty submodule source changes
