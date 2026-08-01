@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -189,6 +189,59 @@ test("a partial delegated sync does not ask a second preparation question", () =
   assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount + 1);
 });
 
+test("fetch retries one transient failure and succeeds without an error", () => {
+  const { cwd } = workspaceWithApi();
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = tempFixture("oms-fetch-retry-");
+  const attempts = join(stubDir, "fetch-attempts");
+  const stubGit = join(stubDir, "git");
+  // Fail only the first fetch, and record every attempt so the retry itself is asserted rather
+  // than inferred from the exit code.
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "$1" = "fetch" ]; then echo attempt >> ${JSON.stringify(attempts)}; if [ "$(wc -l < ${JSON.stringify(attempts)})" -eq 1 ]; then exit 91; fi; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+
+  const result = run(["fetch", "api"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}${delimiter}${testEnv.PATH}` },
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /api: fetched/);
+  assert.doesNotMatch(output, /failed/);
+  assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 2);
+});
+
+test("two fetch failures report the exit code and later aliases still run", () => {
+  const api = initBareUpstream();
+  const web = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare: api }, { alias: "web", bare: web }]));
+  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "web"], { cwd }).status, 0);
+
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = tempFixture("oms-fetch-failure-");
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "$1" = "fetch" ] && [[ "$PWD" == */oms/api ]]; then exit 92; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+
+  const result = run(["fetch", "--all"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}${delimiter}${testEnv.PATH}` },
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /api: fetch origin failed \(exit 92\)/);
+  assert.match(output, /web: fetched/);
+  assert.match(output, /Summary: fetched 1, failed 1/);
+});
+
 test("preparation defaults follow selection scope and skip remains successful", () => {
   const namedOrigin = initBareUpstream();
   const named = initGitWorkspace();
@@ -283,6 +336,42 @@ test("detached HEAD attaches safely, offers a moving choice, and fails without i
     assert.equal(gitOut(dir, "branch", "--show-current"), "");
     assertRootSnapshot(cwd, before);
   }
+});
+
+test("detached HEAD creates a branch through the queued text prompt", () => {
+  const create = { type: "select", value: "\0create" };
+
+  const created = workspaceWithApi();
+  const createdDir = detachWithoutBranch(created.cwd);
+  const result = run(["push", "api"], {
+    cwd: created.cwd,
+    env: queueEnv([create, { type: "text", value: "work/detached" }]),
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /api: created work\/detached at /);
+  assert.equal(gitOut(createdDir, "branch", "--show-current"), "work/detached");
+
+  const empty = workspaceWithApi();
+  const emptyDir = detachWithoutBranch(empty.cwd);
+  const rejected = run(["push", "api"], {
+    cwd: empty.cwd,
+    env: queueEnv([create, { type: "text", value: "   " }]),
+  });
+  // An unusable preparation answer leaves the alias failed, which "oms push" maps to exit 2.
+  assert.equal(rejected.status, 2, rejected.stdout + rejected.stderr);
+  assert.match(rejected.stdout + rejected.stderr, /api: branch name is empty/);
+  assert.equal(gitOut(emptyDir, "branch", "--show-current"), "");
+
+  const cancelled = workspaceWithApi();
+  const cancelledDir = detachWithoutBranch(cancelled.cwd);
+  const stopped = run(["push", "api"], {
+    cwd: cancelled.cwd,
+    env: queueEnv([create, { type: "cancel" }]),
+  });
+  assert.equal(stopped.status, 2, stopped.stdout + stopped.stderr);
+  assert.match(stopped.stdout + stopped.stderr, /still detached/);
+  assert.equal(gitOut(cancelledDir, "branch", "--show-current"), "");
 });
 
 test("every preparing command refuses partial registration with repair guidance", () => {

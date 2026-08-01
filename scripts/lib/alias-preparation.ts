@@ -1,4 +1,4 @@
-import { cancel, log, text } from "@clack/prompts";
+import { cancel, log } from "@clack/prompts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -14,7 +14,7 @@ import {
   submoduleInitialized,
   submodulePath,
 } from "./git.js";
-import { guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
+import { canPrompt, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
 import { runSync } from "./repo-ops.js";
 import { attachBranch, gitmodulesBranch } from "./submodule-config.js";
 import { assertRootTopologySafe, gitlinkState } from "./status.js";
@@ -55,10 +55,6 @@ export type PrepareOptions = {
    */
   requiresSettledTopology?: boolean;
 };
-
-function interactive(): boolean {
-  return Boolean(process.stdin.isTTY) || promptQueueActive();
-}
 
 /** Whether one committed or indexed `.gitmodules` snapshot registers this alias's canonical path. */
 function snapshotRegisters(repoRoot: string, alias: string, snapshot: "HEAD" | "index"): boolean {
@@ -188,7 +184,7 @@ export async function prepareAlias(
     return { ok: false, code: 1 };
   }
   if (!topologyOffer) return refuseUnregistered(repo, command);
-  if (!interactive()) {
+  if (!canPrompt()) {
     log.error(
       `${repo.alias}: declared in oms.yaml but not registered in the root repository. No topology was changed. Run "oms sync ${repo.alias}", then retry "oms ${command} ${repo.alias}".`,
     );
@@ -271,7 +267,7 @@ export async function resolveDetachedHead(
   if (verdict.kind !== "needs-intent") return { ok: true };
 
   const baseline = repo.branch;
-  if (!interactive()) {
+  if (!canPrompt()) {
     log.error(
       `${repo.alias}: detached HEAD at ${verdict.oid} and no local branch points there, so "oms ${command}" has no branch to act on. Attach one with "oms branch switch ${repo.alias} <branch>".`,
     );
@@ -295,14 +291,12 @@ export async function resolveDetachedHead(
   }
 
   if (choice === CREATE) {
-    // Raw text prompt: the guarded seam gains a `text` entry in unify-prompt-seam, which is also
-    // what makes this branch reachable from tests.
-    const name = await text({ message: `${repo.alias}: new branch name`, placeholder: "work/detached" });
+    const name = await guardedText({ message: `${repo.alias}: new branch name`, placeholder: "work/detached" });
     if (isCancel(name)) {
       cancel(`Cancelled. ${repo.alias} is still detached at ${verdict.oid}.`);
       return { ok: false, code: 1 };
     }
-    const trimmed = String(name).trim();
+    const trimmed = name.trim();
     if (!trimmed) {
       log.error(`${repo.alias}: branch name is empty.`);
       return { ok: false, code: 1 };
@@ -351,7 +345,7 @@ export async function prepareAliases(
   // Decide the topology question once, before any alias is touched.
   let registerUnregistered = false;
   if (unregistered.length > 0 && topologyOffer) {
-    if (!interactive()) {
+    if (!canPrompt()) {
       for (const repo of unregistered) {
         log.error(
           `${repo.alias}: declared in oms.yaml but not registered in the root repository. No topology was changed. Run "oms sync ${repo.alias}", then retry "oms ${command}".`,
@@ -412,7 +406,7 @@ export async function prepareAliases(
   for (const repo of repos) {
     if (result.failed.includes(repo)) continue;
     if (!registerUnregistered && unregistered.includes(repo)) {
-      if (topologyOffer && interactive()) {
+      if (topologyOffer && canPrompt()) {
         log.warn(`${repo.alias}: skipped (not registered).`);
         result.skipped.push(repo);
       } else if (!topologyOffer) {

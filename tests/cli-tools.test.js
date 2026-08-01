@@ -37,6 +37,7 @@ import {
   initGitWorkspace,
   gitOut,
   initEmptyBare,
+  queueEnv,
   sourceFor,
   gitTopLevelStubEnv,
   workspaceWithApi,
@@ -85,6 +86,33 @@ test("agent install requires --target in a non-interactive shell", () => {
   assert.equal(result.status, 1, output);
   assert.match(output, /--target/);
   assert.equal(existsSync(join(cwd, "oms", "AGENTS.md")), false);
+});
+
+test("agent install and uninstall select targets through the guarded queue", () => {
+  const cwd = agentWorkspace();
+  const install = run(["agent", "install"], {
+    cwd,
+    env: queueEnv([{ type: "select", value: "agents" }]),
+  });
+  assert.equal(install.status, 0, install.stdout + install.stderr);
+  assert.equal(existsSync(join(cwd, "oms", "AGENTS.md")), true);
+  assert.equal(existsSync(join(cwd, "oms", "CLAUDE.md")), false);
+
+  const uninstall = run(["agent", "uninstall"], {
+    cwd,
+    env: queueEnv([{ type: "select", value: "agents" }]),
+  });
+  assert.equal(uninstall.status, 0, uninstall.stdout + uninstall.stderr);
+  assert.equal(existsSync(join(cwd, "oms", "AGENTS.md")), false);
+});
+
+test("agent target selection cancels cleanly for install and uninstall", () => {
+  for (const action of ["install", "uninstall"]) {
+    const cwd = agentWorkspace();
+    const result = run(["agent", action], { cwd, env: queueEnv([{ type: "cancel" }]) });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout + result.stderr, /Cancelled/);
+  }
 });
 
 test("agent install appends after two blank lines and preserves existing content", () => {

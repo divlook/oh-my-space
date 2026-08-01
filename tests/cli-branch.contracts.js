@@ -293,12 +293,18 @@ test("bare branch selector dispatches into the switch flow", () => {
   // The sole configured alias auto-selects, so the flow now advances to branch selection. Switch
   // consults no remote, so the absence of a fetch step is what proves it entered the switch flow
   // rather than checkout, which fetches origin before prompting.
-  const res = run(["branch"], { cwd, env: queueEnv([{ type: "select", value: "switch" }]) });
+  const res = run(["branch"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "switch" },
+      { type: "select", value: "main" },
+    ]),
+  });
   const out = res.stdout + res.stderr;
-  assert.equal(res.status, 1, out);
+  assert.equal(res.status, 0, out);
   assert.match(out, /Selected "api" \(the only configured source repo\)/);
   assert.doesNotMatch(out, /git fetch origin --prune/);
-  assert.match(out, /No branch given and stdin is not a TTY/);
+  assert.match(out, /api: on main/);
 });
 
 test("bare branch selector dispatches into the checkout flow", () => {
@@ -307,12 +313,70 @@ test("bare branch selector dispatches into the checkout flow", () => {
   syncedSubmodule(cwd, "api", bare);
   // Checkout is remote-tracking, so it fetches origin before prompting for a branch. That fetch
   // step is what distinguishes it from the switch flow now that the sole configured alias auto-selects.
-  const res = run(["branch"], { cwd, env: queueEnv([{ type: "select", value: "checkout" }]) });
+  const res = run(["branch"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "checkout" },
+      { type: "select", value: "main" },
+    ]),
+  });
   const out = res.stdout + res.stderr;
-  assert.equal(res.status, 1, out);
+  assert.equal(res.status, 0, out);
   assert.match(out, /Selected "api" \(the only configured source repo\)/);
   assert.match(out, /git fetch origin --prune/);
-  assert.match(out, /No branch given and stdin is not a TTY/);
+  assert.match(out, /api: on main/);
+});
+
+test("branch switch creates a branch through queued select and text prompts", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  const result = run(["branch", "switch", "api"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "\0create-new-branch" },
+      { type: "text", value: "feature/queued" },
+    ]),
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(dir, "branch", "--show-current"), "feature/queued");
+});
+
+test("branch switch rejects empty queued names and cancels at either prompt", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  const create = { type: "select", value: "\0create-new-branch" };
+
+  const empty = run(["branch", "switch", "api"], {
+    cwd,
+    env: queueEnv([create, { type: "text", value: "   " }]),
+  });
+  assert.equal(empty.status, 1, empty.stdout + empty.stderr);
+  assert.match(empty.stdout + empty.stderr, /Branch name is empty/);
+
+  for (const responses of [[{ type: "cancel" }], [create, { type: "cancel" }]]) {
+    const cancelled = run(["branch", "switch", "api"], { cwd, env: queueEnv(responses) });
+    assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
+    assert.match(cancelled.stdout + cancelled.stderr, /Cancelled/);
+  }
+  assert.equal(gitOut(dir, "branch", "--show-current"), "main");
+});
+
+test("a malformed queued text value fails closed", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  const dir = syncedSubmodule(cwd, "api", bare);
+  const result = run(["branch", "switch", "api"], {
+    cwd,
+    env: queueEnv([
+      { type: "select", value: "\0create-new-branch" },
+      { type: "text", value: 42 },
+    ]),
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /text "value" must be a string/);
+  assert.equal(gitOut(dir, "branch", "--show-current"), "main");
 });
 
 test("bare branch prints help and exits 1 in a non-interactive shell", () => {
