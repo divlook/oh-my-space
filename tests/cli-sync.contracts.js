@@ -41,6 +41,7 @@ import {
   workspaceWithApi,
   statusJson,
   workspaceWithMovedApi,
+  workspaceCloneWithDriftedBaseline,
   sourcesFor,
   gitmodulesSectionCount,
   syncedSubmodule,
@@ -1287,6 +1288,9 @@ test("sync and unsync help document the commit-by-default topology behavior", ()
   assert.match(sync.stdout, /oms sync api --no-commit/);
   // --commit stays documented as an accepted no-op so existing invocations keep working.
   assert.match(sync.stdout, /oms sync api --commit/);
+  assert.match(sync.stdout, /reproduces the root repository's recorded submodule pointer/);
+  assert.match(sync.stdout, /newer baseline stays detached/);
+  assert.match(sync.stdout, /implicit pull/);
   assert.doesNotMatch(sync.stdout, /left unstaged by default/);
 
   const unsync = run(["unsync", "--help"]);
@@ -1393,7 +1397,120 @@ test("a committed pointer reproduces on a fresh clone via sync", () => {
   assert.equal(existsSync(join(clone, "oms", "api", ".git")), false);
 
   const result = run(["sync", "api"], { cwd: clone });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
   assert.equal(gitOut(join(clone, "oms", "api"), "rev-parse", "HEAD"), pin);
   assert.equal(gitOut(join(clone, "oms", "api"), "branch", "--show-current"), "main");
+  // The result line names the baseline exactly when the alias ended up attached to it.
+  assert.match(output, /api: initialized \(branch=main\)/);
+});
+
+test("sync preserves a recorded pointer when the cloned baseline has advanced", () => {
+  const { alias, bare, cwd, pin, tip, wt } = workspaceCloneWithDriftedBaseline();
+
+  const result = run(["sync", alias], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), pin);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "");
+  assert.equal(gitOut(cwd, "rev-parse", `:oms/${alias}`), pin);
+  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+  assert.match(output, new RegExp(pin.slice(0, 7)));
+  assert.match(output, new RegExp(tip.slice(0, 7)));
+  assert.match(output, new RegExp(`oms branch switch ${alias} main`));
+  assert.match(output, new RegExp(`oms pull ${alias}`));
+  // The result line must not claim the baseline the alias was deliberately left off.
+  assert.match(output, new RegExp(`${alias}: initialized`));
+  assert.doesNotMatch(output, /initialized \(branch=/);
+  assert.doesNotMatch(output, new RegExp(bare.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")));
+});
+
+test("sync creates a missing baseline at detached HEAD", () => {
+  const { cwd, wt } = workspaceWithApi();
+  const head = gitOut(wt, "rev-parse", "HEAD");
+  git(wt, "checkout", "--detach");
+  git(wt, "branch", "-D", "main");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "main");
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), head);
+  assert.equal(gitOut(wt, "rev-parse", "main"), head);
+});
+
+test("sync relabels detached HEAD when the baseline points at the same commit", () => {
+  const { cwd, wt } = workspaceWithApi();
+  const head = gitOut(wt, "rev-parse", "HEAD");
+  git(wt, "checkout", "--detach");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "main");
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), head);
+});
+
+test("sync does not disturb an already-attached working branch", () => {
+  const { cwd, wt } = workspaceWithApi();
+  git(wt, "checkout", "-b", "work");
+  const head = gitOut(wt, "rev-parse", "HEAD");
+
+  const result = run(["sync", "api"], { cwd });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "work");
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), head);
+});
+
+test("sync reports an attachment Git failure and preserves the detached commit", () => {
+  const { cwd, wt } = workspaceWithApi();
+  const pin = gitOut(cwd, "rev-parse", ":oms/api");
+  git(wt, "checkout", "--detach");
+
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = tempFixture("oms-attach-failure-");
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "$1" = "switch" ] && [ "$2" = "main" ]; then echo "simulated attach failure" >&2; exit 93; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+
+  const result = run(["sync", "api"], {
+    cwd,
+    env: { ...testEnv, PATH: `${stubDir}${delimiter}${testEnv.PATH}` },
+  });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /simulated attach failure/);
+  assert.match(output, /Repository state was preserved/);
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), pin);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "");
+  assert.equal(gitOut(cwd, "rev-parse", ":oms/api"), pin);
+});
+
+test("sync restore preserves the recorded pointer when its retained baseline diverged", () => {
+  const { alias, cwd, pin, wt } = workspaceCloneWithDriftedBaseline();
+  git(cwd, "submodule", "update", "--init", "--", `oms/${alias}`);
+  assert.equal(run(["unsync", alias, "--no-commit"], { cwd }).status, 0);
+
+  const result = run(["sync", alias], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /restored pending removal/);
+  assert.match(output, /kept detached HEAD at [0-9a-f]{7} because baseline "main"/);
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), pin);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "");
+});
+
+test("sync update preserves detached HEAD when the local baseline diverged", () => {
+  const { alias, cwd, pin, wt } = workspaceCloneWithDriftedBaseline();
+  git(cwd, "submodule", "update", "--init", "--", `oms/${alias}`);
+
+  const result = run(["sync", alias], { cwd });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(output, /updated/);
+  assert.match(output, /kept detached HEAD at [0-9a-f]{7} because baseline "main"/);
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), pin);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "");
+  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
 });

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -318,5 +318,32 @@ test("status, doctor, and record report an uninitialized alias without preparing
   assert.equal(record.status, 0, record.stdout + record.stderr);
   assert.match(record.stdout + record.stderr, /Nothing to record/);
   assert.equal(existsSync(join(cwd, "oms", "api", ".git")), false);
+  assertRootSnapshot(cwd, before);
+});
+
+test("automatic initialization stops when Git refuses the baseline attachment", () => {
+  // Routing preparation through the shared attachment primitive surfaces a refused branch operation
+  // that used to be swallowed. Nothing downstream can assume the alias is prepared, so the command
+  // stops with Git's own diagnostic instead of continuing against an unattached submodule.
+  const cwd = cloneWithUninitializedApi();
+  const before = rootSnapshot(cwd);
+  const pinned = gitOut(cwd, "rev-parse", "HEAD:oms/api");
+
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = tempFixture("oms-prepare-attach-failure-");
+  const stubGit = join(stubDir, "git");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif [ "$1" = "switch" ] && [ "$2" = "main" ]; then echo "simulated attach failure" >&2; exit 93; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+
+  const result = run(["fetch", "api"], { cwd, env: { ...testEnv, PATH: `${stubDir}${delimiter}${testEnv.PATH}` } });
+  const output = result.stdout + result.stderr;
+  assert.notEqual(result.status, 0, output);
+  assert.match(output, /simulated attach failure/);
+  assert.match(output, /could not attach detached HEAD to "main"/);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "rev-parse", "HEAD"), pinned);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "");
   assertRootSnapshot(cwd, before);
 });
