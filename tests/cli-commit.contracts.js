@@ -136,7 +136,7 @@ test("commit prints a topology hint instead of record when the root gitlink is u
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
   // Deliberately do NOT record the gitlink in the root HEAD (pending add topology).
   const wt = join(cwd, "oms", "api");
   writeFileSync(join(wt, "f.txt"), "x");
@@ -205,7 +205,7 @@ test("commit gives an explicit alias precedence over the current submodule conte
     cwd,
     `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n    branch: main\n  - alias: web\n    remotes:\n      origin: file://${bare}\n    branch: main\n`,
   );
-  assert.equal(run(["sync", "api", "web"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "web", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
   writeFileSync(join(cwd, "oms", "web", "web.txt"), "web");
@@ -321,7 +321,7 @@ test("record rejects a staged gitlink for a different alias", () => {
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
   // Move both pointers, then stage only web's gitlink.
@@ -345,7 +345,7 @@ function workspaceWithThree() {
   const bares = { api: initBareUpstream(), web: initBareUpstream(), core: initBareUpstream() };
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor(Object.entries(bares).map(([alias, bare]) => ({ alias, bare }))));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
   return { cwd, bares };
@@ -432,7 +432,7 @@ test("record --all skips a pending removal and a staged pointer split", () => {
   git(cwd, "add", "oms/web");
   movePointer(cwd, "web", "second");
   // core: pending removal (removal left unstaged by unsync).
-  assert.equal(run(["unsync", "core"], { cwd }).status, 0);
+  assert.equal(run(["unsync", "core", "--no-commit"], { cwd }).status, 0);
 
   const result = run(["record", "--all"], { cwd });
   const output = result.stdout + result.stderr;
@@ -609,7 +609,7 @@ test("record rejects a missing recorded gitlink and points at topology commit", 
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0); // pending add: not recorded in HEAD
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0); // pending add: not recorded in HEAD
 
   const result = run(["record", "api"], { cwd });
   const output = result.stdout + result.stderr;
@@ -983,7 +983,7 @@ test("sync leaves reconciled metadata unstaged without a commit", () => {
   git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.branch", "develop");
   const headBefore = gitOut(cwd, "rev-parse", "HEAD");
 
-  const result = run(["sync", "api"], { cwd }); // no --commit, non-interactive
+  const result = run(["sync", "api", "--no-commit"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   // No new commit; the reconciled .gitmodules is a working-tree change, left unstaged.
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
@@ -1033,7 +1033,9 @@ test("sync restore reconciles .gitmodules metadata through the unified finalizat
   const bare = initBareUpstream({ branches: ["main", "develop"] });
   const cwd = initGitWorkspace();
   syncedSubmodule(cwd, "api", bare, "main");
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0); // pending removal, not committed
+  // The removal must stay uncommitted, or the root gitlink disappears from HEAD and the next sync
+  // takes the fresh-add path instead of restorePendingRemoval — silently voiding this test's subject.
+  assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
   // Change the manifest baseline to develop, then restore.
   writeFileSync(cwd + "/oms.yaml", `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n    branch: develop\n`);
 
@@ -1173,7 +1175,7 @@ test("every sync commit discloses and includes the complete working-tree oms.yam
   assert.match(gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD"), /oms\.yaml/);
 });
 
-test("plain partial multi-alias sync does not prompt and leaves successful changes unstaged", () => {
+test("plain partial multi-alias sync commits the successful alias and still exits non-zero", () => {
   const a = initBareUpstream();
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
@@ -1182,18 +1184,21 @@ test("plain partial multi-alias sync does not prompt and leaves successful chang
     `${sourceFor("api", a).trimEnd()}\n  - alias: web\n    remotes:\n      origin: file://${b}\n    branch: nope\n`,
   );
 
-  // No --commit, non-interactive: web fails, api succeeds, nothing is committed or staged.
+  // No flag, non-interactive: web fails and api succeeds. The add path finalizes only the successful
+  // alias through the temporary index, and the run still surfaces the failure in its exit code.
   const result = run(["sync", "api", "web"], { cwd });
   assert.notEqual(result.status, 0, result.stdout + result.stderr);
-  assert.notEqual(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  // The failed alias contributed no topology.
+  assert.doesNotMatch(readFileSync(join(cwd, ".gitmodules"), "utf8"), /oms\/web/);
 });
 
 test("a temporary-commit failure before HEAD advances preserves the real index byte-for-byte", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0); // topology left unstaged
+  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0); // pending topology under test
 
   // Stage an unrelated path, capture the exact index bytes, then force a commit failure via a broken
   // commit identity so commit-tree fails before HEAD advances.

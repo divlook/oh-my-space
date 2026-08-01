@@ -114,7 +114,8 @@ program
   .argument("[aliases...]", "repo aliases to sync (omit for interactive multi-select)")
   .option("--all", "sync every registered source repo")
   .option("--list", "print registered repos")
-  .option("--commit", "create the root topology commit (chore(oms): add ...) without prompting")
+  .option("--commit", "accepted for compatibility; the root topology commit (chore(oms): add ...) is created by default")
+  .option("--no-commit", "leave the root topology changes unstaged instead of committing them")
   .addHelpText("after", `${syncHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SyncCommitOptions) => {
     await exitWith(runSync(aliases, options));
@@ -256,7 +257,8 @@ program
   .argument("[aliases...]", "repo aliases to unsync (omit for interactive multi-select)")
   .option("--all", "unsync every registered source repo")
   .option("--force", "discard uncommitted changes in the submodule")
-  .option("--commit", "create the root topology commit (chore(oms): remove ...) without prompting")
+  .option("--commit", "accepted for compatibility; the root topology commit (chore(oms): remove ...) is created by default")
+  .option("--no-commit", "leave the root topology changes unstaged instead of committing them")
   .addHelpText("after", `${unsyncHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: UnsyncOptions) => {
     await exitWith(runUnsync(aliases, options));

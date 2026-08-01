@@ -44,18 +44,20 @@ Examples:
   $ oms record --all           # record every moved pointer
 `;
 export const syncHelp = `
-Root topology changes (.gitmodules, oms/<alias>) are left unstaged by default; create the topology
-commit through the interactive prompt or with --commit.
+Root topology changes (.gitmodules, oms/<alias>) are committed by default, identically whether or not
+stdin is a terminal. Pass --no-commit to leave them unstaged for review instead.
 Examples:
-  $ oms sync api               # add/initialize/refresh oms/api (topology left unstaged)
-  $ oms sync api --commit      # also create chore(oms): add api submodule
+  $ oms sync api               # add/initialize/refresh oms/api, then chore(oms): add api submodule
+  $ oms sync api --no-commit   # leave the topology changes unstaged
+  $ oms sync api --commit      # same as the default; accepted for compatibility
 `;
 export const unsyncHelp = `
-Root topology changes are left unstaged by default; create the removal topology commit through the
-interactive prompt or with --commit.
+Removal topology changes are committed by default, identically whether or not stdin is a terminal.
+Pass --no-commit to leave them unstaged for review instead.
 Examples:
-  $ oms unsync api             # remove oms/api (topology left unstaged)
-  $ oms unsync api --commit    # also create chore(oms): remove api submodule
+  $ oms unsync api             # remove oms/api, then chore(oms): remove api submodule
+  $ oms unsync api --no-commit # leave the removal topology unstaged
+  $ oms unsync api --commit    # same as the default; accepted for compatibility
 `;
 export const pullHelp = `
 Scope: pulls the submodule branch only — it never stages or commits the root gitlink. Record a moved

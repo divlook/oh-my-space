@@ -1,4 +1,4 @@
-import { cancel, isCancel, log, select } from "@clack/prompts";
+import { log } from "@clack/prompts";
 import { runGit, shortSha, submodulePath } from "./git.js";
 import { stagedRootPaths } from "./root-index.js";
 import { gitlinkState, partialRemovalTopology, pendingAddTopology, pendingRemovalTopology } from "./status.js";
@@ -25,34 +25,21 @@ function unrelatedStagedTopologyPaths(repoRoot: string, aliases: string[]): stri
   return stagedRootPaths(repoRoot).filter((p) => !topo.has(p));
 }
 
-/** Ask whether to create a root topology commit; defaults to Yes. Returns null on cancellation. */
-async function confirmTopologyCommit(message: string): Promise<boolean | null> {
-  const choice = await select({
-    message: "Create a root topology commit?",
-    options: [
-      { value: "yes", label: `Yes, commit "${message}"` },
-      { value: "no", label: "No, leave the topology changes unstaged" },
-    ],
-    initialValue: "yes",
-  });
-  if (isCancel(choice)) {
-    cancel("Cancelled.");
-    return null;
-  }
-  return choice === "yes";
-}
-
 /**
  * Decide what happens to root topology changes after a successful sync/unsync: create a path-limited
- * topology commit (explicit `--commit`, or an interactive accept) or leave the changes unstaged by
- * default. A multi-alias commit happens only when every requested alias succeeded; partial removal
- * topology is rejected rather than committed. Returns a non-zero contribution on topology failure.
+ * topology commit by default, or leave the changes unstaged when the caller passed `--no-commit`.
+ * Partial removal topology is rejected rather than committed. Returns a non-zero contribution on
+ * topology failure.
+ *
+ * `commit` is tri-state on purpose. Commander yields `undefined` when neither `--commit` nor
+ * `--no-commit` is given, and programmatic callers (`runSync([alias], {})`) pass nothing at all, so
+ * the default is resolved here rather than at the flag declaration where those callers never see it.
  */
 export async function finalizeTopology(
   repoRoot: string,
   requested: string[],
   kind: TopologyKind,
-  commit: boolean,
+  commit: boolean | undefined,
   allSucceeded: boolean,
   metadataPlans: AliasMetadataPlan[] = [],
   omsYamlBytes: Buffer | null = null,
@@ -84,28 +71,17 @@ export async function finalizeTopology(
         ? `chore(oms): reconcile ${pending[0]} submodule metadata`
         : "chore(oms): reconcile submodule metadata";
 
-  // Decide whether a commit is created: explicit --commit, or an interactive accept (default Yes).
-  let createCommit = commit;
-  let declined = false;
-  if (!commit && process.stdin.isTTY && allSucceeded && partial.length === 0) {
-    const confirmed = await confirmTopologyCommit(message);
-    if (confirmed === null) {
-      unstageTopologyPaths(repoRoot, involved);
-      return 1;
-    }
-    createCommit = confirmed;
-    declined = !confirmed;
-  }
+  // The topology commit is the default; only an explicit --no-commit declines it. Resolving here
+  // rather than at the flag keeps the default identical for piped shells and programmatic callers.
+  const createCommit = commit ?? true;
 
   if (!createCommit) {
     unstageTopologyPaths(repoRoot, involved);
-    if (!declined) {
-      log.info("Root topology changes left unstaged. Review them, or re-run with --commit to record the topology change.");
-    }
+    log.info("Root topology changes left unstaged. Review and commit them, or re-run without --no-commit.");
     return 0;
   }
 
-  // A commit was requested or accepted; reject states that must not be committed.
+  // A commit will be created; reject states that must not be committed.
   if (partial.length > 0) {
     log.error(
       `Partial removal topology for ${partial.join(", ")} must be cleaned up before committing. Complete the removal (or restore the submodule), then retry.`,

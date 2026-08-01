@@ -238,9 +238,13 @@ test("branch list can sync an unregistered alias interactively, continue listing
   assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
   assert.match(accepted.stdout + accepted.stderr, /Branch inventory: api/);
   assert.equal(existsSync(join(acceptedCwd, "oms", "api", ".git")), true);
-  const pendingAdd = run(["branch", "list", "api"], { cwd: acceptedCwd });
-  assert.equal(pendingAdd.status, 1, pendingAdd.stdout + pendingAdd.stderr);
-  assert.match(pendingAdd.stdout + pendingAdd.stderr, /inconsistent|pending/);
+  // The delegated sync commits its topology, so the alias is fully registered across HEAD, the index,
+  // and the working tree. Repeating the command succeeds; it previously exited 1 as partially
+  // registered, which made the automation-first path break its own next invocation.
+  const rerun = run(["branch", "list", "api"], { cwd: acceptedCwd });
+  assert.equal(rerun.status, 0, rerun.stdout + rerun.stderr);
+  assert.match(rerun.stdout + rerun.stderr, /Branch inventory: api/);
+  assert.doesNotMatch(rerun.stdout + rerun.stderr, /inconsistent|pending/);
 
   const cancelledCwd = initGitWorkspace();
   writeSources(cancelledCwd, sourceFor("api", origin));
