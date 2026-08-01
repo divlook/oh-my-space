@@ -1,5 +1,6 @@
 import { log } from "@clack/prompts";
-import { aliasDir, currentBranch, isDirty, runSub, submoduleInitialized } from "./git.js";
+import { aliasDir, currentBranch, isDirty, runSub } from "./git.js";
+import { prepareAliases, resolveDetachedHead } from "./alias-preparation.js";
 import { loadForSubmodules } from "./manifest.js";
 import { exitFromResults, printSummary } from "./operation-results.js";
 import { resolveRemotes, selectRepos } from "./prompts.js";
@@ -7,10 +8,6 @@ import { printRootFollowups } from "./status.js";
 import type { ManageCommand, OperationResult, PushOptions, RemoteOptions, Repo, SourcesOptions } from "./types.js";
 
 function fetchRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
-  if (!submoduleInitialized(repoRoot, repo.alias)) {
-    log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
-    return "failed";
-  }
   for (const remote of remotes) {
     log.step(`${repo.alias}: git fetch ${remote} --prune`);
     const r = runSub(repoRoot, repo.alias, ["fetch", remote, "--prune"], true);
@@ -23,18 +20,7 @@ function fetchRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationRe
   return "fetched";
 }
 
-function pullRepo(repo: Repo, repoRoot: string, remote: string): OperationResult {
-  if (!submoduleInitialized(repoRoot, repo.alias)) {
-    log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
-    return "failed";
-  }
-  const branch = currentBranch(aliasDir(repoRoot, repo.alias));
-  if (!branch) {
-    log.error(
-      `${repo.alias}: detached HEAD. Run "oms branch switch ${repo.alias} <branch>" before pulling.`,
-    );
-    return "failed";
-  }
+function pullRepo(repo: Repo, repoRoot: string, remote: string, branch: string): OperationResult {
   if (isDirty(aliasDir(repoRoot, repo.alias))) {
     log.error(
       `${repo.alias}: submodule has uncommitted changes. Commit, stash, or clean them inside oms/${repo.alias} before pulling.`,
@@ -52,18 +38,7 @@ function pullRepo(repo: Repo, repoRoot: string, remote: string): OperationResult
   return "pulled";
 }
 
-function pushRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
-  if (!submoduleInitialized(repoRoot, repo.alias)) {
-    log.error(`${repo.alias}: not synced. Run "oms sync ${repo.alias}" first.`);
-    return "failed";
-  }
-  const branch = currentBranch(aliasDir(repoRoot, repo.alias));
-  if (!branch) {
-    log.error(
-      `${repo.alias}: detached HEAD. Run "oms branch switch ${repo.alias} <branch>" before pushing.`,
-    );
-    return "failed";
-  }
+function pushRepo(repo: Repo, repoRoot: string, remotes: string[], branch: string): OperationResult {
   if (isDirty(aliasDir(repoRoot, repo.alias))) {
     log.warn(`${repo.alias}: submodule has uncommitted changes; only the current HEAD will be pushed.`);
   }
@@ -105,21 +80,41 @@ export async function runManage(
   const picked = await selectRepos(repos, aliases, options, command);
   if (!picked || picked.length === 0) return 1;
 
-  // Each alias is processed independently; a per-alias failure does not stop later aliases.
-  const results: OperationResult[] = [];
-  for (const repo of picked) {
+  const prepared = await prepareAliases(repoRoot, picked, {
+    command,
+    topologyOffer: command !== "push",
+    explicitSelection: aliases.length > 0,
+  });
+  if (prepared.cancelled) return 1;
+
+  // Preparation failures remain per-alias operation failures; a user-chosen skip is reported without
+  // failing the invocation. Later aliases still run when one preparation or Git operation fails.
+  const results: OperationResult[] = [
+    ...prepared.failed.map((): OperationResult => "failed"),
+    ...prepared.skipped.map((): OperationResult => "skipped"),
+  ];
+  for (const repo of prepared.ready) {
     const remotes = await resolveRemotes(repo, options.remote, command);
     if (!remotes || remotes.length === 0) {
       results.push("failed");
       continue;
     }
-    if (command === "fetch") results.push(fetchRepo(repo, repoRoot, remotes));
-    else if (command === "pull") results.push(pullRepo(repo, repoRoot, remotes[0]));
-    else results.push(pushRepo(repo, repoRoot, remotes));
+    if (command === "fetch") {
+      results.push(fetchRepo(repo, repoRoot, remotes));
+      continue;
+    }
+    const attached = await resolveDetachedHead(repoRoot, repo, command);
+    if (!attached.ok) {
+      results.push("failed");
+      continue;
+    }
+    const branch = currentBranch(aliasDir(repoRoot, repo.alias))!;
+    if (command === "pull") results.push(pullRepo(repo, repoRoot, remotes[0], branch));
+    else results.push(pushRepo(repo, repoRoot, remotes, branch));
   }
   // Pull and push can move root pointers; hint once for the whole run so a wide selection that moved
   // several pointers does not print one "oms record <alias>" line per alias.
-  if (command !== "fetch") printRootFollowups(repoRoot, picked.map((r) => r.alias));
+  if (command !== "fetch") printRootFollowups(repoRoot, prepared.ready.map((r) => r.alias));
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results);
 }

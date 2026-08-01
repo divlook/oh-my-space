@@ -29,6 +29,7 @@ type PromptType = "select" | "confirm" | "multiselect";
 
 type ResponseEntry =
   | { type: "select"; value: string }
+  | { type: "select"; default: true }
   | { type: "confirm"; value: boolean }
   | { type: "multiselect"; values: string[] }
   | { type: "cancel" };
@@ -47,6 +48,7 @@ function validateEntry(entry: unknown, index: number): ResponseEntry {
   const e = entry as Record<string, unknown>;
   if (e.type === "cancel") return { type: "cancel" };
   if (e.type === "select") {
+    if (e.default === true) return { type: "select", default: true };
     if (typeof e.value !== "string") {
       throw new PromptQueueError(`${ENV_NAME}[${index}] select "value" must be a string.`);
     }
@@ -103,6 +105,7 @@ export function promptQueueActive(): boolean {
 type Consumed =
   | { injected: false }
   | { injected: true; cancelled: true }
+  | { injected: true; cancelled: false; useDefault: true }
   | { injected: true; cancelled: false; value: string | boolean | string[] };
 
 /** Consume the next queued response for a prompt of the given kind, or defer to a real prompt. */
@@ -119,6 +122,9 @@ function consume(kind: PromptType): Consumed {
     throw new PromptQueueError(
       `${ENV_NAME}[${cursor - 1}] is a "${entry.type}" response but a "${kind}" prompt was requested.`,
     );
+  }
+  if (entry.type === "select" && "default" in entry) {
+    return { injected: true, cancelled: false, useDefault: true };
   }
   return {
     injected: true,
@@ -144,7 +150,14 @@ export async function guardedSelect<Value>(
 ): Promise<Value | symbol> {
   const injected = consume("select");
   if (injected.injected) {
-    return injected.cancelled ? PROMPT_CANCEL : (injected.value as Value);
+    if (injected.cancelled) return PROMPT_CANCEL;
+    if ("useDefault" in injected) {
+      if (options.initialValue === undefined) {
+        throw new PromptQueueError("A queued select default requires the prompt to declare initialValue.");
+      }
+      return options.initialValue;
+    }
+    return injected.value as Value;
   }
   return clackSelect<Value>(options);
 }
@@ -155,6 +168,9 @@ export async function guardedMultiselect<Value>(
 ): Promise<Value[] | symbol> {
   const injected = consume("multiselect");
   if (injected.injected) {
+    if (!injected.cancelled && "useDefault" in injected) {
+      throw new PromptQueueError("A queued default is valid only for a select prompt.");
+    }
     return injected.cancelled ? PROMPT_CANCEL : (injected.value as Value[]);
   }
   return clackMultiselect<Value>(options);
@@ -166,6 +182,9 @@ export async function guardedConfirm(
 ): Promise<boolean | symbol> {
   const injected = consume("confirm");
   if (injected.injected) {
+    if (!injected.cancelled && "useDefault" in injected) {
+      throw new PromptQueueError("A queued default is valid only for a select prompt.");
+    }
     return injected.cancelled ? PROMPT_CANCEL : (injected.value as boolean);
   }
   return clackConfirm(options);

@@ -148,10 +148,12 @@ test("commit prints a topology hint instead of record when the root gitlink is u
   assert.doesNotMatch(output, /oms record api/);
 });
 
-test("commit rejects a detached submodule HEAD without touching the root", () => {
+test("commit rejects an unanchored detached submodule HEAD without touching the root", () => {
   const { cwd } = workspaceWithApi();
   const wt = join(cwd, "oms", "api");
+  git(wt, "commit", "--allow-empty", "-m", "detached tip");
   git(wt, "checkout", "--detach");
+  git(wt, "branch", "-f", "main", "HEAD^");
   const rootHeadBefore = gitOut(cwd, "rev-parse", "HEAD");
 
   const result = run(["commit", "api", "-m", "x"], { cwd });
@@ -218,26 +220,59 @@ test("commit gives an explicit alias precedence over the current submodule conte
   assert.notEqual(gitOut(join(cwd, "oms", "api"), "log", "-1", "--pretty=%s"), "feat: explicit web");
 });
 
-test("commit infers the alias before preconditions and fails when uninitialized", () => {
+test("commit infers the alias and initializes it before evaluating preconditions", () => {
   const { cwd } = workspaceWithApi();
   const clone = tempFixture("oms-clone-");
   execFileSync("git", ["clone", cwd, clone], { stdio: "ignore", env: testEnv });
   configIdentity(clone);
-  // oms/api exists as an uninitialized submodule directory in the fresh clone.
+  // oms/api exists as a registered but uninitialized submodule directory in the fresh clone.
+  assert.equal(existsSync(join(clone, "oms", "api", ".git")), false);
+  const rootHeadBefore = gitOut(clone, "rev-parse", "HEAD");
+
   const result = run(["commit", "-m", "x"], { cwd: join(clone, "oms", "api") });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /not initialized/);
-  assert.match(output, /oms sync api/);
+
+  // Initializing a registered alias needs no root topology change, so it happens automatically and
+  // the command proceeds to its real precondition — which here is simply that nothing has changed.
+  assert.equal(result.status, 0, output);
+  assert.match(output, /initializing registered submodule/);
+  assert.match(output, /Nothing to commit for api/);
+  assert.equal(existsSync(join(clone, "oms", "api", ".git")), true);
+  // Auto-initialization must not touch the root repository.
+  assert.equal(gitOut(clone, "rev-parse", "HEAD"), rootHeadBefore);
+  assert.equal(gitOut(clone, "diff", "--cached", "--name-only"), "");
 });
 
-test("commit without an alias outside any submodule fails in a non-TTY shell", () => {
-  const { cwd } = workspaceWithApi();
-  const result = run(["commit", "-m", "x"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /alias/i);
-  assert.match(output, /not a TTY/);
+test("commit without an alias resolves by candidate count, not by the terminal", () => {
+  // Zero candidates: the workspace is clean, so there is no intent to supply and no reason to fail.
+  // This matches what `oms commit api` on that same clean submodule already does.
+  const clean = workspaceWithApi();
+  const none = run(["commit", "-m", "x"], { cwd: clean.cwd });
+  assert.equal(none.status, 0, none.stdout + none.stderr);
+  assert.match(none.stdout + none.stderr, /Nothing to commit in any submodule/);
+
+  // Exactly one candidate: auto-selected in a pipe, exactly as it already was in a terminal.
+  const single = workspaceWithApi();
+  writeFileSync(join(single.cwd, "oms", "api", "work.txt"), "x");
+  const one = run(["commit", "-m", "feat: work"], { cwd: single.cwd });
+  const oneOut = one.stdout + one.stderr;
+  assert.equal(one.status, 0, oneOut);
+  assert.match(oneOut, /Selected "api" \(the only dirty submodule\)/);
+  assert.match(oneOut, /api: committed/);
+
+  // Two candidates is genuine ambiguity, so a pipe still refuses and names both.
+  const a = initBareUpstream();
+  const b = initBareUpstream();
+  const many = initGitWorkspace();
+  writeSources(many, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
+  assert.equal(run(["sync", "--all"], { cwd: many }).status, 0);
+  writeFileSync(join(many, "oms", "api", "f.txt"), "x");
+  writeFileSync(join(many, "oms", "web", "f.txt"), "x");
+  const two = run(["commit", "-m", "x"], { cwd: many });
+  const twoOut = two.stdout + two.stderr;
+  assert.equal(two.status, 1, twoOut);
+  assert.match(twoOut, /not a TTY/);
+  assert.match(twoOut, /api, web/);
 });
 
 // --- oms record (root gitlink pointer commits only) ---
@@ -385,6 +420,40 @@ test("record --all records every moved pointer and leaves unmoved ones alone", (
   const committed = gitOut(cwd, "show", "--name-only", "--pretty=format:", "HEAD");
   assert.match(committed, /oms\/web/);
   assert.doesNotMatch(committed, /oms\/(api|core)/);
+});
+
+test("record without a selection resolves by candidate count, not by the terminal", () => {
+  const moveOne = (cwd, alias) => {
+    writeFileSync(join(cwd, "oms", alias, "f.txt"), "x");
+    git(join(cwd, "oms", alias), "add", "-A");
+    git(join(cwd, "oms", alias), "commit", "-m", "work");
+  };
+
+  // Zero moved pointers: nothing to decide, so a pipe reports the no-op and exits 0.
+  const none = workspaceWithThree();
+  const zero = run(["record"], { cwd: none.cwd });
+  assert.equal(zero.status, 0, zero.stdout + zero.stderr);
+  assert.match(zero.stdout + zero.stderr, /Nothing to record for any submodule/);
+
+  // Exactly one: auto-selected in a pipe, where this previously failed with /not a TTY/.
+  const single = workspaceWithThree();
+  moveOne(single.cwd, "api");
+  const one = run(["record"], { cwd: single.cwd });
+  const oneOut = one.stdout + one.stderr;
+  assert.equal(one.status, 0, oneOut);
+  assert.match(oneOut, /Selected "api" \(the only moved pointer\)/);
+  assert.equal(gitOut(single.cwd, "log", "-1", "--pretty=%s").startsWith("chore(oms): update api"), true);
+
+  // Two moved pointers is real ambiguity, so a pipe refuses and names both plus --all.
+  const many = workspaceWithThree();
+  moveOne(many.cwd, "api");
+  moveOne(many.cwd, "web");
+  const two = run(["record"], { cwd: many.cwd });
+  const twoOut = two.stdout + two.stderr;
+  assert.equal(two.status, 1, twoOut);
+  assert.match(twoOut, /not a TTY/);
+  assert.match(twoOut, /api, web/);
+  assert.match(twoOut, /--all/);
 });
 
 test("record --all with nothing moved is a no-op", () => {

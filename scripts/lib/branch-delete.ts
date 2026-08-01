@@ -18,6 +18,7 @@ import { gitlinkState, submoduleOperationInProgress } from "./status.js";
 import { resolveBaselines, type ProtectedReason } from "./branch-baseline.js";
 import { guardedConfirm, guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
+import { prepareAlias } from "./alias-preparation.js";
 import { runBranchList } from "./branch-list.js";
 import { runCheckout, runSwitch } from "./branch-ops.js";
 
@@ -64,30 +65,9 @@ export async function runBranch(command: Command): Promise<number> {
 
 type AliasResult = { kind: "repo"; repo: Repo } | { kind: "error"; code: number };
 
-/** Initialize an explicitly named registered-but-uninitialized alias, or classify why it cannot delete. */
-function prepareRegisteredAlias(repoRoot: string, repo: Repo): { ok: true } | { ok: false; code: number } {
-  const alias = repo.alias;
-  if (submoduleInitialized(repoRoot, alias)) return { ok: true };
-
-  const state = gitlinkState(repoRoot, alias);
-  const registered = state.headOid !== null && state.gitmodulesEntry;
-  if (!registered) {
-    log.error(
-      `${alias}: not registered as a submodule (no root gitlink or .gitmodules entry). Run "oms sync ${alias}" first.`,
-    );
-    return { ok: false, code: 1 };
-  }
-
-  log.step(`${alias}: git submodule update --init ${submodulePath(alias)}`);
-  const upd = runGit(repoRoot, ["submodule", "update", "--init", "--", submodulePath(alias)], true);
-  if (!upd.success) {
-    log.error(
-      `${alias}: git submodule update --init failed (exit ${upd.exitCode}). Resolve it and retry; Git's partial state was preserved.`,
-    );
-    return { ok: false, code: 2 };
-  }
-  return { ok: true };
-}
+// Deleting a branch presupposes a deletable local branch, which a fresh registration cannot have,
+// so this command refuses an unregistered alias instead of offering to create root topology.
+const PREPARE = { command: "branch delete", topologyOffer: false } as const;
 
 /** Resolve the single alias to operate on: explicit (with auto-init), or an interactive picker. */
 async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: string | undefined): Promise<AliasResult> {
@@ -97,7 +77,7 @@ async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: str
       log.error(`Unknown alias "${aliasArg}". Use "oms sync --list" to see registered aliases.`);
       return { kind: "error", code: 1 };
     }
-    const prep = prepareRegisteredAlias(repoRoot, repo);
+    const prep = await prepareAlias(repoRoot, repo, PREPARE);
     if (!prep.ok) return { kind: "error", code: prep.code };
     return { kind: "repo", repo };
   }

@@ -9,6 +9,7 @@ import {
   submoduleInitialized,
   submodulePath,
 } from "./git.js";
+import { prepareAlias, resolveDetachedHead } from "./alias-preparation.js";
 import { loadForSubmodules } from "./manifest.js";
 import { exitFromResults, printSummary } from "./operation-results.js";
 import { resolveCommandAlias, resolveRecordAliases } from "./prompts.js";
@@ -61,10 +62,15 @@ export async function runCommit(alias: string | undefined, options: CommitOption
   const selected = resolution.alias;
   const dir = aliasDir(repoRoot, selected);
 
-  if (!submoduleInitialized(repoRoot, selected)) {
-    log.error(`${selected}: not initialized. Run "oms sync ${selected}" to initialize it first.`);
+  // Committing presupposes uncommitted source changes, which a freshly registered alias cannot have,
+  // so this path initializes a registered alias but refuses to create topology for an unregistered one.
+  const repo = repos.find((r) => r.alias === selected);
+  if (!repo) {
+    log.error(`Unknown alias "${selected}". Use "oms sync --list" to see registered aliases.`);
     return 1;
   }
+  const prepared = await prepareAlias(repoRoot, repo, { command: "commit", topologyOffer: false, requiresSettledTopology: false });
+  if (!prepared.ok) return prepared.code;
   // Check for an in-progress operation before detached HEAD, since a rebase detaches HEAD and should
   // report "rebase in progress" rather than a generic detached-HEAD message.
   const op = gitOperationInProgress(dir);
@@ -74,10 +80,9 @@ export async function runCommit(alias: string | undefined, options: CommitOption
     );
     return 1;
   }
-  if (currentBranch(dir) === null) {
-    log.error(`${selected}: detached HEAD. Run "oms branch switch ${selected} <branch>" before committing.`);
-    return 1;
-  }
+  // A branch already at HEAD attaches silently; anything that would move the checkout asks first.
+  const attached = await resolveDetachedHead(repoRoot, repo, "commit");
+  if (!attached.ok) return attached.code;
 
   const messages = options.message ?? [];
   const counts = changeCounts(dir, new Set());

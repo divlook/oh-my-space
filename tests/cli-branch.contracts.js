@@ -290,20 +290,29 @@ test("bare branch selector dispatches into the switch flow", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   syncedSubmodule(cwd, "api", bare);
-  // Selecting switch dispatches into runSwitch; its own alias resolution then reports the
-  // switch-specific non-TTY hint, proving the selector entered the switch flow.
+  // The sole configured alias auto-selects, so the flow now advances to branch selection. Switch
+  // consults no remote, so the absence of a fetch step is what proves it entered the switch flow
+  // rather than checkout, which fetches origin before prompting.
   const res = run(["branch"], { cwd, env: queueEnv([{ type: "select", value: "switch" }]) });
-  assert.equal(res.status, 1, res.stdout + res.stderr);
-  assert.match(res.stdout + res.stderr, /oms branch switch <alias>/);
+  const out = res.stdout + res.stderr;
+  assert.equal(res.status, 1, out);
+  assert.match(out, /Selected "api" \(the only configured source repo\)/);
+  assert.doesNotMatch(out, /git fetch origin --prune/);
+  assert.match(out, /No branch given and stdin is not a TTY/);
 });
 
 test("bare branch selector dispatches into the checkout flow", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   syncedSubmodule(cwd, "api", bare);
+  // Checkout is remote-tracking, so it fetches origin before prompting for a branch. That fetch
+  // step is what distinguishes it from the switch flow now that the sole configured alias auto-selects.
   const res = run(["branch"], { cwd, env: queueEnv([{ type: "select", value: "checkout" }]) });
-  assert.equal(res.status, 1, res.stdout + res.stderr);
-  assert.match(res.stdout + res.stderr, /oms branch checkout <alias>/);
+  const out = res.stdout + res.stderr;
+  assert.equal(res.status, 1, out);
+  assert.match(out, /Selected "api" \(the only configured source repo\)/);
+  assert.match(out, /git fetch origin --prune/);
+  assert.match(out, /No branch given and stdin is not a TTY/);
 });
 
 test("bare branch prints help and exits 1 in a non-interactive shell", () => {

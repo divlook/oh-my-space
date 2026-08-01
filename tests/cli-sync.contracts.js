@@ -286,12 +286,15 @@ test("push --record is unsupported and fails before pushing", () => {
   assert.match(output, /oms record api/);
 });
 
-test("push fails clearly when the submodule is on a detached HEAD", () => {
+test("push fails clearly when detached HEAD has no local branch at its commit", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
   assert.equal(run(["sync", "api"], { cwd }).status, 0);
-  git(join(cwd, "oms", "api"), "checkout", "--detach");
+  const dir = join(cwd, "oms", "api");
+  git(dir, "commit", "--allow-empty", "-m", "detached tip");
+  git(dir, "checkout", "--detach");
+  git(dir, "branch", "-f", "main", "HEAD^");
 
   const result = run(["push", "api"], { cwd });
   const output = result.stdout + result.stderr;
@@ -1166,9 +1169,11 @@ test("pull rejects a dirty submodule before running", () => {
   assert.match(output, /uncommitted changes/);
 });
 
-test("pull rejects a detached submodule HEAD", () => {
+test("pull rejects detached HEAD with no local branch at its commit", () => {
   const { cwd, wt } = workspaceWithApi();
+  git(wt, "commit", "--allow-empty", "-m", "detached tip");
   git(wt, "checkout", "--detach");
+  git(wt, "branch", "-f", "main", "HEAD^");
 
   const result = run(["pull", "api"], { cwd });
   const output = result.stdout + result.stderr;
