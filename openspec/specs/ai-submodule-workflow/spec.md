@@ -117,7 +117,7 @@ The system SHALL provide `oms status --json` to report the root repository and c
 - **AND** stdout does not contain JSON
 
 ### Requirement: Shared alias preparation across commands
-The system SHALL prepare a selected alias through one shared implementation for every command that operates inside a submodule working tree — `oms commit`, `oms fetch`, `oms pull`, `oms push`, `oms branch list`, `oms branch switch`, `oms branch checkout`, and `oms branch delete` — classifying its root registration, initializing it automatically when that requires no root topology change, and offering topology-creating registration only for the commands a fresh registration could serve. `oms status`, `oms doctor`, and `oms record` SHALL NOT perform this preparation.
+The system SHALL prepare a selected alias through one shared implementation for every command that operates inside a submodule working tree — `oms commit`, `oms fetch`, `oms pull`, `oms push`, `oms branch list`, `oms branch switch`, `oms branch checkout`, and `oms branch delete` — classifying its root registration, initializing it automatically when that requires no root topology change, and offering topology-creating registration only for the commands a fresh registration could serve. `oms status`, `oms doctor`, and `oms record` SHALL NOT perform this preparation. When automatic initialization cannot attach the resolved baseline because Git refuses the branch operation, preparation SHALL report the failure and exit non-zero instead of continuing the requested command.
 
 #### Scenario: Registration is classified consistently for every command
 - **WHEN** any preparing command resolves an alias
@@ -130,6 +130,14 @@ The system SHALL prepare a selected alias through one shared implementation for 
 - **THEN** OMS initializes only that alias automatically
 - **AND** does not create, stage, or commit root topology
 - **AND** continues the requested command without requiring a separate command
+
+#### Scenario: Baseline attachment failure stops automatic initialization
+- **WHEN** a preparing command automatically initializes a registered alias
+- **AND** Git refuses to create or switch to the resolved baseline branch
+- **THEN** OMS reports the Git diagnostic and names the alias whose attachment failed
+- **AND** leaves the initialized submodule at its checked-out commit
+- **AND** does not continue the requested command
+- **AND** exits non-zero
 
 #### Scenario: Unregistered alias is offered registration for commands a fresh clone can serve
 - **WHEN** the selected alias is declared in `oms.yaml` but not registered in the root repository
@@ -1181,7 +1189,7 @@ The system SHALL resolve every applicable declared, registered, or default basel
 - **THEN** the command exits 1 without deleting that branch
 
 ### Requirement: Existing submodule metadata reconciliation
-The system SHALL reconcile an existing or restored selected submodule's OMS-managed `.gitmodules` URL and branch metadata from `oms.yaml` after topology mutation and baseline validation, then include successful plans in the same root commit-or-unstage finalization as successful topology.
+The system SHALL reconcile an existing or restored selected submodule's OMS-managed `.gitmodules` URL and branch metadata from `oms.yaml` after topology mutation and baseline validation, then include successful plans in the same root commit-or-unstage finalization as successful topology. When sync encounters a detached submodule `HEAD`, it SHALL attach the resolved baseline only when the attachment preserves the checked-out commit; otherwise it SHALL preserve the detached commit and root gitlink, report the divergent baseline, and provide explicit branch-switch and pull guidance. When Git refuses the branch operation instead, sync SHALL report that alias as failed rather than as a successful attachment.
 
 #### Scenario: User-owned Gitmodules state is rejected before mutation
 - **WHEN** `.gitmodules` is unmerged, the root has an in-progress Git operation, or a pre-staged selected OMS path differs in blob or mode from its validated commit result
@@ -1217,6 +1225,30 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 #### Scenario: Reconciliation preserves current working branch
 - **WHEN** metadata reconciliation changes the baseline while the submodule is attached to another branch
 - **THEN** sync does not switch the current working branch
+
+#### Scenario: Detached baseline at the current commit attaches safely
+- **WHEN** sync initializes or updates a selected alias at detached `HEAD`
+- **AND** the resolved local baseline branch points at exactly the current commit, or does not yet exist
+- **THEN** sync attaches or creates that baseline without changing the checked-out commit
+- **AND** preserves the root gitlink value
+
+#### Scenario: Refused baseline attachment fails the alias
+- **WHEN** sync attaches the resolved baseline for a selected alias at detached `HEAD`
+- **AND** Git refuses to create or switch to that branch
+- **THEN** sync reports the Git diagnostic and names the alias whose attachment failed
+- **AND** the refused attachment neither moves the checked-out commit nor writes the root gitlink
+- **AND** reports that alias as failed rather than added or updated
+- **AND** exits non-zero
+
+#### Scenario: Diverged detached baseline preserves the recorded pointer
+- **WHEN** sync initializes a registered alias at the root repository's recorded gitlink commit
+- **AND** the resolved local baseline branch points at a different commit
+- **THEN** sync does not switch to the baseline branch
+- **AND** leaves the submodule detached at the recorded commit
+- **AND** leaves the root gitlink and root index clean
+- **AND** reports the current and baseline commits without exposing remote URLs
+- **AND** names `oms branch switch <alias> <baseline>` and `oms pull <alias>` as explicit ways to advance
+- **AND** exits 0
 
 #### Scenario: Reconciled metadata follows the root finalization decision
 - **WHEN** sync changes `.gitmodules` URL or branch metadata for an existing submodule
