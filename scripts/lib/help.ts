@@ -26,6 +26,9 @@ Examples:
 export const commitHelp = `
 Scope: commits inside the selected oms/<alias>/ submodule only — never the root gitlink. Existing staged
 changes are committed as-is (staged-first); otherwise all changes are staged with git add -A.
+Preparation initializes an existing registration automatically, but refuses an unregistered alias because
+a fresh clone has no source changes to commit. A detached HEAD attaches automatically when a local branch
+points at the same commit; otherwise OMS asks before moving the checkout or reports branch-switch guidance.
 An explicit alias takes precedence over an alias inferred from the current configured oms/<alias>/ path.
 Examples:
   $ oms commit api -m "feat: add login"   # commit submodule source changes
@@ -59,22 +62,60 @@ Examples:
   $ oms unsync api --no-commit # leave the removal topology unstaged
   $ oms unsync api --commit    # same as the default; accepted for compatibility
 `;
+export const fetchHelp = `
+Preparation initializes existing registrations automatically. An unregistered alias is offered an explicit
+sync; accepting creates a root topology commit, then fetch continues. A multi-alias selection asks once;
+--all and picker selections default to skipping unregistered aliases, while named aliases default to sync.
+The fetch itself changes only submodule remote-tracking refs.
+Example:
+  $ oms fetch api
+`;
 export const pullHelp = `
 Scope: pulls the submodule branch only — it never stages or commits the root gitlink. Record a moved
-root pointer afterward with "oms record <alias>".
+root pointer afterward with "oms record <alias>". Preparation follows fetch: automatic initialization,
+an explicit registration offer whose acceptance creates a root topology commit, and one offer per batch.
+A detached HEAD attaches automatically when a local branch points at its commit; otherwise OMS asks before
+moving the checkout or reports branch-switch guidance.
 Example:
   $ oms pull api
 `;
 export const pushHelp = `
-Scope: pushes the submodule branch only — it never stages or commits the root gitlink. Staging a pointer
-for review is not the same as recording a pointer commit: "--commit" is unsupported, so push the branch
-with "oms push <alias>", then record the existing root pointer update with "oms record <alias>".
+Scope: pushes the submodule branch only — it never stages or commits the root gitlink. Preparation
+initializes an existing registration automatically, but refuses an unregistered alias because a fresh clone
+has no commits to push. A detached HEAD follows the same attach-or-choose rule as pull. Staging a pointer
+for review is not the same as recording a pointer commit: "--commit" is unsupported, so push with
+"oms push <alias>", then record the existing root pointer update with "oms record <alias>".
 Examples:
   $ oms push api
   $ oms push api web           # push several aliases
-  $ oms push --all             # push every registered source repo
+  $ oms push --all             # push every declared source repo
   $ oms push                   # pick the aliases interactively
   $ oms record api             # record the moved root pointer
+`;
+export const branchSwitchHelp = `
+Preparation initializes an existing registration automatically or offers to sync an unregistered alias.
+Accepting that offer creates a root topology commit before the local branch switch continues.
+`;
+export const branchCheckoutHelp = `
+Preparation initializes an existing registration automatically or offers to sync an unregistered alias.
+Accepting that offer creates a root topology commit before origin is fetched and checked out.
+`;
+export const branchListHelp = `
+Behavior:
+  Initializes an existing registration automatically; an unregistered alias requires an accepted sync,
+  which creates a root topology commit before listing continues.
+  Reconciles and fetches every oms.yaml remote with prune, retries once, then shows cached refs as stale.
+  Baseline state is known, incomplete, or unknown. Listing never switches or mutates a branch or root gitlink.
+  Exit 0 includes degraded remote results; exit 1 is selection/preparation refusal; exit 2 is initialization/local inspection failure.
+
+Examples:
+  $ oms branch list api
+  $ oms branch list
+`;
+export const branchDeleteHelp = `
+Preparation initializes an existing registration automatically, but refuses an unregistered alias because a
+fresh clone has no deletable local branch. Partial registration is refused with oms sync repair guidance.
+Deletion remains local to the submodule and never changes root topology.
 `;
 export const agentInstallHelp = `
 Manages a marker-delimited block (<!-- OMS START --> ... <!-- OMS END -->) in oms/AGENTS.md and/or

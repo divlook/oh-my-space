@@ -13,8 +13,13 @@ import { runDoctor } from "./lib/doctor.js";
 import {
   agentInstallHelp,
   agentUninstallHelp,
+  branchCheckoutHelp,
+  branchDeleteHelp,
+  branchListHelp,
+  branchSwitchHelp,
   commitHelp,
   exitHelp,
+  fetchHelp,
   initHelp,
   pullHelp,
   pushHelp,
@@ -134,7 +139,7 @@ program
 
 program
   .command("commit")
-  .description("Commit source changes inside the selected submodule only (never the root gitlink).")
+  .description("Prepare the selected registration, then commit submodule source changes only (never the root gitlink).")
   .argument("[alias]", "registered source alias (omit to infer from the current oms/<alias>/ directory)")
   .option("-m, --message <message>", "commit message (repeatable; required only to create a commit)", collectRepeatable, [])
   .addHelpText("after", `${commitHelp}${workspaceContextHelp}${exitHelp}`)
@@ -163,12 +168,12 @@ const branchCommand = program
 branchCommand
   .command("switch")
   .description(
-    "Switch a submodule to a LOCAL branch, creating it locally if it does not exist yet (no remote required).",
+    "Prepare one declared source, then switch to or create a LOCAL branch (no remote required).",
   )
-  .argument("[alias]", "registered source alias (omit to pick interactively)")
+  .argument("[alias]", "declared source alias (omit to pick interactively)")
   .argument("[branch]", "local branch name (omit to pick from local branches or create one)")
   .option("--from <ref>", "start point for a new branch (default: current HEAD)")
-  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
+  .addHelpText("after", `${branchSwitchHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, branch: string | undefined, options: CheckoutOptions) => {
     await exitWith(runSwitch(alias, branch, options));
   });
@@ -176,23 +181,20 @@ branchCommand
 branchCommand
   .command("checkout")
   .description(
-    "Fetch origin, then check out a REMOTE branch (origin/*) as a local tracking branch.",
+    "Prepare one declared source, fetch origin, then check out a REMOTE branch as a local tracking branch.",
   )
-  .argument("[alias]", "registered source alias (omit to pick interactively)")
+  .argument("[alias]", "declared source alias (omit to pick interactively)")
   .argument("[branch]", "remote branch name (omit to pick from origin/* branches)")
-  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
+  .addHelpText("after", `${branchCheckoutHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, branch: string | undefined) => {
     await exitWith(runCheckout(alias, branch));
   });
 
 branchCommand
   .command("list")
-  .description("Prepare one submodule, refresh declared remotes, and list local and remote branches.")
+  .description("Prepare one declared source, refresh declared remotes, and list local and remote branches.")
   .argument("[alias]", "declared source alias (the sole alias is selected automatically)")
-  .addHelpText(
-    "after",
-    `\nBehavior:\n  Initializes safe existing registration automatically; an unregistered alias requires an accepted sync.\n  Reconciles and fetches every oms.yaml remote with prune, retries once, then shows cached refs as stale.\n  Baseline state is known, incomplete, or unknown. Listing never switches or mutates a branch or root gitlink.\n  Exit 0 includes degraded remote results; exit 1 is selection/preparation refusal; exit 2 is initialization/local inspection failure.\n\nExamples:\n  $ oms branch list api\n  $ oms branch list\n${workspaceContextHelp}${exitHelp}`,
-  )
+  .addHelpText("after", `${branchListHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined) => {
     await exitWith(runBranchList(alias));
   });
@@ -200,23 +202,23 @@ branchCommand
 branchCommand
   .command("delete")
   .description(
-    "Delete a LOCAL branch inside one initialized submodule (never a remote branch or the root gitlink).",
+    "Prepare one declared source, then delete a LOCAL branch (never a remote branch or root topology).",
   )
-  .argument("[alias]", "registered source alias (omit to pick interactively)")
+  .argument("[alias]", "declared source alias (omit to pick interactively)")
   .argument("[branch]", "local branch name (omit to pick from deletable local branches)")
   .option("-f, --force", "force-delete with git branch -D (still respects protected branches)")
-  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
+  .addHelpText("after", `${branchDeleteHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, branch: string | undefined, options: { force?: boolean }) => {
     await exitWith(runBranchDelete(alias, branch, options));
   });
 
 program
   .command("fetch")
-  .description("Run git fetch <remote> --prune in each submodule (defaults to origin).")
-  .argument("[aliases...]", "repo aliases to fetch (omit for interactive multi-select)")
-  .option("--all", "fetch every registered source repo")
+  .description("Prepare each selected source, then run git fetch <remote> --prune (defaults to origin).")
+  .argument("[aliases...]", "declared source aliases to fetch (omit for interactive multi-select)")
+  .option("--all", "fetch every declared source repo")
   .option("--remote <name>", "remote to fetch (repeatable; omit to choose interactively)", collectRepeatable, [])
-  .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
+  .addHelpText("after", `${fetchHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
     await exitWith(runManage("fetch", aliases, options));
   });
@@ -224,10 +226,10 @@ program
 program
   .command("pull")
   .description(
-    "Pull the submodule branch only (git pull --ff-only <remote>); never stages or commits the root gitlink (defaults to origin).",
+    "Prepare each selected source, then pull its submodule branch only; never records the root gitlink.",
   )
-  .argument("[aliases...]", "repo aliases to pull (omit for interactive multi-select)")
-  .option("--all", "pull every registered source repo")
+  .argument("[aliases...]", "declared source aliases to pull (omit for interactive multi-select)")
+  .option("--all", "pull every declared source repo")
   .option("--remote <name>", "remote to pull from (single; omit to choose interactively)", collectRepeatable, [])
   .addHelpText("after", `${pullHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
@@ -237,10 +239,10 @@ program
 program
   .command("push")
   .description(
-    "Push the submodule branch only (creating the remote branch on first push); never stages or commits the root gitlink. Use \"oms record <alias>\" for root pointer commits (defaults to origin).",
+    "Prepare each registered source, then push its submodule branch only; unregistered aliases are refused.",
   )
-  .argument("[aliases...]", "repo aliases to push (omit for interactive multi-select)")
-  .option("--all", "push every registered source repo")
+  .argument("[aliases...]", "declared source aliases to push (omit for interactive multi-select)")
+  .option("--all", "push every declared source repo")
   .option("--commit", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--record", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRepeatable, [])

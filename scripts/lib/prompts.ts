@@ -1,7 +1,8 @@
 import { cancel, log, multiselect, select, text } from "@clack/prompts";
 import { dim, pad, uniqueAliases } from "./env.js";
 import { aliasDir, isDirty, submoduleInitialized } from "./git.js";
-import { guardedMultiselect, isCancel, promptQueueActive } from "./prompt-adapter.js";
+import { prepareAlias } from "./alias-preparation.js";
+import { guardedMultiselect, guardedSelect, isCancel, promptQueueActive } from "./prompt-adapter.js";
 import { gitlinkState, inferAliasFromCwd, recordVerdict } from "./status.js";
 import type { ManageCommand, Repo, SourcesOptions } from "./types.js";
 
@@ -54,10 +55,8 @@ export async function selectInteractive(repos: Repo[], actionLabel: string): Pro
 }
 
 /**
- * Resolve a single alias for a per-repo branch command (switch/checkout). An explicit alias is
- * validated and must be a synced submodule; when omitted, the user picks one interactively from the
- * synced submodules. Returns null (with a clear message) on an unknown/unsynced alias, an empty set,
- * a non-interactive shell, or cancellation.
+ * Resolve and prepare a single alias for a per-repo branch command. Every declared repo is a valid
+ * candidate because preparation can initialize or offer to register it before branch work starts.
  */
 export async function resolveInitializedAlias(
   repos: Repo[],
@@ -65,41 +64,44 @@ export async function resolveInitializedAlias(
   alias: string | undefined,
   actionLabel: string,
 ): Promise<Repo | null> {
+  let repo: Repo | undefined;
   if (alias) {
-    const repo = repos.find((r) => r.alias === alias);
+    repo = repos.find((candidate) => candidate.alias === alias);
     if (!repo) {
       log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
       return null;
     }
-    if (!submoduleInitialized(repoRoot, alias)) {
-      log.error(`${alias}: not synced. Run "oms sync ${alias}" first.`);
+  } else if (repos.length === 0) {
+    log.error(`No source repos available for "oms ${actionLabel}". Add one to oms.yaml first.`);
+    return null;
+  } else if (repos.length === 1) {
+    repo = repos[0];
+    log.info(`Selected "${repo.alias}" (the only configured source repo).`);
+  } else {
+    if (!canPrompt()) {
+      log.error(
+        `Several source repos qualify for "oms ${actionLabel}" (${repos.map((candidate) => candidate.alias).join(", ")}) and stdin is not a TTY. Pass an alias: "oms ${actionLabel} <alias>".`,
+      );
       return null;
     }
-    return repo;
+    const choice = await guardedSelect<string>({
+      message: `Select a source repo for "oms ${actionLabel}"`,
+      options: repos.map((candidate) => ({
+        value: candidate.alias,
+        label: candidate.alias,
+        hint: candidate.branch ? `branch: ${candidate.branch}` : undefined,
+      })),
+    });
+    if (isCancel(choice)) {
+      cancel("Cancelled.");
+      return null;
+    }
+    repo = repos.find((candidate) => candidate.alias === (choice as string));
+    if (!repo) return null;
   }
 
-  const initialized = repos.filter((r) => submoduleInitialized(repoRoot, r.alias));
-  if (initialized.length === 0) {
-    log.error(`No synced submodules available for "oms ${actionLabel}". Run "oms sync" first.`);
-    return null;
-  }
-  if (!process.stdin.isTTY) {
-    log.error(`No alias given and stdin is not a TTY. Pass an alias: "oms ${actionLabel} <alias>".`);
-    return null;
-  }
-  const choice = await select({
-    message: `Select a source repo for "oms ${actionLabel}"`,
-    options: initialized.map((r) => ({
-      value: r.alias,
-      label: r.alias,
-      hint: r.branch ? `branch: ${r.branch}` : undefined,
-    })),
-  });
-  if (isCancel(choice)) {
-    cancel("Cancelled.");
-    return null;
-  }
-  return initialized.find((r) => r.alias === (choice as string)) ?? null;
+  const prepared = await prepareAlias(repoRoot, repo, { command: actionLabel, topologyOffer: true });
+  return prepared.ok ? repo : null;
 }
 
 /** Sentinel chosen in pickBranch to create a new branch instead of selecting an existing one. */
@@ -303,11 +305,8 @@ export async function resolveCommandAlias(
   const inferred = inferAliasFromCwd(repoRoot, repos);
   if (inferred) return { kind: "alias", alias: inferred };
 
-  if (!process.stdin.isTTY) {
-    log.error(`No alias given and stdin is not a TTY. Pass an alias: "oms ${command} <alias>".`);
-    return { kind: "error" };
-  }
-
+  // Count candidates before consulting the terminal. Zero and one need no human intent, so gating
+  // them on stdin made the same repository state succeed in a terminal and fail in a pipe.
   const candidates = commandCandidates(repos, repoRoot, command);
   const labels = candidateLabels(command);
 
@@ -319,8 +318,14 @@ export async function resolveCommandAlias(
     log.info(`Selected "${candidates[0]}" (the only ${labels.sole}).`);
     return { kind: "alias", alias: candidates[0] };
   }
+  if (!canPrompt()) {
+    log.error(
+      `Several submodules qualify for "oms ${command}" (${candidates.join(", ")}) and stdin is not a TTY. Pass one: "oms ${command} <alias>".`,
+    );
+    return { kind: "error" };
+  }
 
-  const choice = await select({
+  const choice = await guardedSelect<string>({
     message: `Select a submodule to ${command}`,
     options: candidates.map((a) => ({ value: a, label: a })),
   });
@@ -361,13 +366,8 @@ export async function resolveRecordAliases(
   const inferred = inferAliasFromCwd(repoRoot, repos);
   if (inferred) return { kind: "aliases", aliases: [inferred], explicit: true };
 
-  if (!canPrompt()) {
-    log.error(
-      `No alias given and stdin is not a TTY. Pass an alias ("oms record <alias>") or record every moved pointer with "oms record --all".`,
-    );
-    return { kind: "error" };
-  }
-
+  // Same ordering as resolveCommandAlias: the candidate count decides, and stdin only matters once
+  // more than one materially different choice exists.
   const candidates = commandCandidates(repos, repoRoot, "record");
   const labels = candidateLabels("record");
 
@@ -378,6 +378,12 @@ export async function resolveRecordAliases(
   if (candidates.length === 1) {
     log.info(`Selected "${candidates[0]}" (the only ${labels.sole}).`);
     return { kind: "aliases", aliases: candidates, explicit: false };
+  }
+  if (!canPrompt()) {
+    log.error(
+      `Several moved pointers qualify for "oms record" (${candidates.join(", ")}) and stdin is not a TTY. Pass an alias ("oms record <alias>") or record every moved pointer with "oms record --all".`,
+    );
+    return { kind: "error" };
   }
 
   const choice = await guardedMultiselect<string>({
