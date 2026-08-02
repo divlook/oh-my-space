@@ -1,54 +1,4 @@
-# readme-onboarding Specification
-
-## Purpose
-
-Define how the README and package metadata onboard first-time readers to `oh-my-space`, so they can quickly understand the tool's category and purpose, follow a compact usage flow, and still find detailed reference material.
-
-## Requirements
-
-### Requirement: README Identifies Tool Category Immediately
-The README SHALL identify `oh-my-space` as a small CLI for managing multi-repo workspaces with Git submodules before introducing detailed configuration or Git mechanics.
-
-#### Scenario: First-time reader opens README
-- **WHEN** a reader starts at the top of `README.md`
-- **THEN** the opening content states the tool category and core purpose without requiring prior knowledge of `oms.yaml` or submodule pointer terminology
-
-### Requirement: README Prioritizes Reader Journey
-The README SHALL function as a concise product landing page and SHALL move detailed operational and reference material into linked documents.
-
-#### Scenario: Reader scans the document structure
-- **WHEN** a reader scans the README headings from top to bottom
-- **THEN** the document presents the product definition, intended audience or representative use cases, and benefits; requirements and installation; a minimal quick start; purpose-based documentation links; and the license, without an exhaustive command reference
-
-#### Scenario: Reader reviews setup prerequisites
-- **WHEN** a reader reaches the early requirements or installation content
-- **THEN** it lists runtime and user requirements without mixing in contributor setup or local development commands
-
-#### Scenario: Existing user looks for detailed behavior
-- **WHEN** a reader needs workspace mechanics, command behavior, configuration details, AI coding guidance, migration instructions, or contributor information
-- **THEN** the README points to the focused document that owns that subject instead of embedding the complete reference
-
-### Requirement: README Provides Compact Usage Flow
-The README SHALL include a concise first-use example that reaches a synchronized workspace and visible status without listing the complete daily development workflow or every command.
-
-#### Scenario: Reader follows new-workspace setup
-- **WHEN** a reader follows the README Quick Start
-- **THEN** it shows `oms init`, a minimal one-repository `oms.yaml` with the schema comment and optional `branch` note, `oms sync --all`, and `oms status`
-
-#### Scenario: Reader continues to everyday work
-- **WHEN** a reader wants to switch branches, commit, push, or record a new repository commit after completing the README Quick Start
-- **THEN** the README directs the reader to the getting-started guide for the complete workflow
-
-### Requirement: README Preserves Reference Coverage
-The README SHALL keep all existing user-facing reference subjects discoverable through purpose-based links while each detailed subject remains in its focused documentation owner.
-
-#### Scenario: Existing user looks up command behavior
-- **WHEN** an existing user needs details about commands, requirements, synchronization behavior, `oms.yaml`, or migrations
-- **THEN** the README provides a direct description and link for the relevant focused document
-
-#### Scenario: Reader needs safety or recovery details
-- **WHEN** a reader needs protected-branch rules, commit-identity rechecks, preparation classifications, OMS-managed metadata updates, partial-success behavior, preserved-state information, or a recovery command
-- **THEN** the focused workspace or command documentation preserves that user-visible contract even though it is no longer embedded in the README
+## ADDED Requirements
 
 ### Requirement: Documentation Is Organized by Reader Intent
 The user-facing documentation SHALL separate detailed guidance into focused documents with one primary owner for each subject rather than repeating full explanations across the README and multiple guides.
@@ -114,9 +64,41 @@ Documentation links in the README SHALL work when the README is viewed on GitHub
 - **WHEN** a README section referenced by a migration guide moves into a focused document
 - **THEN** the migration guide links to the new owning document and section rather than the removed README anchor
 
-### Requirement: Package Metadata Matches README Positioning
-The package metadata description SHALL use the same product-category framing as the README opening.
+## MODIFIED Requirements
 
-#### Scenario: Reader sees package listing before README
-- **WHEN** a reader encounters the package description in npm or repository metadata
-- **THEN** the description identifies the package as a CLI for managing multi-repo workspaces with Git submodules rather than leading with `oms.yaml` configuration details
+### Requirement: README Prioritizes Reader Journey
+The README SHALL function as a concise product landing page and SHALL move detailed operational and reference material into linked documents.
+
+#### Scenario: Reader scans the document structure
+- **WHEN** a reader scans the README headings from top to bottom
+- **THEN** the document presents the product definition, intended audience or representative use cases, and benefits; requirements and installation; a minimal quick start; purpose-based documentation links; and the license, without an exhaustive command reference
+
+#### Scenario: Reader reviews setup prerequisites
+- **WHEN** a reader reaches the early requirements or installation content
+- **THEN** it lists runtime and user requirements without mixing in contributor setup or local development commands
+
+#### Scenario: Existing user looks for detailed behavior
+- **WHEN** a reader needs workspace mechanics, command behavior, configuration details, AI coding guidance, migration instructions, or contributor information
+- **THEN** the README points to the focused document that owns that subject instead of embedding the complete reference
+
+### Requirement: README Provides Compact Usage Flow
+The README SHALL include a concise first-use example that reaches a synchronized workspace and visible status without listing the complete daily development workflow or every command.
+
+#### Scenario: Reader follows new-workspace setup
+- **WHEN** a reader follows the README Quick Start
+- **THEN** it shows `oms init`, a minimal one-repository `oms.yaml` with the schema comment and optional `branch` note, `oms sync --all`, and `oms status`
+
+#### Scenario: Reader continues to everyday work
+- **WHEN** a reader wants to switch branches, commit, push, or record a new repository commit after completing the README Quick Start
+- **THEN** the README directs the reader to the getting-started guide for the complete workflow
+
+### Requirement: README Preserves Reference Coverage
+The README SHALL keep all existing user-facing reference subjects discoverable through purpose-based links while each detailed subject remains in its focused documentation owner.
+
+#### Scenario: Existing user looks up command behavior
+- **WHEN** an existing user needs details about commands, requirements, synchronization behavior, `oms.yaml`, or migrations
+- **THEN** the README provides a direct description and link for the relevant focused document
+
+#### Scenario: Reader needs safety or recovery details
+- **WHEN** a reader needs protected-branch rules, commit-identity rechecks, preparation classifications, OMS-managed metadata updates, partial-success behavior, preserved-state information, or a recovery command
+- **THEN** the focused workspace or command documentation preserves that user-visible contract even though it is no longer embedded in the README
