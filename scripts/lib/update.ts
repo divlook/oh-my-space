@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { cancel, isCancel, log, select } from "@clack/prompts";
 import semver from "semver";
-import { PACKAGE_NAME, REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
+import { REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
 import { readPackageVersion, runtimePlatform, testEnv } from "./env.js";
 import { findWorkspaceRoot } from "./git.js";
 import { detectInstallContext, formatCommand } from "./install-context.js";
-import { omsSkillsInstalled, reportSkillVersions } from "./skills.js";
+import { channelInstallCommand } from "./package-channels.js";
+import { omsSkillsInstalled, reportSkillFindings } from "./skills.js";
 import type { InstallContext, PackageManager, UpdateCommand, UpdateOptions } from "./types.js";
 
 async function fetchLatestPackageVersion(): Promise<string> {
@@ -77,12 +78,6 @@ function printGuidance(context: InstallContext): void {
   for (const command of context.guidance) log.message(`  ${command}`);
 }
 
-export function channelInstallCommand(manager: PackageManager, tag: "beta" | "latest"): string {
-  if (manager === "npm") return `npm install -g ${PACKAGE_NAME}@${tag}`;
-  if (manager === "pnpm") return `pnpm add -g ${PACKAGE_NAME}@${tag}`;
-  if (manager === "yarn") return `yarn global add ${PACKAGE_NAME}@${tag}`;
-  return `bun add -g ${PACKAGE_NAME}@${tag}`;
-}
 
 function prereleaseGuidanceManager(context: InstallContext): PackageManager | null {
   return context.manager ?? context.updateCommand?.executable ?? null;
@@ -172,9 +167,8 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
     if (prerelease) printPrereleaseStatus(currentVersion, latestVersion);
     if (comparison === 0) {
       if (prerelease) printPrereleaseGuidance(detectInstallContext());
-      // This binary is current, so the versions baked into it are the current reference and the
-      // skill comparison is exact here — unlike after an upgrade, where the new values are unknown.
-      reportSkillVersions(findWorkspaceRoot());
+      // This binary is current, so its baked skill references and runtime version are authoritative.
+      await reportSkillFindings(findWorkspaceRoot());
       log.success("oms is up to date.");
       return 0;
     }

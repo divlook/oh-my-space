@@ -1,9 +1,11 @@
 ---
 name: oms-workspace
 description: Use for Git work in a workspace containing an `oms.yaml` (source repos vendored as submodules under `oms/`) whenever the repository scope is ambiguous — committing or pushing "everything" from the workspace root, interpreting an `oms status` pointer that has moved, debugging a push, or adding or removing a repo with `oms sync` or `oms unsync`. Establishes workspace state and root-versus-submodule scope before acting on Git.
+compatibility: Requires oh-my-space >=1.0.0-0.
 metadata:
   author: oh-my-space
   version: "1.1.0"
+  oh-my-space-version: ">=1.0.0-0"
 ---
 
 # oms workspace scope

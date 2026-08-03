@@ -27,6 +27,18 @@ function fixture() {
   const versions = join(captureDir, "versions");
   mkdirSync(bin);
   mkdirSync(captureDir);
+  mkdirSync(join(root, ".changeset"));
+  writeFileSync(join(root, ".changeset", "config.json"), `${JSON.stringify({
+    changelog: false,
+    commit: false,
+    fixed: [],
+    linked: [],
+    access: "public",
+    baseBranch: "main",
+    updateInternalDependencies: "patch",
+    ignore: [],
+  }, null, 2)}\n`);
+  writeFileSync(join(root, ".changeset", "beta.md"), '---\n"oh-my-space": major\n---\n\nPrepare the next beta.\n');
   writeFileSync(join(root, ".gitignore"), ".fake-bin/\n.captures/\n.oms-verification.json\ndist/\n");
   writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "oh-my-space", version: "1.2.3", type: "module" }, null, 2)}\n`);
   writeFileSync(join(root, "package-lock.json"), `${JSON.stringify({ name: "oh-my-space", version: "1.2.3", lockfileVersion: 3, packages: { "": { name: "oh-my-space", version: "1.2.3" } } }, null, 2)}\n`);
@@ -53,7 +65,7 @@ exit 0
   chmodSync(npm, 0o755);
   const env = normalizedTestEnvironment({ PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` });
   execFileSync("git", ["init", "-b", "main", root], { env, stdio: "ignore" });
-  execFileSync("git", ["-C", root, "add", ".gitignore", "package.json", "package-lock.json"], { env });
+  execFileSync("git", ["-C", root, "add", ".gitignore", "package.json", "package-lock.json", ".changeset"], { env });
   execFileSync("git", ["-C", root, "commit", "-m", "fixture"], { env, stdio: "ignore" });
   const current = computeFingerprint({ cwd: root, env });
   writeVerificationRecord(root, {
@@ -78,7 +90,7 @@ test("beta dry-run and publish reuse stable verification, rebuild exact beta art
   const stableRecord = readVerificationRecord(root);
   assert.ok(stableRecord);
   const shortHead = execFileSync("git", ["-C", root, "rev-parse", "--short=7", "HEAD"], { env, encoding: "utf8" }).trim();
-  const expectedBeta = `1.2.3-beta.sha-${shortHead}`;
+  const expectedBeta = `2.0.0-beta.sha-${shortHead}`;
 
   const dryRun = runPublisher(root, env, ["--allow-dirty"]);
   assert.equal(dryRun.status, 0, dryRun.stdout + dryRun.stderr);

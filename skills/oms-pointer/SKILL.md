@@ -1,9 +1,11 @@
 ---
 name: oms-pointer
 description: Use after `oms commit` or `oms pull` moves a submodule's working commit, to record the moved root gitlink pointer with `oms record`. Covers the cross-command commit-or-pull-then-record loop so a submodule source change is not left without a recorded root pointer, and the root pointer is not committed by mistake.
+compatibility: Requires oh-my-space >=1.0.0-0.
 metadata:
   author: oh-my-space
   version: "1.1.0"
+  oh-my-space-version: ">=1.0.0-0"
 ---
 
 # Record the root pointer after a submodule commit moves

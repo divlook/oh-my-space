@@ -19,7 +19,7 @@ import {
   type RawGitRunner,
 } from "./git.js";
 import { abortOnLegacyRenameAt, abortOnLegacyWorktree, emitLegacyRenameHintWalkUp, loadRepos } from "./manifest.js";
-import { reportSkillVersions } from "./skills.js";
+import { reportSkillFindings } from "./skills.js";
 import { pinState } from "./status.js";
 import { gitignoreIgnoresOms } from "./workspace-ignore.js";
 
@@ -110,9 +110,8 @@ export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): 
     }
   }
 
-  // Informational only: a stale skill degrades an agent's guidance rather than breaking oms, and the
-  // global scope reflects state outside the workspace, so it must not move the exit code.
-  reportSkillVersions(repoRoot);
+  // Informational only: skill state may be global and never changes the doctor exit status.
+  await reportSkillFindings(repoRoot);
 
   return warnings > 0 ? 2 : 0;
 }

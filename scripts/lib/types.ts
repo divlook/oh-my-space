@@ -1,3 +1,5 @@
+import type { SkillReference } from "./skill-metadata.js";
+
 export type Repo = {
   alias: string;
   /** Named git remotes; must include "origin". Maps remote name to its clonable URL. */
@@ -101,21 +103,23 @@ export type InstallContext = {
 /** Where an installed skill was found: the user's home directory, or the workspace. */
 export type SkillScope = "global" | "project";
 
-/**
- * How an installed skill compares to the version baked into this build. "unverified" means a lock
- * file records the install but no `SKILL.md` could be located for it.
- */
-export type SkillVersionState = "current" | "older" | "newer" | "unverified";
+/** How installed skill content compares with the reference baked into this build. */
+export type SkillFreshness = "current" | "older" | "newer" | "unverified";
 
-export type SkillVersionFinding = {
+/** Whether the running OMS version satisfies the installed skill's declared range. */
+export type SkillCompatibility = "compatible" | "incompatible" | "unverified";
+
+export type SkillFinding = {
   /** Published skill name, e.g. "oms-branch". */
   name: string;
-  state: SkillVersionState;
-  /** Installed version, or null when absent, malformed, or the file could not be located. */
-  installed: string | null;
-  /** The version this build shipped. */
-  current: string;
-  /** Scopes this finding applies to; scopes that already match are not reported. */
+  freshness: SkillFreshness;
+  compatibility: SkillCompatibility;
+  /** Installed metadata values, or null when absent, malformed, or not located. */
+  installedVersion: string | null;
+  installedOmsVersion: string | null;
+  /** The complete skill reference baked into this build. */
+  reference: SkillReference;
+  /** Scopes sharing the same installed metadata and classifications. */
   scopes: SkillScope[];
 };
 

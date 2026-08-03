@@ -33,7 +33,7 @@ Creates a starter `oms.yaml` in the current directory. The directory must be out
 
 ### `oms doctor`
 
-Checks the nearest manifest, confirms that it belongs to the main Git root, diagnoses each declared repository, and reports installed OMS skills whose version differs from the running CLI. Skill-version findings are informational.
+Checks the nearest manifest, confirms that it belongs to the main Git root, diagnoses each declared repository, and independently reports installed skill freshness and compatibility with the running OMS version. Older or unverifiable skills receive `npx skills update`; incompatible skills prefer a satisfying npm `latest` release and otherwise a satisfying `beta`. These findings and the bounded registry lookup are informational.
 
 ### `oms status`
 
@@ -119,4 +119,4 @@ Shows installation commands for the OMS workspace skills. Install mode delegates
 
 Checks the npm registry and updates only when OMS can confidently identify a supported global installation. Project-local, temporary-runner, development, and unknown installations receive manual guidance instead of being mutated.
 
-Use check mode for a non-mutating version check. Automatic confirmation skipping applies only after OMS has printed and validated the detected installation context. See `oms update --help` for exact syntax.
+When OMS is already current, the command also reports skill freshness and runtime compatibility using the same stable-first, then beta guidance as `oms doctor`. After an upgrade, the old process defers those checks to `oms doctor`. Use check mode for a non-mutating version check; see `oms update --help` for exact syntax.

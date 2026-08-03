@@ -50,15 +50,17 @@ Skill loading is best-effort: an agent decides whether a skill description match
 
 ## Keep installed skills current
 
-Skills install from this repository while the CLI installs from npm, so their versions can drift. Each skill declares a semantic version in `SKILL.md`:
+Skills install from this repository while the CLI installs from npm, so skill freshness and OMS runtime compatibility can drift independently. Each skill declares both contracts:
 
 ```yaml
+compatibility: Requires oh-my-space >=1.0.0-0.
 metadata:
   author: oh-my-space
-  version: "1.0.0"
+  version: "1.1.0"
+  oh-my-space-version: ">=1.0.0-0"
 ```
 
-A major version changes the guardrail or scope contract, a minor version changes instructions or trigger descriptions, and a patch changes wording only.
+`metadata.version` is the skill content version. A major version changes the guardrail or scope contract, a minor version changes instructions or trigger descriptions, and a patch changes wording only. `metadata.oh-my-space-version` is the machine-readable OMS range required by those instructions. The top-level `compatibility` sentence must exactly mirror that range for humans and agents.
 
 Run:
 
@@ -66,11 +68,14 @@ Run:
 oms doctor
 ```
 
-`oms doctor` compares installed copies with the versions known by the running CLI. For an older or unknown skill, it prints the non-interactive `npx skills update <skill>` command. Named updates cover project and global scopes together. If an installed skill is newer than the CLI knows, the CLI is behind and the finding points to `oms update` instead.
+`oms doctor` evaluates two dimensions independently:
 
-`oms update` performs the same comparison when the CLI is already current. After a CLI update, it points back to `oms doctor` because the current process cannot load the newly installed CLI version.
+- **Freshness:** An older, missing, or unverifiable skill version prints the non-interactive `npx skills update <skill>` command. A newer skill is reported as content drift, but does not prove that OMS must be updated.
+- **Runtime compatibility:** The running OMS version is checked against the installed skill's `metadata.oh-my-space-version`. Missing or malformed compatibility metadata points back to a skill update or reinstall. A valid incompatible range triggers one best-effort npm channel lookup: a satisfying `latest` is preferred, otherwise a satisfying `beta` is recommended.
 
-Skill-version findings are informational and do not change the command's exit status. They affect agent guidance rather than OMS runtime behavior, and global installations are outside the workspace.
+`oms update` performs the same checks when the CLI is already current. After a CLI update, it points back to `oms doctor` because the old process cannot load the newly installed runtime's references.
+
+All skill findings are informational and do not change the command's exit status. An exact, compatible installation stays silent, and a registry lookup failure preserves the local mismatch report with explicit stable and beta inspection guidance.
 
 ## Recommended agent workflow
 

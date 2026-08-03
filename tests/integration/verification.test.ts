@@ -93,6 +93,22 @@ test("beta normalization accepts only the expected HEAD-derived three-field tran
   writeFileSync(join(root, "package.json"), `${JSON.stringify({ ...packageJson, version: beta }, null, 2)}\n`);
   writeFileSync(join(root, "package-lock.json"), `${JSON.stringify({ ...packageLock, version: beta, packages: { "": { ...packageLock.packages[""], version: beta } } }, null, 2)}\n`);
   assert.equal(computeFingerprint({ cwd: root, env }).fingerprint, stableFingerprint);
+  assert.equal(
+    computeFingerprint({ cwd: root, env: { ...env, OMS_BETA_SOURCE_VERSION: stable } }).fingerprint,
+    stableFingerprint,
+  );
+  assert.equal(
+    computeFingerprint({ cwd: root, env: { ...env, OMS_BETA_SOURCE_VERSION: `v${stable}` } }).fingerprint,
+    stableFingerprint,
+  );
+  assert.notEqual(
+    computeFingerprint({ cwd: root, env: { ...env, OMS_BETA_SOURCE_VERSION: "" } }).fingerprint,
+    stableFingerprint,
+  );
+  assert.notEqual(
+    computeFingerprint({ cwd: root, env: { ...env, OMS_BETA_SOURCE_VERSION: "not-semver" } }).fingerprint,
+    stableFingerprint,
+  );
 
   const changed = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   changed.scripts.test = "node other.js";

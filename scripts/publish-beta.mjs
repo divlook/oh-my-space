@@ -1,33 +1,38 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
+import getReleasePlan from "@changesets/get-release-plan";
+import { selectBetaBaseVersion } from "./lib/beta-release-plan.js";
+import { PACKAGE_NAME } from "./lib/package-info.js";
 
 const PACKAGE_JSON = "package.json";
 const PACKAGE_LOCK = "package-lock.json";
-const PACKAGE_NAME = "oh-my-space";
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
   printHelp();
   process.exit(0);
 }
+if (args.publish && args.allowDirty) {
+  fail("--allow-dirty is only supported for dry-run verification and cannot be combined with --publish.");
+}
 
 const packageJsonOriginal = readFileSync(PACKAGE_JSON, "utf8");
 const packageLockOriginal = readFileSync(PACKAGE_LOCK, "utf8");
 const packageJson = JSON.parse(packageJsonOriginal);
-const baseVersion = args.baseVersion ?? packageJson.version;
+let baseVersion;
+try {
+  baseVersion = selectBetaBaseVersion(await getReleasePlan(process.cwd()), packageJson.version);
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
 let shouldRestore = false;
 let activeChild;
 
 process.once("SIGINT", () => restoreAndExit("SIGINT", 130));
 process.once("SIGTERM", () => restoreAndExit("SIGTERM", 143));
 
-if (!isStableSemver(baseVersion)) {
-  fail(`--base-version must be a stable semver version, got ${baseVersion}`);
-}
-if (args.publish && args.allowDirty) {
-  fail("--allow-dirty is only supported for dry-run verification and cannot be combined with --publish.");
-}
+console.log(`Changesets stable target: ${baseVersion}`);
 if (!args.allowDirty && gitStatus().length > 0) {
   fail("Working tree must be clean before beta publishing. Use --allow-dirty only for intentional local verification.");
 }
@@ -59,28 +64,24 @@ try {
 
 /** Parses supported CLI flags. */
 function parseArgs(argv) {
-  const parsed = { publish: false, allowDirty: false, help: false, baseVersion: undefined };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
+  const parsed = { publish: false, allowDirty: false, help: false };
+  for (const arg of argv) {
     if (arg === "--publish") parsed.publish = true;
     else if (arg === "--allow-dirty") parsed.allowDirty = true;
     else if (arg === "--help" || arg === "-h") parsed.help = true;
-    else if (arg === "--base-version") parsed.baseVersion = requireValue(argv, ++i, arg);
     else fail(`Unknown option: ${arg}`);
   }
   return parsed;
 }
 
-/** Returns the required option value or exits with a usage error. */
-function requireValue(argv, index, option) {
-  const value = argv[index];
-  if (!value || value.startsWith("--")) fail(`${option} requires a value`);
-  return value;
-}
 
 /** Runs a command inheriting stdio and exits on failure. */
 async function run(command, args) {
-  const child = spawn(command, args, { stdio: "inherit", shell: process.platform === "win32" });
+  const child = spawn(command, args, {
+    stdio: "inherit",
+    shell: process.platform === "win32",
+    env: { ...process.env, OMS_BETA_SOURCE_VERSION: packageJson.version },
+  });
   activeChild = child;
   try {
     const [status, signal] = await once(child, "exit");
@@ -128,10 +129,6 @@ function gitStatus() {
   return git("status", "--porcelain");
 }
 
-/** Validates stable semver without accepting prerelease/build metadata. */
-function isStableSemver(version) {
-  return /^\d+\.\d+\.\d+$/.test(version);
-}
 
 /** Prints an error and exits. */
 function fail(message) {
@@ -141,14 +138,14 @@ function fail(message) {
 
 /** Prints command usage. */
 function printHelp() {
-  console.log(`Usage: npm run release:beta -- [--base-version 0.12.0] [--publish] [--allow-dirty]
+  console.log(`Usage: npm run release:beta -- [--publish] [--allow-dirty]
 
-Creates a temporary prerelease version like 0.12.0-beta.sha-a1b2c3d from the current commit.
+Derives the next stable version from pending Changesets and creates a temporary prerelease
+like 1.0.0-beta.sha-a1b2c3d from the current commit.
 
 Options:
-  --base-version <version>  Stable version base for the beta package. Defaults to package.json version.
-  --publish                 Publish to npm with the beta dist-tag. Omit for a dry-run pack.
-  --allow-dirty             Allow a dirty working tree for dry-run verification only.
-  -h, --help                Show this help.
+  --publish      Publish to npm with the beta dist-tag. Omit for a dry-run pack.
+  --allow-dirty  Allow a dirty working tree for dry-run verification only.
+  -h, --help     Show this help.
 `);
 }

@@ -5,7 +5,7 @@
 ## Channels
 
 - `latest`: stable channel. This is the default npm resolution target for `oh-my-space`.
-- `beta`: opt-in prerelease channel. This tag points to a semver prerelease such as `0.12.0-beta.sha-a1b2c3d` when a beta is available.
+- `beta`: opt-in prerelease channel. This tag points to a semver prerelease such as `1.0.0-beta.sha-a1b2c3d` when a beta is available.
 
 ## User installs
 
@@ -29,25 +29,27 @@ bun add -g oh-my-space@beta
 
 ## Maintainer beta flow
 
-Beta releases are manually published from a selected clean commit. They do not require a `beta` branch. The beta package version is created temporarily from the chosen base stable version and the current commit short hash, then discarded locally after publish or dry-run.
+Beta releases are manually published from a selected clean commit. They do not require a `beta` branch. The script derives the intended stable base from the pending Changesets release plan, appends the current commit short hash, and restores package metadata after publishing or dry-running.
 
-Preview the beta package without publishing:
+First add or confirm a pending Changeset whose computed `oh-my-space` release is the intended next stable version. Preview the beta package without publishing:
 
 ```bash
-npm run release:beta -- --base-version 0.12.0
+npm run release:beta
 ```
 
 Publish the beta package to the npm `beta` dist-tag:
 
 ```bash
-npm run release:beta -- --base-version 0.12.0 --publish
+npm run release:beta -- --publish
 ```
 
 The script:
 
+- Requires exactly one pending `oh-my-space` release with a stable, forward `newVersion`.
+- Rejects missing, ambiguous, prerelease, or non-forward release plans before changing package metadata.
 - Requires a clean working tree by default.
 - Rejects `--publish --allow-dirty` so published beta artifacts always match the printed source commit.
-- Temporarily sets a version such as `0.12.0-beta.sha-a1b2c3d`.
+- Temporarily sets a version such as `1.0.0-beta.sha-a1b2c3d`.
 - Runs npm's package flow, including the existing `prepack` test gate.
 - Publishes with `npm publish --tag beta` only when `--publish` is provided.
 - Restores `package.json` and `package-lock.json` after it finishes.
@@ -61,9 +63,11 @@ npm view oh-my-space dist-tags
 
 Confirm that `beta` points to the intended prerelease and that `latest` still points to the current stable release.
 
+The historical `0.14.2-beta.sha-6d0b8be` package sorts below stable `0.14.2` because both use the same base version. Do not unpublish it. Publishing the Changesets-derived `1.0.0-beta.sha-*` package moves the active `beta` tag forward while preserving npm history and gives skill compatibility ranges normal SemVer ordering.
+
 ## Beta iteration
 
-For follow-up beta fixes, choose the new commit and run the beta release script again. The short hash creates a new prerelease version, so there is no manual beta sequence number to maintain.
+For follow-up beta fixes, keep the pending Changesets release target unchanged, choose the new commit, and run the beta release script again. The script derives the same stable base, while the short hash creates a new prerelease version without a manual sequence number.
 
 ## Stable promotion
 
@@ -75,7 +79,7 @@ npm run release
 npm view oh-my-space dist-tags
 ```
 
-Confirm that `latest` points to the intended stable version and does not point to a prerelease such as `0.12.0-beta.1`.
+Confirm that `latest` points to the intended stable version and not to a prerelease such as `1.0.0-beta.sha-a1b2c3d`.
 
 ## Rollback
 

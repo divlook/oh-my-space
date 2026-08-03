@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DOCS_REPO_BLOB_BASE } from "./constants.js";
+import type { SkillReference } from "./skill-metadata.js";
 
 /** Absolute path of this module's file; the single source for import.meta.url across the CLI. */
 export const moduleFilePath = fileURLToPath(import.meta.url);
@@ -60,19 +61,18 @@ export function readBuildCommit(): string | null {
   return info?.commit ?? null;
 }
 
-/**
- * The published skill versions baked in at build time, or null when unavailable so callers skip
- * skill reporting rather than guessing (a build without skills/ has nothing to compare against).
- */
-export function readSkillVersions(): Record<string, string> | null {
-  const mocked = testEnv("OMS_TEST_SKILL_VERSIONS");
+/** Complete published skill references baked in at build time, or null when unavailable. */
+export function readSkillReferences(): Record<string, SkillReference> | null {
+  const mocked = testEnv("OMS_TEST_SKILL_REFERENCES");
   if (mocked !== undefined) {
-    return mocked === "" ? null : (JSON.parse(mocked) as Record<string, string>);
+    return mocked === ""
+      ? null
+      : (JSON.parse(mocked) as Record<string, SkillReference>);
   }
-  const info = readJson<{ skillVersions?: Record<string, string> | null }>(
+  const info = readJson<{ skills?: Record<string, SkillReference> | null }>(
     join(dirname(moduleFilePath), "build-info.json"),
   );
-  return info?.skillVersions ?? null;
+  return info?.skills ?? null;
 }
 
 /** Clickable GitHub permalink for a repo doc, pinned to the build commit; falls back to the version tag. */
