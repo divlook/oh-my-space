@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -79,6 +79,22 @@ test("fingerprint excludes only declared generated and record paths and includes
   assert.notEqual(computeFingerprint({ cwd: root, env }).fingerprint, initial);
 });
 
+test("fingerprint CLI runs before dependencies are installed", () => {
+  const root = repository();
+  const verificationDir = join(root, "scripts", "verification");
+  mkdirSync(verificationDir, { recursive: true });
+  for (const name of ["config.mjs", "environment.mjs", "fingerprint.mjs"]) {
+    cpSync(new URL(`../../scripts/verification/${name}`, import.meta.url), join(verificationDir, name));
+  }
+  commitAll(root);
+  const output = execFileSync(process.execPath, [realpathSync(join(verificationDir, "fingerprint.mjs")), "--ci"], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+  }).trim();
+  assert.match(output, /^[0-9a-f]{64}$/);
+});
+
 test("beta normalization accepts only the expected HEAD-derived three-field transform", () => {
   const root = repository();
   const stable = "1.2.3";
@@ -93,6 +109,22 @@ test("beta normalization accepts only the expected HEAD-derived three-field tran
   writeFileSync(join(root, "package.json"), `${JSON.stringify({ ...packageJson, version: beta }, null, 2)}\n`);
   writeFileSync(join(root, "package-lock.json"), `${JSON.stringify({ ...packageLock, version: beta, packages: { "": { ...packageLock.packages[""], version: beta } } }, null, 2)}\n`);
   assert.equal(computeFingerprint({ cwd: root, env }).fingerprint, stableFingerprint);
+  assert.equal(
+    computeFingerprint({ cwd: root, env: { ...env, OMS_BETA_SOURCE_VERSION: stable } }).fingerprint,
+    stableFingerprint,
+  );
+  assert.equal(
+    computeFingerprint({ cwd: root, env: { ...env, OMS_BETA_SOURCE_VERSION: `v${stable}` } }).fingerprint,
+    stableFingerprint,
+  );
+  assert.notEqual(
+    computeFingerprint({ cwd: root, env: { ...env, OMS_BETA_SOURCE_VERSION: "" } }).fingerprint,
+    stableFingerprint,
+  );
+  assert.notEqual(
+    computeFingerprint({ cwd: root, env: { ...env, OMS_BETA_SOURCE_VERSION: "not-semver" } }).fingerprint,
+    stableFingerprint,
+  );
 
   const changed = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   changed.scripts.test = "node other.js";

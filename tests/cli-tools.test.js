@@ -901,15 +901,14 @@ test("each oms skill is published with name/description/metadata frontmatter", (
     assert.equal(typeof data.description, "string", `${name}: description must be a string`);
     assert.ok(data.description.length > 0, `${name}: description must be non-empty`);
 
-    assert.ok(data.metadata && typeof data.metadata === "object", `${name}: metadata must be a block`);
-    assert.equal(typeof data.metadata.author, "string", `${name}: metadata.author must be a string`);
-    assert.ok(data.metadata.author.length > 0, `${name}: metadata.author must be non-empty`);
-    // A YAML number would be dropped by the skills tool's eve install path, which keeps only
-    // string-valued metadata entries; quoting the version is what makes the marker survive.
     assert.equal(typeof data.metadata.version, "string", `${name}: metadata.version must be a quoted string`);
-    assert.ok(
-      semver.valid(data.metadata.version),
-      `${name}: metadata.version must be valid semver, got ${data.metadata.version}`,
+    assert.ok(semver.valid(data.metadata.version), `${name}: metadata.version must be valid semver`);
+    assert.equal(typeof data.metadata["oh-my-space-version"], "string", `${name}: OMS range must be quoted`);
+    assert.ok(semver.validRange(data.metadata["oh-my-space-version"]), `${name}: OMS range must be valid semver`);
+    assert.equal(
+      data.compatibility,
+      `Requires oh-my-space ${data.metadata["oh-my-space-version"]}.`,
+      `${name}: compatibility must exactly mirror the OMS range`,
     );
 
     // The skill's own version is frontmatter for oms doctor to read. The body declares only the
@@ -943,8 +942,12 @@ test("a skill content change must be acknowledged in SKILL_SNAPSHOTS", () => {
 
 // --- skill version drift reporting ---
 
-// A fixed reference so a future metadata.version bump cannot invalidate these fixtures.
-const SKILL_REFERENCE = JSON.stringify({ "oms-workspace": "1.1.0", "oms-pointer": "1.1.0", "oms-branch": "1.1.0" });
+// Fixed references so future metadata.version bumps cannot invalidate these fixtures.
+const SKILL_REFERENCE = JSON.stringify({
+  "oms-workspace": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
+  "oms-pointer": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
+  "oms-branch": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
+});
 
 /**
  * Builds a fake skills-tool home. `installed` maps a skill name to the version its SKILL.md declares,
@@ -954,10 +957,12 @@ const SKILL_REFERENCE = JSON.stringify({ "oms-workspace": "1.1.0", "oms-pointer"
  */
 function fakeSkillsHome({ installed = {}, agentDir = ".claude", locked, source = "divlook/oh-my-space", lockBody } = {}) {
   const home = tempFixture("oms-skills-");
-  for (const [name, version] of Object.entries(installed)) {
+  for (const [name, value] of Object.entries(installed)) {
     const dir = join(home, agentDir, "skills", name);
     mkdirSync(dir, { recursive: true });
-    const metadata = version === null ? "" : `metadata:\n  author: oh-my-space\n  version: "${version}"\n`;
+    const metadata = value === null
+      ? ""
+      : `metadata:\n  author: oh-my-space\n  version: "${typeof value === "string" ? value : value.version}"\n  oh-my-space-version: "${typeof value === "string" ? ">=0.0.0" : value.omsVersion}"\n`;
     writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: fixture\n${metadata}---\n\nbody\n`);
   }
   const lockNames = locked ?? Object.keys(installed);
@@ -977,7 +982,8 @@ function driftEnv(home, overrides = {}) {
     ...testEnv,
     OMS_TEST_MODE: "1",
     OMS_TEST_SKILLS_HOME: home,
-    OMS_TEST_SKILL_VERSIONS: SKILL_REFERENCE,
+    OMS_TEST_SKILL_REFERENCES: SKILL_REFERENCE,
+    OMS_TEST_PACKAGE_VERSION: currentVersion,
     ...overrides,
   };
 }
@@ -987,6 +993,17 @@ function doctorWithSkills(cwd, home, overrides = {}) {
   const result = run(["doctor"], { cwd, env: driftEnv(home, overrides) });
   return { result, output: result.stdout + result.stderr };
 }
+test("doctor keeps malformed skill reference diagnostics informational", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const home = fakeSkillsHome();
+  const { result, output } = doctorWithSkills(cwd, home, {
+    OMS_TEST_SKILL_REFERENCES: "{",
+  });
+  assert.equal(result.status, 0, output);
+  assert.match(output, /Could not inspect installed OMS skills/);
+});
+
 
 test("doctor reports an older installed skill and names the skills update command", () => {
   const cwd = initGitWorkspace();
@@ -996,24 +1013,86 @@ test("doctor reports an older installed skill and names the skills update comman
   const { result, output } = doctorWithSkills(cwd, home);
   assert.equal(result.status, 0, output);
   assert.match(output, /oms-branch: skill 1\.0\.0 is older than 1\.1\.0 \(global\)/);
-  assert.match(output, /Update: npx skills update oms-branch/);
+  assert.match(output, /Update or reinstall: npx skills update oms-branch/);
   // A matching install is not mentioned, and no scope flag is suggested.
   assert.doesNotMatch(output, /oms-pointer/);
   assert.doesNotMatch(output, /npx skills update[^\n]*-[gp]\b/);
 });
 
-test("doctor reports a newer installed skill separately and names oms update", () => {
+test("doctor reports a newer compatible skill without recommending an OMS update", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd);
   const home = fakeSkillsHome({ installed: { "oms-branch": "2.0.0", "oms-workspace": "1.0.0" } });
 
   const { result, output } = doctorWithSkills(cwd, home);
   assert.equal(result.status, 0, output);
-  assert.match(output, /oms-branch: skill 2\.0\.0 is newer than this oms knows \(1\.1\.0\) \(global\)/);
-  assert.match(output, /Your oms may be behind these skills\. Update: oms update/);
+  assert.match(output, /oms-branch: skill 2\.0\.0 is newer than this oms knows \(1\.1\.0\); runtime compatibility is satisfied \(global\)/);
+  assert.doesNotMatch(output, /oms update/);
   // The older skill keeps its own remediation, and the newer one is not folded into it.
-  assert.match(output, /Update: npx skills update oms-workspace/);
+  assert.match(output, /Update or reinstall: npx skills update oms-workspace/);
   assert.doesNotMatch(output, /npx skills update[^\n]*oms-branch/);
+});
+
+test("doctor prefers a satisfying stable channel over beta", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const home = fakeSkillsHome({
+    installed: { "oms-branch": { version: "1.1.0", omsVersion: ">=1.0.0" } },
+  });
+  const { result, output } = doctorWithSkills(cwd, home, {
+    OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({
+      "dist-tags": { latest: "1.0.0" },
+    }),
+    OMS_TEST_INSTALL_CONTEXT: installContext("global", { manager: "pnpm" }),
+  });
+  assert.equal(result.status, 0, output);
+  assert.match(output, /requires oms >=1\.0\.0; running oms is 0\.14\.2/);
+  assert.match(output, /pnpm add -g oh-my-space@latest/);
+  assert.doesNotMatch(output, /oh-my-space@beta/);
+});
+
+test("doctor recommends beta when only beta satisfies the installed skill", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const home = fakeSkillsHome({
+    installed: { "oms-branch": { version: "1.1.0", omsVersion: ">=1.0.0-0" } },
+  });
+  const { result, output } = doctorWithSkills(cwd, home, {
+    OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({
+      "dist-tags": { latest: "0.14.2", beta: "1.0.0-beta.sha-test" },
+    }),
+    OMS_TEST_INSTALL_CONTEXT: installContext("global", { manager: "bun" }),
+  });
+  assert.equal(result.status, 0, output);
+  assert.match(output, /bun add -g oh-my-space@beta/);
+  assert.doesNotMatch(output, /bun add -g oh-my-space@latest/);
+});
+
+test("doctor preserves informational status when no channel matches or lookup fails", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd);
+  const home = fakeSkillsHome({
+    installed: { "oms-branch": { version: "1.1.0", omsVersion: ">=2.0.0-0" } },
+  });
+  const noMatch = doctorWithSkills(cwd, home, {
+    OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({
+      "dist-tags": { latest: "1.0.0", beta: "1.1.0-beta.1" },
+    }),
+  });
+  assert.equal(noMatch.result.status, 0, noMatch.output);
+  assert.match(noMatch.output, /no compatible published OMS channel was found/);
+
+  for (const overrides of [
+    { OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "1.0.0", beta: "not-semver" } }) },
+    { OMS_TEST_REGISTRY_FAILURE: "registry timeout" },
+  ]) {
+    const failed = doctorWithSkills(cwd, home, overrides);
+    assert.equal(failed.result.status, 0, failed.output);
+    assert.match(failed.output, /Could not resolve compatible npm channels/);
+    assert.match(failed.output, /npm view oh-my-space dist-tags/);
+    assert.match(failed.output, /oh-my-space@latest/);
+    assert.match(failed.output, /oh-my-space@beta/);
+  }
 });
 
 test("doctor treats a missing or malformed installed version as older", () => {
@@ -1023,7 +1102,7 @@ test("doctor treats a missing or malformed installed version as older", () => {
   const missing = doctorWithSkills(cwd, fakeSkillsHome({ installed: { "oms-branch": null } }));
   assert.equal(missing.result.status, 0, missing.output);
   assert.match(missing.output, /oms-branch: skill version unknown, current is 1\.1\.0 \(global\)/);
-  assert.match(missing.output, /Update: npx skills update oms-branch/);
+  assert.match(missing.output, /Update or reinstall: npx skills update oms-branch/);
 
   const malformed = doctorWithSkills(cwd, fakeSkillsHome({ installed: { "oms-branch": "not-semver" } }));
   assert.equal(malformed.result.status, 0, malformed.output);
@@ -1037,8 +1116,8 @@ test("doctor reports a locked skill whose file cannot be located", () => {
 
   const { result, output } = doctorWithSkills(cwd, home);
   assert.equal(result.status, 0, output);
-  assert.match(output, /oms-branch: installed but its version could not be verified \(global\)/);
-  assert.match(output, /Update: npx skills update oms-branch/);
+  assert.match(output, /oms-branch: recorded in the lock file but the skill could not be located \(global\)/);
+  assert.match(output, /Update or reinstall: npx skills update oms-branch/);
 });
 
 test("doctor stays silent when skills match, are absent, or the baked reference is missing", () => {
@@ -1055,7 +1134,7 @@ test("doctor stays silent when skills match, are absent, or the baked reference 
 
   // No baked reference (a build without skills/) must not report a thing.
   const drifted = fakeSkillsHome({ installed: { "oms-branch": "1.0.0" } });
-  const unreferenced = doctorWithSkills(cwd, drifted, { OMS_TEST_SKILL_VERSIONS: "" });
+  const unreferenced = doctorWithSkills(cwd, drifted, { OMS_TEST_SKILL_REFERENCES: "" });
   assert.equal(unreferenced.result.status, 0, unreferenced.output);
   assert.doesNotMatch(unreferenced.output, /oms-branch|npx skills update/);
 });
@@ -1067,7 +1146,7 @@ test("doctor reports only the skills that are installed", () => {
 
   const { result, output } = doctorWithSkills(cwd, home);
   assert.equal(result.status, 0, output);
-  assert.match(output, /Update: npx skills update oms-pointer$/m);
+  assert.match(output, /Update or reinstall: npx skills update oms-pointer$/m);
   assert.doesNotMatch(output, /oms-branch|oms-workspace/);
 });
 
@@ -1101,12 +1180,12 @@ test("doctor ignores a lock entry from another source but still reads the file w
 });
 
 /** Installs a skill into the workspace itself, the layout a project-scope install produces. */
-function installProjectSkill(cwd, name, version) {
+function installProjectSkill(cwd, name, version, omsVersion = ">=0.0.0") {
   const skillDir = join(cwd, ".agents", "skills", name);
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(
     join(skillDir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: fixture\nmetadata:\n  author: oh-my-space\n  version: "${version}"\n---\n\nbody\n`,
+    `---\nname: ${name}\ndescription: fixture\nmetadata:\n  author: oh-my-space\n  version: "${version}"\n  oh-my-space-version: "${omsVersion}"\n---\n\nbody\n`,
   );
 }
 
@@ -1138,7 +1217,7 @@ test("doctor merges scopes that drifted alike and splits scopes at different ver
   assert.equal(split.result.status, 0, split.output);
   assert.match(split.output, /oms-branch: skill 1\.0\.0 is older than 1\.1\.0 \(global\)/);
   assert.match(split.output, /oms-branch: skill 0\.9\.0 is older than 1\.1\.0 \(project\)/);
-  assert.match(split.output, /Update: npx skills update oms-branch$/m);
+  assert.match(split.output, /Update or reinstall: npx skills update oms-branch$/m);
 });
 
 test("doctor skips a baked version that is not valid semver instead of failing", () => {
@@ -1149,7 +1228,10 @@ test("doctor skips a baked version that is not valid semver instead of failing",
   // The reference is a build artifact; a bad entry must not turn an informational report into
   // a non-zero exit, and must not suppress the entries that are usable.
   const { result, output } = doctorWithSkills(cwd, home, {
-    OMS_TEST_SKILL_VERSIONS: JSON.stringify({ "oms-branch": "1.1", "oms-pointer": "1.1.0" }),
+    OMS_TEST_SKILL_REFERENCES: JSON.stringify({
+      "oms-branch": { version: "1.1", omsVersion: ">=1.0.0-0" },
+      "oms-pointer": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
+    }),
   });
   assert.equal(result.status, 0, output);
   assert.doesNotMatch(output, /Invalid Version/);
@@ -1189,7 +1271,7 @@ test("update reports skill drift on the up-to-date path where its reference is e
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /oms-branch: skill 1\.0\.0 is older than 1\.1\.0 \(global\)/);
-  assert.match(output, /Update: npx skills update oms-branch/);
+  assert.match(output, /Update or reinstall: npx skills update oms-branch/);
   assert.match(output, /up to date/i);
 });
 

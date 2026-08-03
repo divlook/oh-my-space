@@ -1,3 +1,5 @@
+import { PACKAGE_NAME } from "./package-info.js";
+
 export const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_@-]*$/;
 export const REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 export const ALLOWED_TOP_KEYS = new Set(["repos"]);
@@ -15,6 +17,6 @@ export const REMOTES_MIGRATION_DOC = "docs/migrations/0.6.x-to-0.7.0.md";
 export const DOCS_REPO_BLOB_BASE = "https://github.com/divlook/oh-my-space/blob";
 export const MIN_GIT_MAJOR = 2;
 export const MIN_GIT_MINOR = 40;
-export const PACKAGE_NAME = "oh-my-space";
+export { PACKAGE_NAME };
 export const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
 export const REGISTRY_TIMEOUT_MS = 10_000;

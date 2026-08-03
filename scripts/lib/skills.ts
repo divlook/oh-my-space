@@ -4,11 +4,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { log } from "@clack/prompts";
 import semver from "semver";
-import { parse as parseYaml } from "yaml";
-import { MANIFEST_FILENAME } from "./constants.js";
-import { readSkillVersions, runtimePlatform, testEnv } from "./env.js";
+import { MANIFEST_FILENAME, PACKAGE_NAME, REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
+import { readPackageVersion, readSkillReferences, runtimePlatform, testEnv } from "./env.js";
 import { findWorkspaceRoot } from "./git.js";
-import type { SkillScope, SkillVersionFinding, SkillVersionState } from "./types.js";
+import { detectInstallContext } from "./install-context.js";
+import { channelInstallCommand, registryDistTagsFromJson, type RegistryDistTags } from "./package-channels.js";
+import { parseSkillMetadata } from "./skill-metadata.js";
+import type { PackageManager, SkillCompatibility, SkillFinding, SkillFreshness, SkillScope } from "./types.js";
 
 /** npx skills package identifier for the oms workspace skills (scoped to the repository skills/ directory). */
 const SKILLS_REPO = "divlook/oh-my-space/skills";
@@ -89,24 +91,13 @@ function locateInstalledSkill(bases: string[], name: string): string | null {
   return null;
 }
 
-/** Valid semver from an installed skill's frontmatter, or null when absent or malformed. */
-export function installedSkillVersion(skillPath: string): string | null {
-  let raw: string;
+/** Independently verifiable metadata from an installed skill, or null values when unavailable. */
+export function installedSkillMetadata(skillPath: string): { version: string | null; omsVersion: string | null } {
   try {
-    raw = readFileSync(skillPath, "utf8");
+    return parseSkillMetadata(readFileSync(skillPath, "utf8"));
   } catch {
-    return null;
+    return { version: null, omsVersion: null };
   }
-  const frontmatter = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!frontmatter) return null;
-  let data: unknown;
-  try {
-    data = parseYaml(frontmatter[1] ?? "");
-  } catch {
-    return null;
-  }
-  const version = (data as { metadata?: { version?: unknown } } | null)?.metadata?.version;
-  return typeof version === "string" && semver.valid(version) ? version : null;
 }
 
 /** Where to look for one scope: several bases to search, and the lock files that cover it. */
@@ -129,22 +120,39 @@ function scopeSearches(workspaceRoot: string | null): ScopeSearch[] {
   return searches;
 }
 
-/** Compares an installed version against the reference; a missing or malformed version counts as older. */
-export function classify(installed: string | null, current: string): SkillVersionState {
+/** Compares installed skill content with its baked reference. */
+export function classifyFreshness(installed: string | null, current: string, located = true): SkillFreshness {
+  if (!located) return "unverified";
   if (installed === null) return "older";
   const comparison = semver.compare(installed, current);
   if (comparison === 0) return "current";
   return comparison > 0 ? "newer" : "older";
 }
 
-/**
- * Installed oms skills whose version differs from the one baked into this build. Returns nothing when
- * the baked reference is unavailable, when no skill is installed, or when every install matches.
- * @param workspaceRoot - workspace root for the project scope, or null to check the global scope only
- */
-function skillVersionFindings(workspaceRoot: string | null): SkillVersionFinding[] {
-  const reference = readSkillVersions();
-  if (!reference) return [];
+/** Evaluates the running OMS version against an installed skill's declared range. */
+export function classifyCompatibility(omsVersion: string | null, runningVersion: string): SkillCompatibility {
+  if (omsVersion === null || !semver.valid(runningVersion)) return "unverified";
+  return semver.satisfies(runningVersion, omsVersion) ? "compatible" : "incompatible";
+}
+
+/** Classifies both installed-skill dimensions without coupling their outcomes. */
+export function classifySkillMetadata(
+  installedVersion: string | null,
+  referenceVersion: string,
+  installedOmsVersion: string | null,
+  runningVersion: string,
+  located = true,
+): { freshness: SkillFreshness; compatibility: SkillCompatibility } {
+  return {
+    freshness: classifyFreshness(installedVersion, referenceVersion, located),
+    compatibility: classifyCompatibility(installedOmsVersion, runningVersion),
+  };
+}
+
+/** Installed OMS skill findings across independent freshness and compatibility dimensions. */
+export function skillFindings(workspaceRoot: string | null, runningVersion = readPackageVersion()): SkillFinding[] {
+  const references = readSkillReferences();
+  if (!references) return [];
 
   const searches = scopeSearches(workspaceRoot);
   const lockedByScope = searches.map((search) => {
@@ -154,44 +162,57 @@ function skillVersionFindings(workspaceRoot: string | null): SkillVersionFinding
     }
     return names;
   });
+  const findings: SkillFinding[] = [];
 
-  const findings: SkillVersionFinding[] = [];
-  for (const name of Object.keys(reference).sort()) {
-    const current = reference[name];
-    // The reference comes from a build artifact, so it is untrusted here: a non-semver value would
-    // make semver.compare throw and turn this informational report into a non-zero exit.
-    if (!current || !semver.valid(current)) continue;
-    // Group by state and installed version so scopes that drifted the same way share one line, while
-    // scopes at different versions stay distinct.
-    const grouped = new Map<string, SkillVersionFinding>();
+  for (const name of Object.keys(references).sort()) {
+    const reference = references[name];
+    if (!reference || !semver.valid(reference.version)) continue;
+
+    const grouped = new Map<string, SkillFinding>();
     for (const [index, search] of searches.entries()) {
       const skillPath = locateInstalledSkill(search.bases, name);
       const locked = lockedByScope[index]?.has(name) ?? false;
       if (!skillPath && !locked) continue;
 
-      const installed = skillPath ? installedSkillVersion(skillPath) : null;
-      const state = skillPath ? classify(installed, current) : "unverified";
-      if (state === "current") continue;
+      const metadata = skillPath
+        ? installedSkillMetadata(skillPath)
+        : { version: null, omsVersion: null };
+      const { freshness, compatibility } = classifySkillMetadata(
+        metadata.version,
+        reference.version,
+        metadata.omsVersion,
+        runningVersion,
+        skillPath !== null,
+      );
+      if (freshness === "current" && compatibility === "compatible") continue;
 
-      const key = `${state}:${installed ?? ""}`;
+      const key = `${freshness}:${compatibility}:${metadata.version ?? ""}:${metadata.omsVersion ?? ""}`;
       const existing = grouped.get(key);
       if (existing) existing.scopes.push(search.scope);
-      else grouped.set(key, { name, state, installed, current, scopes: [search.scope] });
+      else {
+        grouped.set(key, {
+          name,
+          freshness,
+          compatibility,
+          installedVersion: metadata.version,
+          installedOmsVersion: metadata.omsVersion,
+          reference,
+          scopes: [search.scope],
+        });
+      }
     }
     findings.push(...grouped.values());
   }
   return findings;
 }
 
-/** True when any oms skill appears installed, without comparing versions. */
+/** True when any OMS skill appears installed, without comparing metadata. */
 export function omsSkillsInstalled(workspaceRoot: string | null): boolean {
-  const reference = readSkillVersions();
+  const reference = readSkillReferences();
   const names = reference ? Object.keys(reference) : [];
   if (names.length === 0) return false;
   for (const search of scopeSearches(workspaceRoot)) {
     for (const lockPath of search.lockPaths) {
-      // Restricted to the names this build knows, so a lock entry for a renamed or removed skill
-      // cannot claim an install that skillVersionFindings would then report nothing about.
       const locked = lockedSkillNames(lockPath);
       if (names.some((name) => locked.has(name))) return true;
     }
@@ -200,44 +221,112 @@ export function omsSkillsInstalled(workspaceRoot: string | null): boolean {
   return false;
 }
 
-/** One-line description of a finding, naming the installed version, the current one, and the scopes. */
-function describeFinding(finding: SkillVersionFinding): string {
+function describeFreshness(finding: SkillFinding): string | null {
   const scopes = finding.scopes.join(", ");
-  if (finding.state === "unverified") {
-    return `${finding.name}: installed but its version could not be verified (${scopes})`;
+  if (finding.freshness === "current") return null;
+  if (finding.freshness === "unverified") {
+    return `${finding.name}: recorded in the lock file but the skill could not be located (${scopes})`;
   }
-  if (finding.installed === null) {
-    return `${finding.name}: skill version unknown, current is ${finding.current} (${scopes})`;
+  if (finding.installedVersion === null) {
+    return `${finding.name}: skill version unknown, current is ${finding.reference.version} (${scopes})`;
   }
-  if (finding.state === "newer") {
-    return `${finding.name}: skill ${finding.installed} is newer than this oms knows (${finding.current}) (${scopes})`;
+  if (finding.freshness === "newer") {
+    const compatibility = finding.compatibility === "compatible" ? "; runtime compatibility is satisfied" : "";
+    return `${finding.name}: skill ${finding.installedVersion} is newer than this oms knows (${finding.reference.version})${compatibility} (${scopes})`;
   }
-  return `${finding.name}: skill ${finding.installed} is older than ${finding.current} (${scopes})`;
+  return `${finding.name}: skill ${finding.installedVersion} is older than ${finding.reference.version} (${scopes})`;
+}
+
+function describeCompatibility(finding: SkillFinding, runningVersion: string): string | null {
+  const scopes = finding.scopes.join(", ");
+  if (finding.compatibility === "compatible") return null;
+  if (finding.compatibility === "unverified") {
+    return `${finding.name}: OMS compatibility could not be verified; update or reinstall the skill (${scopes})`;
+  }
+  return `${finding.name}: skill ${finding.installedVersion ?? "unknown"} requires oms ${finding.installedOmsVersion}; running oms is ${runningVersion} (${scopes})`;
+}
+
+async function fetchRegistryDistTags(): Promise<RegistryDistTags> {
+  const mocked = testEnv("OMS_TEST_REGISTRY_RESPONSE");
+  if (mocked !== undefined) return registryDistTagsFromJson(JSON.parse(mocked));
+  const failure = testEnv("OMS_TEST_REGISTRY_FAILURE");
+  if (failure) throw new Error(failure);
+
+  let response: Response;
+  try {
+    response = await fetch(REGISTRY_URL, { signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) });
+  } catch (error) {
+    throw new Error(`Could not reach npm registry: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!response.ok) throw new Error(`npm registry request failed with HTTP ${response.status}`);
+  return registryDistTagsFromJson(await response.json());
+}
+
+function isPackageManager(value: string | undefined): value is PackageManager {
+  return value === "npm" || value === "pnpm" || value === "yarn" || value === "bun";
+}
+
+function guidanceManager(): PackageManager {
+  const context = detectInstallContext();
+  if (context.manager) return context.manager;
+  const executable = context.updateCommand?.executable;
+  return isPackageManager(executable) ? executable : "npm";
+}
+
+function reportChannelRemediation(findings: SkillFinding[], tags: RegistryDistTags, manager: PackageManager): void {
+  for (const finding of findings) {
+    const range = finding.installedOmsVersion;
+    if (!range) continue;
+    if (semver.satisfies(tags.latest, range)) {
+      log.message(`${finding.name}: install a compatible stable OMS: ${channelInstallCommand(manager, "latest")}`);
+    } else if (tags.beta && semver.satisfies(tags.beta, range)) {
+      log.message(`${finding.name}: install a compatible beta OMS: ${channelInstallCommand(manager, "beta")}`);
+    } else {
+      log.info(`${finding.name}: no compatible published OMS channel was found for ${range}.`);
+    }
+  }
 }
 
 /**
- * Reports installed skills that drift from this build, at informational level so the caller's exit
- * code is unaffected — a stale skill degrades an agent's guidance rather than breaking oms, and the
- * global scope reflects state outside the workspace.
- * @param workspaceRoot - workspace root for the project scope, or null to check the global scope only
+ * Reports skill freshness and runtime compatibility without changing command exit behavior.
+ * @param workspaceRoot - workspace root for project scope, or null for global scope only
  */
-export function reportSkillVersions(workspaceRoot: string | null): void {
-  const findings = skillVersionFindings(workspaceRoot);
-  if (findings.length === 0) return;
+export async function reportSkillFindings(workspaceRoot: string | null): Promise<void> {
+  try {
+    const runningVersion = readPackageVersion();
+    const findings = skillFindings(workspaceRoot, runningVersion);
+    if (findings.length === 0) return;
 
-  const behind = findings.filter((finding) => finding.state !== "newer");
-  const ahead = findings.filter((finding) => finding.state === "newer");
+    for (const finding of findings) {
+      const freshness = describeFreshness(finding);
+      if (freshness) log.info(freshness);
+      const compatibility = describeCompatibility(finding, runningVersion);
+      if (compatibility) log.info(compatibility);
+    }
 
-  for (const finding of behind) log.info(describeFinding(finding));
-  if (behind.length > 0) {
-    // Passing skill names makes "skills update" non-interactive and covers both scopes, so no -g/-p.
-    const names = [...new Set(behind.map((finding) => finding.name))].join(" ");
-    log.message(`Update: npx skills update ${names}`);
-  }
+    const skillUpdates = findings.filter((finding) =>
+      finding.freshness === "older" || finding.freshness === "unverified" ||
+      finding.compatibility === "unverified");
+    if (skillUpdates.length > 0) {
+      const names = [...new Set(skillUpdates.map((finding) => finding.name))].join(" ");
+      log.message(`Update or reinstall: npx skills update ${names}`);
+    }
 
-  for (const finding of ahead) log.info(describeFinding(finding));
-  if (ahead.length > 0) {
-    log.message("Your oms may be behind these skills. Update: oms update");
+    const incompatible = findings.filter((finding) => finding.compatibility === "incompatible");
+    if (incompatible.length === 0) return;
+
+    let manager: PackageManager = "npm";
+    try {
+      manager = guidanceManager();
+      reportChannelRemediation(incompatible, await fetchRegistryDistTags(), manager);
+    } catch (error) {
+      log.info(`Could not resolve compatible npm channels: ${error instanceof Error ? error.message : String(error)}`);
+      log.message(`Inspect channels: npm view ${PACKAGE_NAME} dist-tags`);
+      log.message(`Stable: ${channelInstallCommand(manager, "latest")}`);
+      log.message(`Beta: ${channelInstallCommand(manager, "beta")}`);
+    }
+  } catch (error) {
+    log.info(`Could not inspect installed OMS skills: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
