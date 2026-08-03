@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -77,6 +77,22 @@ test("fingerprint excludes only declared generated and record paths and includes
 
   writeFileSync(join(root, "unknown.config"), "affects outcomes until proven otherwise\n");
   assert.notEqual(computeFingerprint({ cwd: root, env }).fingerprint, initial);
+});
+
+test("fingerprint CLI runs before dependencies are installed", () => {
+  const root = repository();
+  const verificationDir = join(root, "scripts", "verification");
+  mkdirSync(verificationDir, { recursive: true });
+  for (const name of ["config.mjs", "environment.mjs", "fingerprint.mjs"]) {
+    cpSync(new URL(`../../scripts/verification/${name}`, import.meta.url), join(verificationDir, name));
+  }
+  commitAll(root);
+  const output = execFileSync(process.execPath, [realpathSync(join(verificationDir, "fingerprint.mjs")), "--ci"], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+  }).trim();
+  assert.match(output, /^[0-9a-f]{64}$/);
 });
 
 test("beta normalization accepts only the expected HEAD-derived three-field transform", () => {

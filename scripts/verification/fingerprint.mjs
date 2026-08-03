@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import semver from "semver";
 import { isFingerprintExcluded } from "./config.mjs";
 import { normalizedTestEnvironment } from "./environment.mjs";
 
@@ -34,15 +33,20 @@ function gitObjectId(content, format) {
   return hash.digest("hex");
 }
 
+function normalizeStableVersion(version) {
+  if (typeof version !== "string") return null;
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(version);
+  if (!match || match.slice(1).some((part) => Number(part) > Number.MAX_SAFE_INTEGER)) return null;
+  return `${match[1]}.${match[2]}.${match[3]}`;
+}
+
 function expectedBeta(cwd, packageVersion, env) {
   const match = /^(\d+\.\d+\.\d+)-beta\.sha-([0-9a-f]{7})$/.exec(packageVersion);
   if (!match) return null;
   const head = git(cwd, ["rev-parse", "--short=7", "HEAD"], env).toString("utf8").trim();
   if (match[2] !== head) return null;
   const sourceVersion = env.OMS_BETA_SOURCE_VERSION;
-  const normalizedSourceVersion = sourceVersion == null
-    ? null
-    : typeof sourceVersion === "string" ? semver.valid(sourceVersion) : null;
+  const normalizedSourceVersion = sourceVersion == null ? null : normalizeStableVersion(sourceVersion);
   if (sourceVersion != null && normalizedSourceVersion === null) return null;
   const base = normalizedSourceVersion ?? match[1];
   return { base, beta: packageVersion };
