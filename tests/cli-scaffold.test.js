@@ -67,20 +67,21 @@ test("help is exposed as oms with the submodule commands", () => {
 });
 
 test("submodule command help explains workspace root requirements", () => {
-  for (const args of [
-    ["branch", "--help"],
-    ["branch", "switch", "--help"],
-    ["branch", "checkout", "--help"],
-    ["branch", "list", "--help"],
-    ["branch", "delete", "--help"],
-    ["fetch", "--help"],
-    ["pull", "--help"],
-    ["push", "--help"],
-    ["unsync", "--help"],
+  for (const [args, detail] of [
+    [["branch", "--help"], /\bswitch\b.*\bcheckout\b.*\blist\b.*\bdelete\b/s],
+    [["branch", "switch", "--help"], /--from/],
+    [["branch", "checkout", "--help"], /REMOTE|origin/],
+    [["branch", "list", "--help"], /stale|cached/],
+    [["branch", "delete", "--help"], /--force/],
+    [["fetch", "--help"], /root Git top-level/],
+    [["pull", "--help"], /root Git top-level/],
+    [["push", "--help"], /root Git top-level/],
+    [["unsync", "--help"], /root Git top-level/],
   ]) {
     const result = run(args);
     assert.equal(result.status, 0, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /root Git top-level/, args.join(" "));
+    assert.match(result.stdout, detail, args.join(" "));
   }
 });
 

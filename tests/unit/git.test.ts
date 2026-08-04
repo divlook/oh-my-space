@@ -89,7 +89,9 @@ test("Git version and sensitive URL parsers reject malformed input without leaki
   assert.deepEqual(parseGitVersion("git version 2.50.1"), { major: 2, minor: 50 });
   assert.equal(parseGitVersion("unknown"), null);
   assert.equal(
-    redactSensitiveUrls("https://alice:secret@example.com/a?access_token=abc&safe=yes"),
-    "https://[redacted]@example.com/a?access_token=[redacted]&safe=yes",
+    redactSensitiveUrls(
+      "https://alice:secret@example.com/a?api_key=one&client_secret=two&refresh_token=three&secret=four&auth_token=five&oauth_token=six&access_token=seven&safe=yes",
+    ),
+    "https://[redacted]@example.com/a?api_key=[redacted]&client_secret=[redacted]&refresh_token=[redacted]&secret=[redacted]&auth_token=[redacted]&oauth_token=[redacted]&access_token=[redacted]&safe=yes",
   );
 });

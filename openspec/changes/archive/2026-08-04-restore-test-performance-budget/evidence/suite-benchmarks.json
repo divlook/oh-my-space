@@ -1,0 +1,492 @@
+{
+  "schemaVersion": 1,
+  "measurements": [
+    {
+      "label": "candidate-i2-b4",
+      "measuredAt": "2026-08-03T23:14:34.562Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 2,
+      "blackboxConcurrency": 4,
+      "durationsMs": [
+        80280
+      ],
+      "medianMs": 80280,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b6",
+      "measuredAt": "2026-08-03T23:15:43.896Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 6,
+      "durationsMs": [
+        69269
+      ],
+      "medianMs": 69269,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b8",
+      "measuredAt": "2026-08-03T23:16:53.752Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        69790
+      ],
+      "medianMs": 69790,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b6-fixture",
+      "measuredAt": "2026-08-03T23:18:51.307Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 6,
+      "durationsMs": [
+        67772
+      ],
+      "medianMs": 67772,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b6-lpt",
+      "measuredAt": "2026-08-03T23:21:16.521Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 6,
+      "durationsMs": [
+        67281
+      ],
+      "medianMs": 67281,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b6-owned-scheduler",
+      "measuredAt": "2026-08-03T23:22:49.466Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 6,
+      "durationsMs": [
+        66289
+      ],
+      "medianMs": 66289,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b8-owned-scheduler",
+      "measuredAt": "2026-08-03T23:23:59.612Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        63959
+      ],
+      "medianMs": 63959,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b10-owned-scheduler",
+      "measuredAt": "2026-08-03T23:25:07.569Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        63213
+      ],
+      "medianMs": 63213,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b8-five-way",
+      "measuredAt": "2026-08-03T23:29:58.532Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        64832
+      ],
+      "medianMs": 64832,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b8-single-typecheck",
+      "measuredAt": "2026-08-03T23:34:46.600Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        62294
+      ],
+      "medianMs": 62294,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b10-single-typecheck",
+      "measuredAt": "2026-08-03T23:35:59.735Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        59814
+      ],
+      "medianMs": 59814,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b12-single-typecheck",
+      "measuredAt": "2026-08-03T23:37:01.907Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 12,
+      "durationsMs": [
+        62102
+      ],
+      "medianMs": 62102,
+      "varianceMs2": 0,
+      "gating": false
+    },
+    {
+      "label": "acceptance-node24-m2",
+      "measuredAt": "2026-08-03T23:41:57.885Z",
+      "runtime": "v24.18.1",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        59639,
+        62030,
+        63679
+      ],
+      "medianMs": 62030,
+      "varianceMs2": 2750854,
+      "maxMs": 63679,
+      "gating": true
+    },
+    {
+      "label": "candidate-i4-b10-shared-fixtures",
+      "measuredAt": "2026-08-03T23:44:14.319Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        58994
+      ],
+      "medianMs": 58994,
+      "varianceMs2": 0,
+      "maxMs": 58994,
+      "gating": false
+    },
+    {
+      "label": "acceptance-node24-m2-shared-fixtures",
+      "measuredAt": "2026-08-03T23:47:26.615Z",
+      "runtime": "v24.18.1",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        59890,
+        61314,
+        64428
+      ],
+      "medianMs": 61314,
+      "varianceMs2": 3590913,
+      "maxMs": 64428,
+      "gating": true
+    },
+    {
+      "label": "candidate-i4-b8-shared-fixtures",
+      "measuredAt": "2026-08-03T23:48:48.543Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        62656
+      ],
+      "medianMs": 62656,
+      "varianceMs2": 0,
+      "maxMs": 62656,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b10-uncompressed-fixtures",
+      "measuredAt": "2026-08-03T23:50:19.261Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        59271
+      ],
+      "medianMs": 59271,
+      "varianceMs2": 0,
+      "maxMs": 59271,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b10-buffered-output",
+      "measuredAt": "2026-08-03T23:51:49.537Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        59060
+      ],
+      "medianMs": 59060,
+      "varianceMs2": 0,
+      "maxMs": 59060,
+      "gating": false
+    },
+    {
+      "label": "candidate-i4-b9-buffered-output",
+      "measuredAt": "2026-08-03T23:52:59.228Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 9,
+      "durationsMs": [
+        62971
+      ],
+      "medianMs": 62971,
+      "varianceMs2": 0,
+      "maxMs": 62971,
+      "gating": false
+    },
+    {
+      "label": "candidate-parallel-real-git",
+      "measuredAt": "2026-08-03T23:55:00.602Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        56928
+      ],
+      "medianMs": 56928,
+      "varianceMs2": 0,
+      "maxMs": 56928,
+      "gating": false
+    },
+    {
+      "label": "acceptance-node24-m2-final",
+      "measuredAt": "2026-08-03T23:58:11.454Z",
+      "runtime": "v24.18.1",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        58808,
+        62294,
+        64663
+      ],
+      "medianMs": 62294,
+      "varianceMs2": 5782820,
+      "maxMs": 64663,
+      "gating": true
+    },
+    {
+      "label": "candidate-node-compile-cache",
+      "measuredAt": "2026-08-04T00:00:04.898Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        57018
+      ],
+      "medianMs": 57018,
+      "varianceMs2": 0,
+      "maxMs": 57018,
+      "gating": false
+    },
+    {
+      "label": "acceptance-node24-m2-compile-cache",
+      "measuredAt": "2026-08-04T00:03:21.968Z",
+      "runtime": "v24.18.1",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        57084,
+        58914,
+        59201
+      ],
+      "medianMs": 58914,
+      "varianceMs2": 879218,
+      "maxMs": 59201,
+      "gating": true
+    },
+    {
+      "label": "acceptance-node20-m2",
+      "measuredAt": "2026-08-04T00:04:46.376Z",
+      "runtime": "v20.20.2",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        62268
+      ],
+      "medianMs": 62268,
+      "varianceMs2": 0,
+      "maxMs": 62268,
+      "gating": false
+    },
+    {
+      "label": "acceptance-node20.19-m2",
+      "measuredAt": "2026-08-04T00:06:40.605Z",
+      "runtime": "v20.19.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        58106
+      ],
+      "medianMs": 58106,
+      "varianceMs2": 0,
+      "maxMs": 58106,
+      "gating": false
+    },
+    {
+      "label": "ci-minimum-supported-local",
+      "measuredAt": "2026-08-04T00:08:53.439Z",
+      "runtime": "v20.19.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        57666
+      ],
+      "medianMs": 57666,
+      "varianceMs2": 0,
+      "maxMs": 57666,
+      "gating": true
+    },
+    {
+      "label": "ci-development-local",
+      "measuredAt": "2026-08-04T00:09:51.932Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        58419
+      ],
+      "medianMs": 58419,
+      "varianceMs2": 0,
+      "maxMs": 58419,
+      "gating": true
+    },
+    {
+      "label": "latest-supported-diagnostic-local",
+      "measuredAt": "2026-08-04T00:12:14.398Z",
+      "runtime": "v26.5.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        58867
+      ],
+      "medianMs": 58867,
+      "varianceMs2": 0,
+      "maxMs": 58867,
+      "gating": false
+    },
+    {
+      "label": "ci-development-fix-local",
+      "measuredAt": "2026-08-04T00:43:13.341Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        56890
+      ],
+      "medianMs": 56890,
+      "varianceMs2": 0,
+      "maxMs": 56890,
+      "gating": true
+    },
+    {
+      "label": "ci-minimum-supported",
+      "measuredAt": "2026-08-04T00:44:42.260Z",
+      "runtime": "v20.19.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        44718
+      ],
+      "medianMs": 44718,
+      "varianceMs2": 0,
+      "maxMs": 44718,
+      "gating": true,
+      "environment": "github-actions ubuntu-24.04",
+      "verificationCacheHit": false,
+      "runUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445",
+      "artifactUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445/artifacts/8876298632"
+    },
+    {
+      "label": "ci-development",
+      "measuredAt": "2026-08-04T00:44:30.992Z",
+      "runtime": "v24.18.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        34330
+      ],
+      "medianMs": 34330,
+      "varianceMs2": 0,
+      "maxMs": 34330,
+      "gating": true,
+      "environment": "github-actions ubuntu-24.04",
+      "verificationCacheHit": false,
+      "runUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445",
+      "artifactUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445/artifacts/8876295130"
+    },
+    {
+      "label": "ci-latest-supported",
+      "measuredAt": "2026-08-04T00:44:38.346Z",
+      "runtime": "v26.6.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        42969
+      ],
+      "medianMs": 42969,
+      "varianceMs2": 0,
+      "maxMs": 42969,
+      "gating": false,
+      "environment": "github-actions ubuntu-24.04",
+      "runUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445",
+      "artifactUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445/artifacts/8876297187"
+    }
+  ]
+}

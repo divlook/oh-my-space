@@ -64,26 +64,6 @@ function remoteBranchExists(dir, branch) {
 
 /** Sync one alias and return the submodule working-tree path. */
 
-test("branch is exposed with list, switch, checkout, and delete subcommands", () => {
-  const help = run(["branch", "--help"]);
-  assert.equal(help.status, 0, help.stdout + help.stderr);
-  assert.match(help.stdout, /\blist\b/);
-  assert.match(help.stdout, /\bswitch\b/);
-  assert.match(help.stdout, /\bcheckout\b/);
-  assert.match(help.stdout, /\bdelete\b/);
-  const lhelp = run(["branch", "list", "--help"]);
-  assert.equal(lhelp.status, 0);
-  assert.match(lhelp.stdout, /stale|cached/);
-  const swhelp = run(["branch", "switch", "--help"]);
-  assert.equal(swhelp.status, 0);
-  assert.match(swhelp.stdout, /--from/);
-  const cohelp = run(["branch", "checkout", "--help"]);
-  assert.equal(cohelp.status, 0);
-  assert.match(cohelp.stdout, /REMOTE|origin/);
-  const dhelp = run(["branch", "delete", "--help"]);
-  assert.equal(dhelp.status, 0);
-  assert.match(dhelp.stdout, /--force/);
-});
 
 test("top-level switch and checkout are removed and fail as unknown commands", () => {
   const bare = initBareUpstream();

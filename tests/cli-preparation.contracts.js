@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import test from "node:test";
+import test from "./sharded-test.js";
 import assert from "node:assert/strict";
 import {
   configIdentity,

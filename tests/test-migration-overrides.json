@@ -1,0 +1,14 @@
+{
+  "tests/cli-branch.contracts.js::branch is exposed with list, switch, checkout, and delete subcommands": [
+    "tests/cli-scaffold.test.js::submodule command help explains workspace root requirements"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list redacts credential-bearing query parameters from Git diagnostics": [
+    "tests/unit/git.test.ts::Git version and sensitive URL parsers reject malformed input without leaking credentials"
+  ],
+  "tests/cli-tools.test.js::update fails cleanly when registry latest is unavailable": [
+    "tests/unit/update-install-agent-skill.test.ts::update version and channel decisions reject malformed registry or semver inputs"
+  ],
+  "tests/cli-tools.test.js::update treats invalid registry semver as a failure": [
+    "tests/unit/update-install-agent-skill.test.ts::update version and channel decisions reject malformed registry or semver inputs"
+  ]
+}
