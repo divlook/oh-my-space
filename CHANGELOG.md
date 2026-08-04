@@ -1,5 +1,69 @@
 # oh-my-space
 
+## 1.0.0
+
+### Major Changes
+
+- [#80](https://github.com/divlook/oh-my-space/pull/80) [`a62908d`](https://github.com/divlook/oh-my-space/commit/a62908d61af2896c70b51113870712ff7a2152b1) Thanks [@divlook](https://github.com/divlook)! - Declare each published skill's OMS runtime range independently from its content version and report compatibility separately from skill freshness.
+
+  When an installed skill requires a newer runtime, `oms doctor` and the up-to-date `oms update` path prefer a compatible stable release and otherwise recommend the compatible beta channel. The pending release plan also becomes the source of truth for the `1.0.0-beta.sha-*` beta base.
+
+### Minor Changes
+
+- [#64](https://github.com/divlook/oh-my-space/pull/64) [`fef27bc`](https://github.com/divlook/oh-my-space/commit/fef27bcdee74a8b7d18bd05f3e64665fe9b51ce1) Thanks [@divlook](https://github.com/divlook)! - Accept an optional alias list and `--all` on `oms push` and `oms record`, matching the selection model already used by `sync`, `status`, `fetch`, `pull`, and `unsync`.
+
+  `oms record` now takes several aliases and records them in one root commit: a single alias keeps `chore(oms): update <alias> submodule to <sha>`, while several use `chore(oms): update submodules`. A named alias that cannot be recorded still fails with its existing message and exit code; under `--all` such an alias is reported and skipped (exit 2) while the remaining moved pointers are recorded, and an alias whose pointer simply has not moved is skipped without affecting the exit code. The staged-path safety check is judged against the whole selection, so a staged gitlink for a skipped alias no longer blocks the rest of the run. After a `pull`/`push` that moves more than one pointer, the follow-up hint collapses into a single `oms record --all`.
+
+  Two invocations change. `oms push` with no arguments previously failed with a "missing required argument" usage error; it now resolves a selection interactively, or fails with an actionable message when stdin is not a TTY. And `oms sync`, `oms fetch`, `oms pull`, and `oms unsync` with no arguments in a non-interactive shell previously opened a prompt that could never be answered and died with Node's unsettled-top-level-await warning (exit 13); they now exit 1 naming `--all` or an explicit alias as the missing input.
+
+- [#75](https://github.com/divlook/oh-my-space/pull/75) [`cb00392`](https://github.com/divlook/oh-my-space/commit/cb00392c42b376fa8f2c599c00cb5acb262f7999) Thanks [@divlook](https://github.com/divlook)! - Preserve the root repository's recorded submodule pointer when `oms sync` encounters a newer baseline branch.
+
+  `oms sync <alias>` now attaches a detached submodule to its baseline only when the baseline is absent or already points at the checked-out commit. When the baseline tip has advanced without a matching `oms record`, sync leaves the submodule detached at the recorded commit, keeps the root gitlink clean, reports both commits, and prints explicit `oms branch switch <alias> <baseline>` and `oms pull <alias>` guidance.
+
+  This reverses the previous implicit-pull behavior for fresh initialization, pending-removal restoration, and initialized updates. Workflows that relied on `oms sync` to advance a submodule should use `oms pull` instead.
+
+  `oms sync` also stops echoing Git's own `submodule update --init` progress lines on success, printing them only when that step fails, so its report never repeats a source remote URL.
+
+  When Git refuses the branch operation altogether, `oms sync` now reports that alias as failed with Git's diagnostic and exits non-zero, where it previously reported the alias as added or updated. The eight commands that prepare a submodule working tree — `oms commit`, `oms fetch`, `oms pull`, `oms push`, and the four `oms branch` subcommands — now stop with the Git diagnostic when automatic initialization cannot attach the baseline branch, instead of silently continuing past the failed attachment.
+
+- [#71](https://github.com/divlook/oh-my-space/pull/71) [`2ecd2ff`](https://github.com/divlook/oh-my-space/commit/2ecd2ff06e3601ca2ccb836cb5632316aae5d822) Thanks [@divlook](https://github.com/divlook)! - Create the root topology commit by default in `oms sync` and `oms unsync`, and decide it identically whether or not stdin is a terminal.
+
+  Previously the topology commit happened only with `--commit` or an accepted interactive prompt, and that prompt was gated on `process.stdin.isTTY`. In a terminal it appeared and defaulted to Yes, so the commit was normally created; in a pipe it was skipped entirely, the topology was left unstaged, and the command still exited 0. Identical repository state produced opposite results based on the terminal alone, and the non-interactive path left a required follow-up that `oms status` reported as `Run "oms sync <alias> --commit"`.
+
+  The default now lives in `finalizeTopology` rather than in the command-line flag, so it holds for piped shells and for internal callers that delegate to sync without passing an option.
+
+  BREAKING: `oms sync <alias>` and `oms unsync <alias>` now create a root commit where they previously left `.gitmodules` and the selected gitlinks unstaged. Pass `--no-commit` to keep the previous behavior. `--commit` is accepted for compatibility and produces exactly the default, so invocations that already passed it are unaffected. The interactive "Create a root topology commit?" prompt is removed; it defaulted to Yes, so accepting it was already the normal path. A workflow that ran several syncs and then hand-authored one commit will now produce one commit per invocation — use `oms sync api web` for a single combined commit, or `--no-commit` to keep hand-authoring. See `docs/migrations/0.14.x-to-0.15.0.md`.
+
+  Fixes `oms branch list <alias>` failing on its own second invocation. Preparing an unregistered alias delegates to sync, which left the topology uncommitted and put the alias into a partially-registered state; the next `oms branch list <alias>` then exited 1 with `root gitlink and .gitmodules registration are inconsistent or pending addition/removal`. The delegated sync now commits its topology, so repeating the command succeeds.
+
+  Every safety refusal is unchanged: partial removal topology is still rejected, an unsync commit still refuses unrelated staged root paths, a partially failed unsync still leaves successful topology unstaged, and a partially failed sync still finalizes only the successful aliases through the temporary index.
+
+- [#73](https://github.com/divlook/oh-my-space/pull/73) [`088f35d`](https://github.com/divlook/oh-my-space/commit/088f35df4d8831f1a37651dbab6b6f27f69d4492) Thanks [@divlook](https://github.com/divlook)! - Unify alias preparation across `oms commit`, `oms fetch`, `oms pull`, `oms push`, and the four `oms branch` operations.
+
+  Registered but uninitialized aliases are now initialized automatically before all eight commands continue, without creating or staging root topology. This makes invocations such as `oms pull api`, `oms commit api`, and `oms branch checkout api main` work directly after cloning a workspace instead of stopping at `Run "oms sync api" first`.
+
+  Declared but unregistered aliases now follow one bounded rule. `oms fetch`, `oms pull`, `oms branch list`, `oms branch switch`, and `oms branch checkout` offer to register and continue; acceptance creates one root topology commit, and a multi-alias fetch or pull asks once and registers the accepted set in one commit. Named aliases and sole candidates default to sync, while `--all` and multi-select default to skipping unregistered aliases. A chosen skip is reported and exits 0 while the remaining aliases continue.
+
+  `oms commit`, `oms push`, and `oms branch delete` continue to refuse unregistered aliases because a fresh clone cannot contain the local changes, unpushed commits, or deletable branch they require. Their errors now use the shared classifier and name `oms sync <alias>` without changing root state.
+
+  `oms commit`, `oms pull`, and `oms push` now attach a detached submodule `HEAD` automatically when a local branch already points at that commit. If attaching would move the working tree, interactive runs ask what to do and non-interactive runs stop with `oms branch switch` guidance.
+
+  Omitted alias selection for `oms commit`, `oms record`, `oms branch switch`, and `oms branch checkout` now depends on candidate count rather than terminal presence: zero candidates is a no-op, one candidate is selected automatically, and only genuine ambiguity requires a terminal.
+
+- [#68](https://github.com/divlook/oh-my-space/pull/68) [`5d0542d`](https://github.com/divlook/oh-my-space/commit/5d0542dc906ef448c5012a19de21baaf331a0f5d) Thanks [@divlook](https://github.com/divlook)! - Version the published workspace skills and report installed copies that have drifted.
+
+  Each skill now declares `metadata.author` and `metadata.version` in its `SKILL.md` frontmatter, and the build bakes those versions into the CLI. `oms doctor` compares installed copies against them and names the command that resolves the difference: `npx skills update <name...>` when a skill is older, or `oms update` when a skill is newer than the running CLI knows. Copies installed before versions existed report as unknown and are treated as older.
+
+  Installed skills are found through the `skills` tool's lock files and a search of agent skill directories, so every install layout the tool writes is covered. `oms update` runs the same check when `oms` is already up to date, and points back at `oms doctor` after upgrading the CLI, since the new version is not loaded in that process.
+
+  These findings are informational and never change an exit code.
+
+### Patch Changes
+
+- [#70](https://github.com/divlook/oh-my-space/pull/70) [`0bfc004`](https://github.com/divlook/oh-my-space/commit/0bfc00450cd22fddad3145e1f46f2b1e72a7e118) Thanks [@divlook](https://github.com/divlook)! - Speed up the canonical test suite and safely reuse exact successful verification during package builds and beta publishing.
+
+- [#77](https://github.com/divlook/oh-my-space/pull/77) [`2e4a3fd`](https://github.com/divlook/oh-my-space/commit/2e4a3fd8e9f763037b3c228a57479da062ad2d7c) Thanks [@divlook](https://github.com/divlook)! - Retry each failed `oms fetch` remote once with the same arguments before reporting the operation as failed.
+
 ## 0.14.2
 
 ### Patch Changes
