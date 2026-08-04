@@ -431,6 +431,62 @@
       "varianceMs2": 0,
       "maxMs": 56890,
       "gating": true
+    },
+    {
+      "label": "ci-minimum-supported",
+      "measuredAt": "2026-08-04T00:44:42.260Z",
+      "runtime": "v20.19.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        44718
+      ],
+      "medianMs": 44718,
+      "varianceMs2": 0,
+      "maxMs": 44718,
+      "gating": true,
+      "environment": "github-actions ubuntu-24.04",
+      "verificationCacheHit": false,
+      "runUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445",
+      "artifactUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445/artifacts/8876298632"
+    },
+    {
+      "label": "ci-development",
+      "measuredAt": "2026-08-04T00:44:30.992Z",
+      "runtime": "v24.18.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        34330
+      ],
+      "medianMs": 34330,
+      "varianceMs2": 0,
+      "maxMs": 34330,
+      "gating": true,
+      "environment": "github-actions ubuntu-24.04",
+      "verificationCacheHit": false,
+      "runUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445",
+      "artifactUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445/artifacts/8876295130"
+    },
+    {
+      "label": "ci-latest-supported",
+      "measuredAt": "2026-08-04T00:44:38.346Z",
+      "runtime": "v26.6.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        42969
+      ],
+      "medianMs": 42969,
+      "varianceMs2": 0,
+      "maxMs": 42969,
+      "gating": false,
+      "environment": "github-actions ubuntu-24.04",
+      "runUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445",
+      "artifactUrl": "https://github.com/divlook/oh-my-space/actions/runs/30866486445/artifacts/8876297187"
     }
   ]
 }

@@ -39,5 +39,5 @@
 - [x] 6.1 Confirm the migration map covers every pre-change contract and every final black-box contract has a process-boundary rationale.
 - [x] 6.2 Run the canonical suite on Node 20.19 and `.nvmrc` Node 24 and confirm functional results do not depend on wall-clock assertions.
 - [x] 6.3 Run three complete warm-dependency `npm test` measurements on the documented M2 and Node 24 environment, confirming a median at or below 60 seconds and no run above 75 seconds.
-- [ ] 6.4 Verify cache-miss Node 20 and Node 24 CI Test steps complete within 60 seconds and retain the run evidence.
+- [x] 6.4 Verify cache-miss Node 20 and Node 24 CI Test steps complete within 60 seconds and retain the run evidence.
 - [x] 6.5 Run the latest-supported-Node diagnostic benchmark and retain its runtime identity and duration with the acceptance evidence.
