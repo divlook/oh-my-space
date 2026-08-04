@@ -60,7 +60,7 @@
     "test:benchmark:latest": "node scripts/benchmark-test-suite.mjs --runs 1 --label latest-supported-diagnostic",
     "prepack": "node scripts/prepack.mjs",
     "changeset": "changeset",
-    "version": "changeset version",
+    "version": "changeset version && npm install --package-lock-only --ignore-scripts",
     "release": "changeset publish",
     "release:beta": "node scripts/publish-beta.mjs"
   },
