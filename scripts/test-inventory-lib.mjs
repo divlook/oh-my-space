@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { relative, resolve } from "node:path";
-import ts from "typescript";
+import { API } from "typescript/unstable/sync";
+import { isCallExpression, isIdentifier, isNoSubstitutionTemplateLiteral, isStringLiteral } from "typescript/unstable/ast/is";
 
 
 /** Discovers executable test contracts and their deterministic owners. */
@@ -10,20 +11,30 @@ export function discoverTestContracts(root) {
   const sources = new Map(files.map((file) => [relative(root, file), readFileSync(file, "utf8")]));
   const wrappers = discoverWrappers(sources);
   const contracts = [];
+  const api = new API({ cwd: root });
 
-  for (const [source, content] of sources) {
-    const names = extractContractNames(content);
-    for (const [ordinal, name] of names.entries()) {
-      const owners = ownersFor(source, name, ordinal, wrappers);
-      contracts.push({
-        id: `${source}::${name}`,
-        name,
-        source,
-        layer: layerFor(source),
-        owners,
-      });
+  try {
+    const snapshot = api.updateSnapshot({ openFiles: files });
+    for (const [source] of sources) {
+      const file = resolve(root, source);
+      const sourceFile = snapshot.getDefaultProjectForFile(file)?.program.getSourceFile(file);
+      if (!sourceFile) throw new Error(`TypeScript did not parse test source ${source}`);
+      const names = extractContractNames(sourceFile);
+      for (const [ordinal, name] of names.entries()) {
+        const owners = ownersFor(source, name, ordinal, wrappers);
+        contracts.push({
+          id: `${source}::${name}`,
+          name,
+          source,
+          layer: layerFor(source),
+          owners,
+        });
+      }
     }
+  } finally {
+    api.close();
   }
+
   return contracts.sort((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -72,23 +83,22 @@ export function validateTestInventory(inventory, discovered) {
 }
 
 /** Extracts literal node:test contract names in declaration order. */
-export function extractContractNames(content) {
-  const source = ts.createSourceFile("contracts.ts", content, ts.ScriptTarget.Latest, true);
+export function extractContractNames(source) {
   const names = [];
   visit(source);
   return names;
 
   function visit(node) {
     if (
-      ts.isCallExpression(node)
-      && ts.isIdentifier(node.expression)
+      isCallExpression(node)
+      && isIdentifier(node.expression)
       && node.expression.text === "test"
       && node.arguments.length > 0
-      && (ts.isStringLiteral(node.arguments[0]) || ts.isNoSubstitutionTemplateLiteral(node.arguments[0]))
+      && (isStringLiteral(node.arguments[0]) || isNoSubstitutionTemplateLiteral(node.arguments[0]))
     ) {
       names.push(node.arguments[0].text);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 }
 

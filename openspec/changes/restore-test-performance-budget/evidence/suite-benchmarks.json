@@ -416,6 +416,21 @@
       "varianceMs2": 0,
       "maxMs": 58867,
       "gating": false
+    },
+    {
+      "label": "ci-development-fix-local",
+      "measuredAt": "2026-08-04T00:43:13.341Z",
+      "runtime": "v24.18.1",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 10,
+      "durationsMs": [
+        56890
+      ],
+      "medianMs": 56890,
+      "varianceMs2": 0,
+      "maxMs": 56890,
+      "gating": true
     }
   ]
 }
