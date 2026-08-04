@@ -930,6 +930,8 @@ const SKILL_REFERENCE = JSON.stringify({
   "oms-pointer": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
   "oms-branch": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
 });
+// Fixed incompatible runtime so package release bumps cannot change these channel-selection scenarios.
+const INCOMPATIBLE_RUNTIME_VERSION = "0.14.2";
 
 /**
  * Builds a fake skills-tool home. `installed` maps a skill name to the version its SKILL.md declares,
@@ -1022,13 +1024,14 @@ test("doctor prefers a satisfying stable channel over beta", () => {
     installed: { "oms-branch": { version: "1.1.0", omsVersion: ">=1.0.0" } },
   });
   const { result, output } = doctorWithSkills(cwd, home, {
+    OMS_TEST_PACKAGE_VERSION: INCOMPATIBLE_RUNTIME_VERSION,
     OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({
       "dist-tags": { latest: "1.0.0" },
     }),
     OMS_TEST_INSTALL_CONTEXT: installContext("global", { manager: "pnpm" }),
   });
   assert.equal(result.status, 0, output);
-  assert.match(output, /requires oms >=1\.0\.0; running oms is 0\.14\.2/);
+  assert.match(output, versionPattern(`requires oms >=1.0.0; running oms is ${INCOMPATIBLE_RUNTIME_VERSION}`));
   assert.match(output, /pnpm add -g oh-my-space@latest/);
   assert.doesNotMatch(output, /oh-my-space@beta/);
 });
@@ -1040,8 +1043,9 @@ test("doctor recommends beta when only beta satisfies the installed skill", () =
     installed: { "oms-branch": { version: "1.1.0", omsVersion: ">=1.0.0-0" } },
   });
   const { result, output } = doctorWithSkills(cwd, home, {
+    OMS_TEST_PACKAGE_VERSION: INCOMPATIBLE_RUNTIME_VERSION,
     OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({
-      "dist-tags": { latest: "0.14.2", beta: "1.0.0-beta.sha-test" },
+      "dist-tags": { latest: INCOMPATIBLE_RUNTIME_VERSION, beta: "1.0.0-beta.sha-test" },
     }),
     OMS_TEST_INSTALL_CONTEXT: installContext("global", { manager: "bun" }),
   });
