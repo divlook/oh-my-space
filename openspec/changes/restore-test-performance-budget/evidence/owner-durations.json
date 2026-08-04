@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-08-03T23:33:39.456Z",
+  "runtime": "v24.18.1",
+  "command": "/Users/chad/.npm/_npx/387698761821791d/node_modules/node/bin/node --test <owner>",
+  "owners": {
+    "tests/cli-branch-a.test.js": {
+      "durationMs": 11842,
+      "status": 0
+    },
+    "tests/cli-branch-b.test.js": {
+      "durationMs": 9723,
+      "status": 0
+    },
+    "tests/cli-branch-list-a.test.js": {
+      "durationMs": 11437,
+      "status": 0
+    },
+    "tests/cli-branch-list-b.test.js": {
+      "durationMs": 10896,
+      "status": 0
+    },
+    "tests/cli-commit-a.test.js": {
+      "durationMs": 26886,
+      "status": 0
+    },
+    "tests/cli-commit-b.test.js": {
+      "durationMs": 23519,
+      "status": 0
+    },
+    "tests/cli-commit-c.test.js": {
+      "durationMs": 26899,
+      "status": 0
+    },
+    "tests/cli-preparation-a.test.js": {
+      "durationMs": 12688,
+      "status": 0
+    },
+    "tests/cli-preparation-b.test.js": {
+      "durationMs": 11663,
+      "status": 0
+    },
+    "tests/cli-preparation-c.test.js": {
+      "durationMs": 11814,
+      "status": 0
+    },
+    "tests/cli-scaffold.test.js": {
+      "durationMs": 7812,
+      "status": 0
+    },
+    "tests/cli-sync-a.test.js": {
+      "durationMs": 24833,
+      "status": 0
+    },
+    "tests/cli-sync-b.test.js": {
+      "durationMs": 23377,
+      "status": 0
+    },
+    "tests/cli-sync-c.test.js": {
+      "durationMs": 24841,
+      "status": 0
+    },
+    "tests/cli-tools.test.js": {
+      "durationMs": 7440,
+      "status": 0
+    },
+    "tests/integration/beta-publish.test.ts": {
+      "durationMs": 1812,
+      "status": 0
+    },
+    "tests/integration/prepack.contracts.ts": {
+      "durationMs": 3260,
+      "status": 0
+    },
+    "tests/integration/verification.test.ts": {
+      "durationMs": 1063,
+      "status": 0
+    },
+    "tests/unit/core-contracts.test.ts": {
+      "durationMs": 91,
+      "status": 0
+    },
+    "tests/unit/git.test.ts": {
+      "durationMs": 77,
+      "status": 0
+    },
+    "tests/unit/help-selection.test.ts": {
+      "durationMs": 97,
+      "status": 0
+    },
+    "tests/unit/test-inventory.test.ts": {
+      "durationMs": 258,
+      "status": 0
+    },
+    "tests/unit/update-install-agent-skill.test.ts": {
+      "durationMs": 111,
+      "status": 0
+    },
+    "tests/unit/verification-record.test.ts": {
+      "durationMs": 78,
+      "status": 0
+    }
+  }
+}
