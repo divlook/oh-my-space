@@ -42,7 +42,9 @@ process.on("exit", () => {
 const cli = resolve("dist/oms.js");
 const publishBetaScript = resolve("scripts/publish-beta.mjs");
 
-const testEnv = normalizedTestEnvironment();
+const testEnv = normalizedTestEnvironment({
+  NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE ?? resolve("node_modules/.cache/oms-test-compile", process.version),
+});
 
 function run(args, options = {}) {
   return spawnSync(process.execPath, [cli, ...args], {
@@ -111,9 +113,9 @@ function configIdentity(cwd) {
   git(cwd, "config", "user.name", "Test");
 }
 
-let upstreamTemplate;
-let workspaceTemplate;
-let apiWorkspaceTemplate;
+let upstreamTemplate = process.env.OMS_TEST_UPSTREAM_TEMPLATE;
+let workspaceTemplate = process.env.OMS_TEST_WORKSPACE_TEMPLATE;
+let apiWorkspaceTemplate = process.env.OMS_TEST_API_WORKSPACE_TEMPLATE;
 
 function getUpstreamTemplate() {
   if (upstreamTemplate) return upstreamTemplate;
@@ -159,6 +161,15 @@ function getApiWorkspaceTemplate() {
   return apiWorkspaceTemplate;
 }
 
+/** Build immutable fixture templates once for reuse by parallel test owners. */
+function prepareSharedFixtures() {
+  return {
+    upstream: getUpstreamTemplate(),
+    workspace: getWorkspaceTemplate(),
+    apiWorkspace: getApiWorkspaceTemplate(),
+  };
+}
+
 /**
  * Create a bare upstream + a seed repo that pushes branches into it.
  * Returns the bare repo path. Optionally creates additional branches.
@@ -174,9 +185,7 @@ function initBareUpstream({ branches = ["main"] } = {}) {
 
 /** A git workspace (parent repo) with an initial commit — the host for submodules. */
 function initGitWorkspace() {
-  const cwd = copyFixture(getWorkspaceTemplate(), "oms-test-");
-  configIdentity(cwd);
-  return cwd;
+  return copyFixture(getWorkspaceTemplate(), "oms-test-");
 }
 
 function gitOut(cwd, ...args) {
@@ -219,7 +228,6 @@ function gitTopLevelStubEnv(mode) {
 function workspaceWithApi() {
   const bare = initBareUpstream();
   const cwd = copyFixture(getApiWorkspaceTemplate(), "oms-test-");
-  configIdentity(cwd);
   writeSources(cwd, sourceFor("api", bare));
   git(cwd, "config", "-f", ".gitmodules", "submodule.oms/api.url", `file://${bare}`);
   const wt = join(cwd, "oms", "api");
@@ -319,6 +327,7 @@ export {
   writeSources,
   git,
   configIdentity,
+  prepareSharedFixtures,
   initBareUpstream,
   initGitWorkspace,
   gitOut,

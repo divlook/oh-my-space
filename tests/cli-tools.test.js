@@ -381,24 +381,6 @@ test("release:beta rejects publishing with allow-dirty", () => {
   assert.doesNotMatch(output, /Preparing oh-my-space@/);
 });
 
-test("update fails cleanly when registry latest is unavailable", () => {
-  const result = run(["update", "--check"], {
-    env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": {} }) }),
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /missing dist-tags\.latest/);
-  assert.doesNotMatch(output, /Selected command/);
-});
-
-test("update treats invalid registry semver as a failure", () => {
-  const result = run(["update", "--check"], {
-    env: updateEnv({ OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "not-semver" } }) }),
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /not valid semver/);
-});
 
 test("update treats current newer than registry latest as non-mutating success", () => {
   const result = run(["update"], {

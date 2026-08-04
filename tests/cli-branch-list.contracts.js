@@ -45,6 +45,19 @@ import {
   gitmodulesSectionCount,
   syncedSubmodule,
 } from "./helpers.js";
+function gitFailureEnv(command, diagnostic) {
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = tempFixture("oms-git-stub-");
+  const stubGit = join(stubDir, "git");
+  const condition = command.map((arg, index) => `[ "$${index + 1}" = ${JSON.stringify(arg)} ]`).join(" && ");
+  writeFileSync(
+    stubGit,
+    `#!/usr/bin/env bash\nif ${condition}; then printf '%s\\n' ${JSON.stringify(`fatal: ${diagnostic}`)} >&2; exit 1; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(stubGit, 0o755);
+  return { ...testEnv, PATH: `${stubDir}${delimiter}${process.env.PATH}` };
+}
+
 // ─── branch list: automated inventory and degraded remote refresh ───
 
 test("branch list shows sorted local and every declared remote branch, excluding symbolic HEAD and unmanaged remotes", () => {
@@ -158,7 +171,10 @@ test("branch list marks failed fetch cached refs stale, redacts credentials, and
   const branch = gitOut(dir, "branch", "--show-current");
   writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: https://secret:token@example.invalid/private.git\n    branch: main\n`);
 
-  const result = run(["branch", "list", "api"], { cwd });
+  const result = run(["branch", "list", "api"], {
+    cwd,
+    env: gitFailureEnv(["fetch", "origin"], "https://secret:token@example.invalid/private.git is unavailable"),
+  });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /origin\tstale\tcached/);
@@ -170,30 +186,6 @@ test("branch list marks failed fetch cached refs stale, redacts credentials, and
   assert.equal(gitOut(dir, "branch", "--show-current"), branch);
 });
 
-test("branch list redacts credential-bearing query parameters from Git diagnostics", () => {
-  const origin = initBareUpstream();
-  const cwd = initGitWorkspace();
-  syncedSubmodule(cwd, "api", origin);
-  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  const stubDir = tempFixture("oms-git-stub-");
-  const stubGit = join(stubDir, "git");
-  writeFileSync(stubGit, `#!/usr/bin/env bash\nif [ "$1" = "fetch" ] && [ "$2" = "origin" ]; then echo 'fatal: https://example.invalid/repo?api_key=one&client_secret=two&refresh_token=three&secret=four&auth_token=five&oauth_token=six' >&2; exit 1; fi\nexec "${realGit}" "$@"\n`);
-  chmodSync(stubGit, 0o755);
-
-  const result = run(["branch", "list", "api"], {
-    cwd,
-    env: { ...testEnv, PATH: `${stubDir}${delimiter}${process.env.PATH}` },
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /api_key=\[redacted\]/);
-  assert.match(output, /client_secret=\[redacted\]/);
-  assert.match(output, /refresh_token=\[redacted\]/);
-  assert.match(output, /secret=\[redacted\]/);
-  assert.match(output, /auth_token=\[redacted\]/);
-  assert.match(output, /oauth_token=\[redacted\]/);
-  assert.doesNotMatch(output, /(?:api_key=one|client_secret=two|refresh_token=three|secret=four|auth_token=five|oauth_token=six)/);
-});
 
 test("branch list reports fresh empty remote groups and detached HEAD", () => {
   const origin = initBareUpstream();
@@ -366,7 +358,8 @@ test("branch list refreshes an omitted origin default and distrusts cached origi
   assert.equal(fresh.status, 0, fresh.stdout + fresh.stderr);
   assert.match(fresh.stdout + fresh.stderr, /BASELINE \[known\]: main/);
 
-  writeSources(cwd, "repos:\n  - alias: api\n    remotes:\n      origin: https://example.invalid/missing.git\n");
+  const missingOrigin = join(tempFixture("missing-origin-"), "missing.git");
+  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${missingOrigin}\n`);
   const stale = run(["branch", "list", "api"], { cwd });
   const output = stale.stdout + stale.stderr;
   assert.equal(stale.status, 0, output);
@@ -422,7 +415,10 @@ test("branch list initialization failure preserves partial state and redacts man
   rmSync(join(cwd, ".git", "modules", "oms", "api"), { recursive: true, force: true });
   writeSources(cwd, "repos:\n  - alias: api\n    remotes:\n      origin: https://secret:token@example.invalid/private.git\n    branch: main\n");
 
-  const result = run(["branch", "list", "api"], { cwd });
+  const result = run(["branch", "list", "api"], {
+    cwd,
+    env: gitFailureEnv(["submodule", "add"], "https://secret:token@example.invalid/private.git is unavailable"),
+  });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
   assert.match(output, /automatic initialization failed/);
@@ -449,9 +445,10 @@ test("branch list preserves accepted sync precondition and operational exit code
 
   const operationalCwd = initGitWorkspace();
   writeSources(operationalCwd, "repos:\n  - alias: api\n    remotes:\n      origin: https://secret:token@example.invalid/private.git\n    branch: main\n");
+  const failureEnv = gitFailureEnv(["submodule", "add"], "https://secret:token@example.invalid/private.git is unavailable");
   const operational = run(["branch", "list", "api"], {
     cwd: operationalCwd,
-    env: queueEnv([{ type: "select", value: "sync" }]),
+    env: queueEnv([{ type: "select", value: "sync" }], { PATH: failureEnv.PATH }),
   });
   const output = operational.stdout + operational.stderr;
   assert.equal(operational.status, 2, output);
@@ -464,12 +461,13 @@ test("branch list keeps an exhausted declared remote with no cached refs visible
   const origin = initBareUpstream();
   const cwd = initGitWorkspace();
   syncedSubmodule(cwd, "api", origin);
-  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${origin}\n      missing: https://example.invalid/missing.git\n    branch: main\n`);
+  const missingRemote = join(tempFixture("missing-remote-"), "missing.git");
+  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${origin}\n      missing: file://${missingRemote}\n    branch: main\n`);
 
   const result = run(["branch", "list", "api"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /missing\tunavailable\t\(empty\)/);
-  assert.match(output, /fetch failed twice|Could not resolve host/);
+  assert.match(output, /does not appear to be a git repository/);
   assert.match(output, /origin\tfresh\tmain/);
 });

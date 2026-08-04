@@ -72,7 +72,13 @@ jobs:
         run: npm ci
       - name: Test
         if: ${{ steps.marker.outputs.cache-hit != 'true' }}
-        run: npm test
+        run: node scripts/benchmark-test-suite.mjs --runs 1 --label ci-${{ matrix.name }} --ci-gating
+      - name: Upload test performance evidence
+        if: ${{ steps.marker.outputs.cache-hit != 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-performance-${{ matrix.name }}-${{ github.run_id }}
+          path: openspec/changes/restore-test-performance-budget/evidence/suite-benchmarks.json
       - name: Pack dry run
         if: ${{ steps.marker.outputs.cache-hit != 'true' }}
         run: npm pack --dry-run --ignore-scripts
@@ -106,3 +112,40 @@ jobs:
             cat "$MARKER_PATH"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+
+  latest-supported-diagnostic:
+    name: test (latest-supported diagnostic)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Setup latest supported Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: current
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Benchmark complete suite
+        run: node scripts/benchmark-test-suite.mjs --runs 1 --label ci-latest-supported
+      - name: Report diagnostic runtime
+        if: ${{ always() }}
+        run: |
+          duration=$(node -e 'const evidence = require("./openspec/changes/restore-test-performance-budget/evidence/suite-benchmarks.json"); process.stdout.write(String(evidence.measurements.find((entry) => entry.label === "ci-latest-supported")?.maxMs ?? "unavailable"))')
+          {
+            echo "### Latest supported Node.js diagnostic"
+            echo
+            echo "Runtime: $(node --version)"
+            echo "Complete-suite duration: ${duration}ms"
+            echo "This benchmark is non-gating; Node 20.19 and Node 24 remain acceptance gates."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload diagnostic performance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-performance-latest-${{ github.run_id }}
+          path: openspec/changes/restore-test-performance-budget/evidence/suite-benchmarks.json
