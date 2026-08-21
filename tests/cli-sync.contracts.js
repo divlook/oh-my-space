@@ -407,6 +407,7 @@ test("status --json keeps its schema and path representation through a symlinked
     "root",
     "schemaVersion",
     "toolVersion",
+    "trees",
     "workspaceRoot",
   ]);
   assert.equal(data.workspaceRoot, realpathSync(cwd));

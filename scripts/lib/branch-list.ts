@@ -15,6 +15,7 @@ import { loadForSubmodules } from "./manifest.js";
 import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
 import { ensureRemotes } from "./submodule-config.js";
 import type { Repo } from "./types.js";
+import { refuseInsideManagedTree } from "./tree-ops.js";
 
 type RemoteState = "fresh" | "stale" | "unavailable";
 type RemoteInventory = { name: string; state: RemoteState; branches: string[]; warning: string | null };
@@ -174,6 +175,7 @@ function renderInventory(
 export async function runBranchList(aliasArg: string | undefined): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
+  if (refuseInsideManagedTree(loaded.repoRoot)) return 1;
   const resolved = await resolveAlias(loaded.repos, loaded.repoRoot, aliasArg);
   if (resolved.kind === "error") return resolved.code;
   const { repo } = resolved;

@@ -4,6 +4,7 @@ import {
   MANIFEST_FILENAME,
   MIN_GIT_MAJOR,
   MIN_GIT_MINOR,
+  TREE_DIRNAME,
 } from "./constants.js";
 import {
   currentBranch,
@@ -22,6 +23,7 @@ import { abortOnLegacyRenameAt, abortOnLegacyWorktree, emitLegacyRenameHintWalkU
 import { reportSkillFindings } from "./skills.js";
 import { pinState } from "./status.js";
 import { gitignoreIgnoresOms } from "./workspace-ignore.js";
+import { listManagedTrees, rootExcludeEntryPresent } from "./tree-ops.js";
 
 export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): Promise<number> {
   const loaded = loadRepos();
@@ -108,6 +110,27 @@ export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): 
     if (pinState(repoRoot, repo.alias) === "moved") {
       log.info(`${repo.alias}: working commit differs from the recorded pointer. Commit oms/${repo.alias} to record it.`);
     }
+  }
+
+  // Managed-tree diagnostics: broken links get repair guidance; a missing local-exclude entry
+  // would let .oms-tree/ pollute the root's untracked files until the next `oms tree add`.
+  const treeInventory = listManagedTrees(repoRoot, repos);
+  for (const tree of treeInventory) {
+    if (tree.state === "broken") {
+      log.warn(
+        `${tree.path}: ${tree.error}. Run "git -C oms/${tree.alias} worktree repair ${tree.absolutePath}" to restore it.`,
+      );
+      warnings++;
+    } else if (tree.state === "foreign") {
+      log.warn(`${tree.path}: ${tree.error}. Remove it with "oms tree remove ${tree.alias} ${tree.task}".`);
+      warnings++;
+    }
+  }
+  if (treeInventory.length > 0 && rootExcludeEntryPresent(repoRoot, gitRunner) === false) {
+    log.warn(
+      `${TREE_DIRNAME}/ exists but the root's local exclude entry is missing. Run "oms tree add" to re-assert it.`,
+    );
+    warnings++;
   }
 
   // Informational only: skill state may be global and never changes the doctor exit status.

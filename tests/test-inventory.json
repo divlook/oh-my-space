@@ -22,7 +22,9 @@
           "tests/cli-branch-list-b.test.js",
           "tests/cli-branch-b.test.js",
           "tests/cli-scaffold.test.js",
-          "tests/cli-tools.test.js"
+          "tests/cli-tools.test.js",
+          "tests/cli-tree-b.test.js",
+          "tests/cli-tree-a.test.js"
         ]
       }
     }
@@ -6820,6 +6822,160 @@
       "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
+      "id": "tests/cli-tree.contracts.js::doctor reports broken trees with repair guidance and a missing exclude entry",
+      "name": "doctor reports broken trees with repair guidance and a missing exclude entry",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-b.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::status --json exposes the trees array with filtering, broken entries, and foreign directories",
+      "name": "status --json exposes the trees array with filtering, broken entries, and foreign directories",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-b.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree add --from sets the start point, resumes an existing branch, and refuses --from on resume",
+      "name": "tree add --from sets the start point, resumes an existing branch, and refuses --from on resume",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-a.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree add refuses duplicate paths including foreign directories, invalid names, and unknown aliases",
+      "name": "tree add refuses duplicate paths including foreign directories, invalid names, and unknown aliases",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-a.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree add starts at the canonical HEAD, prints one line, and leaves a detached canonical checkout detached",
+      "name": "tree add starts at the canonical HEAD, prints one line, and leaves a detached canonical checkout detached",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-a.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree add works offline and asserts the exclude entry idempotently with no root commit",
+      "name": "tree add works offline and asserts the exclude entry idempotently with no root commit",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-a.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree list reports state for healthy, broken, and foreign entries and is a no-op when empty",
+      "name": "tree list reports state for healthy, broken, and foreign entries and is a no-op when empty",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-b.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree remove deletes an empty foreign directory and refuses a non-empty one without force",
+      "name": "tree remove deletes an empty foreign directory and refuses a non-empty one without force",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-b.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree remove prunes a broken tree and cleans up empty parents through the namespace root",
+      "name": "tree remove prunes a broken tree and cleans up empty parents through the namespace root",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-a.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree remove refuses a dirty worktree, force discards it, and both preserve the branch",
+      "name": "tree remove refuses a dirty worktree, force discards it, and both preserve the branch",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-a.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree remove refuses from inside the target tree and reports unknown trees",
+      "name": "tree remove refuses from inside the target tree and reports unknown trees",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-b.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree remove resolves omitted arguments interactively and fails non-interactively",
+      "name": "tree remove resolves omitted arguments interactively and fails non-interactively",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-b.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::tree-cwd guard refuses alias commands before any mutation while read-only commands stay available",
+      "name": "tree-cwd guard refuses alias commands before any mutation while read-only commands stay available",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-b.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-tree.contracts.js::unsync refuses while inventory entries exist, force included, and proceeds after removal",
+      "name": "unsync refuses while inventory entries exist, force included, and proceeds after removal",
+      "source": "tests/cli-tree.contracts.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-tree-b.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
       "id": "tests/integration/beta-publish.test.ts::beta dry-run and publish reuse stable verification, rebuild exact beta artifacts, restore metadata, and retain registry retries",
       "name": "beta dry-run and publish reuse stable verification, rebuild exact beta artifacts, restore metadata, and retain registry retries",
       "source": "tests/integration/beta-publish.test.ts",
@@ -7068,6 +7224,83 @@
       "layer": "unit",
       "owners": [
         "tests/unit/test-inventory.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/unit/tree-ops.test.ts::tree-ops classifies the filesystem ∪ porcelain union with foreign directories and undeclared aliases",
+      "name": "tree-ops classifies the filesystem ∪ porcelain union with foreign directories and undeclared aliases",
+      "source": "tests/unit/tree-ops.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/tree-ops.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/unit/tree-ops.test.ts::tree-ops dirty derivation is untracked-inclusive and broken entries keep null fields",
+      "name": "tree-ops dirty derivation is untracked-inclusive and broken entries keep null fields",
+      "source": "tests/unit/tree-ops.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/tree-ops.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/unit/tree-ops.test.ts::tree-ops exclude-entry decision is idempotent across both spellings",
+      "name": "tree-ops exclude-entry decision is idempotent across both spellings",
+      "source": "tests/unit/tree-ops.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/tree-ops.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/unit/tree-ops.test.ts::tree-ops extracts the alias/task key suffix-based, so moved roots still match",
+      "name": "tree-ops extracts the alias/task key suffix-based, so moved roots still match",
+      "source": "tests/unit/tree-ops.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/tree-ops.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/unit/tree-ops.test.ts::tree-ops guard resolves the namespace below the given root only",
+      "name": "tree-ops guard resolves the namespace below the given root only",
+      "source": "tests/unit/tree-ops.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/tree-ops.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/unit/tree-ops.test.ts::tree-ops parses healthy, detached, and prunable porcelain shapes from the spike",
+      "name": "tree-ops parses healthy, detached, and prunable porcelain shapes from the spike",
+      "source": "tests/unit/tree-ops.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/tree-ops.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/unit/tree-ops.test.ts::tree-ops task-name validation enforces the no-separator rule before check-ref-format",
+      "name": "tree-ops task-name validation enforces the no-separator rule before check-ref-format",
+      "source": "tests/unit/tree-ops.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/tree-ops.test.ts"
       ],
       "boundary": "in-process-decision",
       "processBoundaryRationale": null

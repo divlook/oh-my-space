@@ -10,7 +10,7 @@ Run this before an agent chooses where to branch or commit:
 oms status --json
 ```
 
-The command prints one schema-versioned JSON object describing the workspace root, inferred current alias, recorded commits, source branches, dirtiness, and ahead/behind state. Run `oms status --help` for the authoritative field contract of the installed CLI.
+The command prints one schema-versioned JSON object describing the workspace root, inferred current alias, recorded commits, source branches, dirtiness, and ahead/behind state. The `trees` array lists managed trees under `.oms-tree/`, including broken links and foreign directories. Run `oms status --help` for the authoritative field contract of the installed CLI.
 
 ## Install repository instructions
 
@@ -85,5 +85,12 @@ All skill findings are informational and do not change the command's exit status
 4. Use `oms commit <alias>` and `oms push <alias>` for the source repository.
 5. Use `oms record <alias>` to commit the new recorded commit in the main project.
 6. Run `oms status --json` again and confirm that no unintended Git scope changed.
+
+For a second task in the same repository, work in a managed tree instead of switching the canonical checkout:
+
+1. Create it with `oms tree add <alias> <task>` — the tree lives at `.oms-tree/<alias>/<task>/` on the new `<task>` branch, and the canonical checkout stays where it is.
+2. Work inside the tree with plain Git: edit, commit, branch, and push the `<task>` branch. `oms` alias commands refuse to run from inside a tree; run them from the canonical checkout or the workspace root.
+3. Open a pull request from the pushed branch. After it merges, reflect the result: `oms pull <alias>`, then `oms record <alias>`.
+4. Remove the tree with `oms tree remove <alias> <task>` when the task is done; the branch survives for later deletion or reuse.
 
 See [Getting started](getting-started.md#complete-the-first-change) for the human-readable workflow and [How OMS works](how-oms-works.md#two-git-boundaries) for repository boundaries.

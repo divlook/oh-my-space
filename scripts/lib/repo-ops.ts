@@ -43,6 +43,7 @@ import {
 import { finalizeTopology } from "./topology-commit.js";
 import { attachBranch, ensureRemotes, gitmodulesBranch } from "./submodule-config.js";
 import { ensureOmsNotIgnored } from "./workspace-ignore.js";
+import { listManagedTrees } from "./tree-ops.js";
 import type {
   OperationResult,
   RemoveOutcome,
@@ -509,6 +510,25 @@ export async function runUnsync(aliases: string[], options: UnsyncOptions): Prom
 
   const picked = await selectRepos(repos, aliases, options, "unsync");
   if (!picked || picked.length === 0) return 1;
+
+  // Unsync deletes the submodule's shared Git directory, which would take every attached tree's
+  // branch history with it; force discards working-tree changes, not commit history.
+  const inventory = listManagedTrees(repoRoot, repos);
+  const blocked = picked
+    .map((repo) => ({
+      repo,
+      entries: inventory.filter((tree) => tree.alias === repo.alias),
+    }))
+    .filter(({ entries }) => entries.length > 0);
+  if (blocked.length > 0) {
+    for (const { repo, entries } of blocked) {
+      const listing = entries.map((tree) => tree.path).join(", ");
+      log.error(
+        `${repo.alias}: managed trees exist (${listing}). Unsync would delete the submodule Git directory they share, so remove them first with "oms tree remove ${repo.alias} <task>". The submodule, its Git directory, and the trees were preserved.`,
+      );
+    }
+    return 1;
+  }
 
   const recovered = recoveryPreflight(repoRoot);
   if (!recovered.ok) {

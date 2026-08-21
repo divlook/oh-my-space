@@ -15,6 +15,7 @@ import {
   submodulePath,
 } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
+import { listManagedTrees, type ManagedTree } from "./tree-ops.js";
 import type { Repo, StatusOptions } from "./types.js";
 
 type StatusRow = {
@@ -467,7 +468,20 @@ type JsonStatus = {
   currentAlias: string | null;
   root: JsonRootStatus;
   repos: JsonRepoStatus[];
+  trees: JsonTreeStatus[];
   errors: string[];
+};
+
+/** Machine-readable managed-tree entry: one inventory entry under `.oms-tree/`. */
+type JsonTreeStatus = {
+  alias: string;
+  task: string;
+  path: string;
+  absolutePath: string;
+  branch: string | null;
+  head: string | null;
+  dirty: boolean | null;
+  error: string | null;
 };
 
 /**
@@ -546,8 +560,29 @@ function buildRootStatus(repoRoot: string, configuredRepos: Repo[], selectedRepo
   return { branch, head, detached, dirty: isDirtyCounts(changes), changes, submodulePointers: pointers };
 }
 
+/** Managed-tree JSON entries, narrowed by the selected aliases when a filter applies. */
+function buildTreeStatuses(repoRoot: string, configuredRepos: Repo[], selectedAliases: string[] | null): JsonTreeStatus[] {
+  const trees = listManagedTrees(repoRoot, configuredRepos);
+  const narrowed = selectedAliases === null ? trees : trees.filter((tree) => selectedAliases.includes(tree.alias));
+  return narrowed.map((tree: ManagedTree) => ({
+    alias: tree.alias,
+    task: tree.task,
+    path: tree.path,
+    absolutePath: tree.absolutePath,
+    branch: tree.branch,
+    head: tree.head,
+    dirty: tree.dirty,
+    error: tree.error,
+  }));
+}
+
 /** Emit exactly one two-space pretty JSON object on stdout. Exits non-zero if any repo read failed. */
-function printStatusJson(repoRoot: string, configuredRepos: Repo[], selectedRepos: Repo[]): number {
+function printStatusJson(
+  repoRoot: string,
+  configuredRepos: Repo[],
+  selectedRepos: Repo[],
+  treeAliases: string[] | null,
+): number {
   const repos = selectedRepos.map((repo) => buildRepoStatus(repoRoot, repo));
   const errors = repos.filter((r) => r.error !== null).map((r) => r.error as string);
   const payload: JsonStatus = {
@@ -557,6 +592,7 @@ function printStatusJson(repoRoot: string, configuredRepos: Repo[], selectedRepo
     currentAlias: inferAliasFromCwd(repoRoot, configuredRepos),
     root: buildRootStatus(repoRoot, configuredRepos, selectedRepos),
     repos,
+    trees: buildTreeStatuses(repoRoot, configuredRepos, treeAliases),
     errors,
   };
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -569,6 +605,9 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
   const { repos, repoRoot } = loaded;
 
   let selected: Repo[];
+  // Null means "no alias filter was given": the tree inventory is then reported whole, including
+  // entries whose alias is no longer declared in the manifest.
+  let treeAliases: string[] | null = null;
   if (options.all || aliases.length === 0) {
     selected = repos;
   } else {
@@ -581,10 +620,11 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
     }
     const byAlias = new Map(repos.map((r) => [r.alias, r]));
     selected = uniqueAliases(aliases).map((a) => byAlias.get(a)!);
+    treeAliases = selected.map((repo) => repo.alias);
   }
 
   if (options.json) {
-    return printStatusJson(repoRoot, repos, selected);
+    return printStatusJson(repoRoot, repos, selected, treeAliases);
   }
 
   const rows: StatusRow[] = [];
@@ -622,6 +662,20 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
     console.log(
       `${pad(r.alias, aW)}  ${pad(r.branch, bW)}  ${pad(r.pin, pW)}  ${pad(r.dirty, dW)}  ${pad(r.ahead, 5)}  ${r.behind}`,
     );
+  }
+
+  // Trees are listed only when any exist, keeping the common no-tree output unchanged.
+  const trees = listManagedTrees(repoRoot, repos).filter(
+    (tree) => treeAliases === null || treeAliases.includes(tree.alias),
+  );
+  if (trees.length > 0) {
+    console.log("");
+    console.log("Managed trees (.oms-tree/):");
+    for (const tree of trees) {
+      const state = tree.state === "healthy" ? (tree.dirty ? "dirty" : "clean") : tree.error;
+      const branch = tree.state === "healthy" ? (tree.branch ?? "(detached)") : "-";
+      console.log(`  ${tree.path}  ${branch}  ${state}`);
+    }
   }
   return 0;
 }

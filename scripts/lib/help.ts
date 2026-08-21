@@ -13,12 +13,14 @@ an existing Git work tree before changing any file, including with --force.
 
 // Per-command help: each new or changed command states its purpose, scope boundary, and an example.
 export const statusHelp = `
-Machine-readable mode prints exactly one JSON object on stdout. The schemaVersion 1 payload has seven
-top-level keys: schemaVersion, toolVersion, workspaceRoot, currentAlias, root, repos, and errors.
+Machine-readable mode prints exactly one JSON object on stdout. The schemaVersion 1 payload has eight
+top-level keys: schemaVersion, toolVersion, workspaceRoot, currentAlias, root, repos, trees, and errors.
 Submodule pointer movement lives under root.submodulePointers, with moved, staged, split, and conflict
 arrays (not a top-level "pointers" key). Each repos[] entry summarizes one oms/<alias>/ submodule
-(alias, path, branch, head, pin, dirty, ahead/behind, error). Read the live --json output for exact
-per-field values.
+(alias, path, branch, head, pin, dirty, ahead/behind, error). Each trees[] entry summarizes one
+managed tree under .oms-tree/ (alias, task, path, absolutePath, branch, head, dirty, error); a broken
+link or foreign directory carries a non-null error, and a broken entry reports branch, head, and
+dirty as null. Read the live --json output for exact per-field values.
 Examples:
   $ oms status --json          # full workspace state for tools and agents
   $ oms status api --json      # narrow the JSON to one alias
@@ -120,6 +122,48 @@ export const branchDeleteHelp = `
 Preparation initializes an existing registration automatically, but refuses an unregistered alias because a
 fresh clone has no deletable local branch. Partial registration is refused with oms sync repair guidance.
 Deletion remains local to the submodule and never changes root topology.
+`;
+
+export const treeHelp = `
+Task trees are disposable Git worktrees of an initialized oms/<alias>/ submodule, stored under
+.oms-tree/<alias>/<task>/. Creating and removing trees creates no root commit and no .gitmodules
+entry: the tree shares the submodule's Git directory, and .oms-tree/ is kept out of root git
+status through the root's local exclude file (.git/info/exclude), so trees are machine-local.
+Work inside a tree with plain Git; run oms commands from the canonical checkout or the root.
+Examples:
+  $ oms tree add api fix-auth   # worktree at .oms-tree/api/fix-auth/ on new branch fix-auth
+  $ oms tree list               # every tree under .oms-tree/ with branch, dirty, and state
+  $ oms tree remove api fix-auth # remove the worktree; branch fix-auth survives
+`;
+export const treeAddHelp = `
+Creates a Git worktree of the initialized submodule oms/<alias>/ at .oms-tree/<alias>/<task>/ and
+checks out branch <task> there. A new branch starts at the submodule's current HEAD commit (--from
+<ref> overrides the start point); an existing branch is resumed at its tip, and --from with an
+existing branch fails. The canonical checkout is never touched — a detached HEAD stays detached.
+Creation needs no network and creates no root commit and no .gitmodules entry. The task name must
+be a valid branch name without "/" separators. Omitted arguments are prompted for interactively.
+Examples:
+  $ oms tree add api fix-auth                # start fix-auth at the current HEAD
+  $ oms tree add api fix-auth --from origin/feature
+`;
+export const treeListHelp = `
+Lists every entry in the .oms-tree/ namespace — worktrees of aliases still declared in oms.yaml
+and of aliases that are no longer declared, plus foreign directories that are not registered
+worktrees. Each entry reports its alias, task, branch, dirty state (untracked files count as
+dirty), and broken-link state. Read-only; reports "none" and exits 0 when the namespace is empty.
+Example:
+  $ oms tree list
+`;
+export const treeRemoveHelp = `
+Removes the worktree at .oms-tree/<alias>/<task>/ and preserves the <task> branch and its commits.
+A dirty worktree is refused without --force (force discards working-tree changes only). A broken
+tree is pruned (leftover directory removed, stale administrative metadata dropped). A foreign
+directory is deleted when empty and refused when it contains files unless --force is given. Empty
+.oms-tree/<alias>/ and .oms-tree/ directories are cleaned up; the root's local exclude entry stays.
+Removal creates no root commit and no .gitmodules entry. Omitted arguments are prompted for
+interactively (alias, then task; never auto-selected).
+Examples:
+  $ oms tree remove api fix-auth   # remove the tree; resume later with oms tree add
 `;
 export const agentInstallHelp = `
 Manages a marker-delimited block (<!-- OMS START --> ... <!-- OMS END -->) in oms/AGENTS.md and/or

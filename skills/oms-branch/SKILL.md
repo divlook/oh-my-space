@@ -4,7 +4,7 @@ description: Use when discovering, starting, switching, or deleting a branch ins
 compatibility: Requires oh-my-space >=1.0.0-0.
 metadata:
   author: oh-my-space
-  version: "1.0.0"
+  version: "1.1.0"
   oh-my-space-version: ">=1.0.0-0"
 ---
 
@@ -24,6 +24,11 @@ Branching happens inside a submodule (`oms/<alias>/`), which is its own Git repo
 - Run `oms branch list <alias>` to discover local and declared-remote branch choices before selecting an operation. It prepares safe existing registration and refreshes declared remotes automatically.
 - `oms branch switch <alias> <branch>` starts or moves to a LOCAL branch, creating it locally if it does not exist yet. No remote is required. Use this to begin new work.
 - `oms branch checkout <alias> <branch>` fetches `origin` and checks out an existing REMOTE branch (`origin/*`) as a local tracking branch. Use this to continue work that already exists on the remote.
+
+## Start task work in a managed tree instead of switching
+
+- When a task needs its own checkout of a source repository — to run a second task in parallel, or to keep the canonical checkout where it is — create a managed tree with `oms tree add <alias> <task>` instead of switching the canonical checkout away from its current branch. The tree lives at `.oms-tree/<alias>/<task>/` on branch `<task>`, and the canonical checkout is untouched.
+- Defer flag detail to `oms tree add --help`.
 
 ## Avoid detached HEAD
 

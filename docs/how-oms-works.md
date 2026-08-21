@@ -12,7 +12,10 @@ oms.yaml               # declares each source repository
 oms/
 ├── api/               # normal Git working tree
 └── web/               # normal Git working tree
+.oms-tree/             # machine-local task trees (not committed)
 ```
+
+`.oms-tree/` holds **managed trees**: disposable per-task Git worktrees at `.oms-tree/<alias>/<task>/`, created with `oms tree add`. A tree shares its submodule's history (branches, remotes, objects) but has its own working tree checked out on the `<task>` branch. Trees are excluded from root status through the root's local exclude file (`.git/info/exclude`) rather than a tracked `.gitignore` entry, so a teammate's fresh clone never sees the directory: trees are machine-local by design, and creating or removing one makes no root commit and no `.gitmodules` change.
 
 `oms.yaml` is the declaration. `.gitmodules` and each `oms/<alias>` entry are tracked by the main project. Each directory under `oms/` is a separate Git repository where you can branch, edit, commit, pull, and push.
 
@@ -28,6 +31,20 @@ Every source change crosses two deliberate boundaries:
 `oms commit`, `oms pull`, and `oms push` operate in the source repository only. They never stage or commit the main project's submodule entry. `oms record` is the command that commits an existing pointer update in the main project.
 
 The exact submodule commit stored by the main project is the **recorded commit**. If a checked-out source repository moves to another commit, `git status` and `oms status` keep that change visible until you record it.
+
+## Managed trees
+
+A **managed tree** is a disposable Git worktree at `.oms-tree/<alias>/<task>/` layered on the submodule's own Git directory, created with `oms tree add <alias> <task>`. It exists so several tasks can proceed in one repository without registering task-specific aliases or cloning extra copies: the tree shares the submodule's branches and remotes, starts its own `<task>` branch at the canonical checkout's HEAD (or at `--from <ref>`), and never moves the canonical checkout. The whole tree lifecycle — add, list, remove — creates no root commit, no `.gitmodules` entry, and no gitlink, so task checkouts never enter shared root history.
+
+The exclusion is local-only: `.oms-tree/` stays out of root status through the root's `.git/info/exclude`, never through a tracked `.gitignore` entry, because a tracked entry would itself be a root commit. Trees are therefore machine-local and invisible to teammates.
+
+Work inside a tree with plain Git — `oms` alias commands (`commit`, `record`, `branch`, `fetch`, `pull`, `push`) refuse to run there. The PR-centric flow reflects the merged result back into the canonical checkout:
+
+1. Commit and push the `<task>` branch from inside the tree, and open its pull request.
+2. After the PR merges, run `oms pull <alias>` in the canonical checkout to move the submodule branch.
+3. Run `oms record <alias>` to commit the moved root pointer.
+
+Removing a tree with `oms tree remove <alias> <task>` deletes only the worktree; the `<task>` branch and its commits survive, and branch deletion stays a separate `oms branch delete` decision. `oms unsync` refuses while any tree exists for the alias, because unsync deletes the shared submodule Git directory the trees are attached to. `oms status` reports every tree under `.oms-tree/` (the `trees` array in JSON), and `oms doctor` reports broken tree links — for example after moving the workspace root — with `git worktree repair` as the remediation.
 
 ## Workspace discovery
 

@@ -843,9 +843,9 @@ const SKILL_NAMES = ["oms-workspace", "oms-pointer", "oms-branch"];
  * the bump would leave installed copies unreported.
  */
 const SKILL_SNAPSHOTS = {
-  "oms-workspace": { version: "1.1.0", contentHash: "656342eea5e0817ce67b3f571dd39c495fb035f25be37ad2041670c8a1463c70" },
+  "oms-workspace": { version: "1.2.0", contentHash: "4ad34bd98cea36107458d348b815ae0e428643c74e019c16c310a8871c6af324" },
   "oms-pointer": { version: "1.1.0", contentHash: "6bcf180ba49f8c4d463dcc63d9a5e7b59747b0308c8c6763881c4b0132f156a1" },
-  "oms-branch": { version: "1.0.0", contentHash: "f76e37f5522ca57ac85b51d7b517992dd89096a4d7a6c2006ff3bfb730e735c7" },
+  "oms-branch": { version: "1.1.0", contentHash: "99100ba991d278e46133ae0d48f643c16685aed586214d851f2226cbd610ce0a" },
 };
 
 function readSkill(name) {

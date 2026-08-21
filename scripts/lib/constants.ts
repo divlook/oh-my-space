@@ -6,6 +6,10 @@ export const ALLOWED_TOP_KEYS = new Set(["repos"]);
 export const ALLOWED_ITEM_KEYS = new Set(["alias", "remotes", "branch"]);
 export const MANIFEST_FILENAME = "oms.yaml";
 export const DATA_DIRNAME = "oms";
+/** Root-owned namespace for disposable per-task worktrees layered on initialized submodules. */
+export const TREE_DIRNAME = ".oms-tree";
+/** Local-exclude entry keeping the tree namespace out of the root's untracked files. */
+export const TREE_EXCLUDE_ENTRY = `${TREE_DIRNAME}/`;
 export const GITIGNORE_ENTRY = `${DATA_DIRNAME}/`;
 export const GITIGNORE_COMMENT = "# managed by oms";
 export const LEGACY_MANIFEST = "sources.yaml";

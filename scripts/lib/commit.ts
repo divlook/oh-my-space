@@ -23,6 +23,7 @@ import {
   printRootFollowup,
   recordVerdict,
 } from "./status.js";
+import { refuseInsideManagedTree } from "./tree-ops.js";
 import type { CommitOptions, OperationResult, SourcesOptions } from "./types.js";
 
 /**
@@ -54,6 +55,7 @@ export async function runCommit(alias: string | undefined, options: CommitOption
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
+  if (refuseInsideManagedTree(repoRoot)) return 1;
 
   const resolution = await resolveCommandAlias(repos, repoRoot, alias, "commit");
   if (resolution.kind === "error") return 1;
@@ -124,6 +126,7 @@ export async function runRecord(aliases: string[], options: SourcesOptions): Pro
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
+  if (refuseInsideManagedTree(repoRoot)) return 1;
 
   // Complete or safely block any interrupted OMS finalization before recording a root pointer.
   const recovered = recoveryPreflight(repoRoot);

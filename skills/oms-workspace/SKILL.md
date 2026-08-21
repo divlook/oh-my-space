@@ -4,7 +4,7 @@ description: Use for Git work in a workspace containing an `oms.yaml` (source re
 compatibility: Requires oh-my-space >=1.0.0-0.
 metadata:
   author: oh-my-space
-  version: "1.1.0"
+  version: "1.2.0"
   oh-my-space-version: ">=1.0.0-0"
 ---
 
@@ -35,3 +35,12 @@ Adding or removing a repo changes the root topology — the `.gitmodules` entry 
 - `oms record <alias>` records moved pointers only; it refuses adds and removals. It also accepts several aliases and `--all`, recording them in one root commit.
 
 So when `oms sync` or `oms unsync` leaves the topology unstaged, finish it with `oms sync --commit` or `oms unsync --commit` (or commit it yourself) — do not reach for `oms record`, which will refuse. Defer remaining flag detail to `oms sync --help` and `oms unsync --help`.
+
+## Managed trees are Git-direct scope
+
+For task work that needs its own checkout of a source repository, OMS creates a managed tree — a disposable Git worktree at `.oms-tree/<alias>/<task>/` layered on the submodule's own history. Inside a managed tree, OMS alias commands are the wrong tool:
+
+- Use plain Git directly inside `.oms-tree/<alias>/<task>/` — commit, branch, push as you would in any repository. `oms commit`, `oms push`, `oms branch`, `oms fetch`, `oms pull`, and `oms record` refuse to run from inside a managed tree.
+- Run `oms` commands from the canonical checkout (`oms/<alias>/`) or the workspace root, never from inside `.oms-tree/`.
+- Push and open a pull request from the tree. When the PR merges, reflect the result in the canonical checkout: run `oms pull <alias>`, then `oms record <alias>` — the pull moves the submodule branch, the record commits the moved root pointer.
+- `oms status` reports managed trees (the `trees` array in `oms status --json`); `oms doctor` reports broken tree links. Defer remaining tree detail to `oms tree --help`.
