@@ -62,6 +62,7 @@ test("help is exposed as oms with the submodule commands", () => {
   assert.match(result.stdout, /\bagent\b/);
   assert.match(result.stdout, /\bskills\b/);
   assert.match(result.stdout, /\bupdate\b/);
+  assert.match(result.stdout, /\btree\b/);
   assert.doesNotMatch(result.stdout, /\bworktree\b/);
   assert.doesNotMatch(result.stdout, /\bmigrate\b/);
 });
@@ -75,7 +76,9 @@ test("submodule command help explains workspace root requirements", () => {
     [["branch", "delete", "--help"], /--force/],
     [["fetch", "--help"], /root Git top-level/],
     [["pull", "--help"], /root Git top-level/],
-    [["push", "--help"], /root Git top-level/],
+    [["tree", "--help"], /\.oms-tree/],
+    [["tree", "add", "--help"], /--from/],
+    [["tree", "remove", "--help"], /--force/],
     [["unsync", "--help"], /root Git top-level/],
   ]) {
     const result = run(args);

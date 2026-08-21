@@ -27,6 +27,10 @@ import {
   skillsHelp,
   statusHelp,
   syncHelp,
+  treeAddHelp,
+  treeHelp,
+  treeListHelp,
+  treeRemoveHelp,
   unsyncHelp,
   workspaceContextHelp,
 } from "./lib/help.js";
@@ -35,6 +39,7 @@ import { runManage } from "./lib/manage-ops.js";
 import { runSync, runUnsync } from "./lib/repo-ops.js";
 import { runSkills, skillsForwardedArgs } from "./lib/skills.js";
 import { runStatus } from "./lib/status.js";
+import { runTreeAdd, runTreeList, runTreeRemove } from "./lib/tree-ops.js";
 import { runUpdate } from "./lib/update.js";
 import type {
   AgentOptions,
@@ -74,6 +79,7 @@ const commandNames = new Set([
   "fetch",
   "pull",
   "push",
+  "tree",
   "unsync",
   "agent",
   "skills",
@@ -210,6 +216,42 @@ branchCommand
   .addHelpText("after", `${branchDeleteHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, branch: string | undefined, options: { force?: boolean }) => {
     await exitWith(runBranchDelete(alias, branch, options));
+  });
+
+
+const treeCommand = program
+  .command("tree")
+  .description("Create, list, or remove a disposable per-task checkout of a source repository.")
+  .addHelpText("after", `${treeHelp}${workspaceContextHelp}${exitHelp}`);
+
+treeCommand
+  .command("add")
+  .description("Create a per-task worktree of an initialized submodule at .oms-tree/<alias>/<task>/.")
+  .argument("[alias]", "registered source alias (omit to pick interactively)")
+  .argument("[task]", "task name; also the branch checked out in the tree")
+  .option("--from <ref>", "start point for a new task branch (default: the submodule's current HEAD)")
+  .addHelpText("after", `${treeAddHelp}${workspaceContextHelp}${exitHelp}`)
+  .action(async (alias: string | undefined, task: string | undefined, options: { from?: string }) => {
+    await exitWith(runTreeAdd(alias, task, options));
+  });
+
+treeCommand
+  .command("list")
+  .description("List every managed tree under .oms-tree/ with its branch, dirty, and broken state.")
+  .addHelpText("after", `${treeListHelp}${workspaceContextHelp}${exitHelp}`)
+  .action(async () => {
+    await exitWith(runTreeList());
+  });
+
+treeCommand
+  .command("remove")
+  .description("Remove a managed tree's worktree only; the task branch and its commits survive.")
+  .argument("[alias]", "alias of the tree to remove (omit to pick interactively)")
+  .argument("[task]", "task name of the tree to remove (omit to pick interactively)")
+  .option("-f, --force", "remove a dirty worktree or a non-empty foreign directory (branch still survives)")
+  .addHelpText("after", `${treeRemoveHelp}${workspaceContextHelp}${exitHelp}`)
+  .action(async (alias: string | undefined, task: string | undefined, options: { force?: boolean }) => {
+    await exitWith(runTreeRemove(alias, task, options));
   });
 
 program
