@@ -20,8 +20,8 @@ import {
   type RawGitRunner,
 } from "./git.js";
 import { abortOnLegacyRenameAt, abortOnLegacyWorktree, emitLegacyRenameHintWalkUp, loadRepos } from "./manifest.js";
-import { pinState } from "./status.js";
 import { reportSkillFindings } from "./skills.js";
+import { pinState } from "./status.js";
 import { gitignoreIgnoresOms } from "./workspace-ignore.js";
 import { listManagedTrees, rootExcludeEntryPresent } from "./tree-ops.js";
 
@@ -132,7 +132,6 @@ export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): 
     );
     warnings++;
   }
-
 
   // Informational only: skill state may be global and never changes the doctor exit status.
   await reportSkillFindings(repoRoot);

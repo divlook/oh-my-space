@@ -218,7 +218,6 @@ branchCommand
     await exitWith(runBranchDelete(alias, branch, options));
   });
 
-
 const treeCommand = program
   .command("tree")
   .description("Create, list, or remove a disposable per-task checkout of a source repository.")
