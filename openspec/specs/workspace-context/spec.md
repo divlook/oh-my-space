@@ -57,7 +57,7 @@ The system SHALL resolve current submodule context separately from workspace dis
 - **THEN** the command selects `web`
 
 ### Requirement: Submodule root Git identity
-Before `status`, `commit`, `record`, `branch switch`, `branch checkout`, `branch list`, `branch delete`, `fetch`, `pull`, `push`, `unsync`, or mutating `sync` inspects or mutates submodule state, the system SHALL verify that the selected manifest directory and Git's root top-level are the same canonical filesystem directory. A missing, mismatched, or indeterminate Git root SHALL fail before submodule topology, root index, manifest, or managed-directory side effects. `doctor` SHALL perform the same identity check as a diagnostic without treating a failed check as a valid root.
+Before `status`, `commit`, `record`, `branch switch`, `branch checkout`, `branch list`, `branch delete`, `fetch`, `pull`, `push`, `unsync`, `tree add`, `tree list`, `tree remove`, or mutating `sync` inspects or mutates submodule state, the system SHALL verify that the selected manifest directory and Git's root top-level are the same canonical filesystem directory. A missing, mismatched, or indeterminate Git root SHALL fail before submodule topology, root index, manifest, or managed-directory side effects. `doctor` SHALL perform the same identity check as a diagnostic without treating a failed check as a valid root.
 
 #### Scenario: Matching root permits submodule command
 - **WHEN** `oms.yaml` is located at the root Git top-level
@@ -70,6 +70,12 @@ Before `status`, `commit`, `record`, `branch switch`, `branch checkout`, `branch
 - **THEN** the command fails before changing the root index, `.gitmodules`, `oms/`, or `oms.yaml`
 - **AND** the diagnostic identifies both the manifest directory and the actual Git top-level
 - **AND** the diagnostic explains how to establish a valid workspace root
+
+#### Scenario: Tree commands are rejected at a nested manifest
+- **WHEN** `oms.yaml` is located below the enclosing root Git top-level
+- **AND** the user runs `oms tree add`, `oms tree list`, or `oms tree remove`
+- **THEN** the command fails before creating, reading, or removing anything under `.oms-tree/`
+- **AND** the diagnostic identifies both the manifest directory and the actual Git top-level
 
 #### Scenario: Equivalent symlink paths match
 - **WHEN** the manifest directory and Git top-level use different path spellings that resolve to the same canonical directory

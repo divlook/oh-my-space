@@ -20,7 +20,7 @@ The repository SHALL publish the `oms` workspace skills under `skills/<name>/SKI
 - **AND** the listed skills do not include repository-development skills from agent-specific directories such as `.opencode/skills/`, `.codex/skills/`, or `.claude/skills/`
 
 ### Requirement: Broad-trigger scope-guardrail skill
-The `oms-workspace` skill SHALL instruct agents to establish workspace state and repository scope before Git work, rather than acting as a command router.
+The `oms-workspace` skill SHALL instruct agents to establish workspace state and repository scope before Git work, rather than acting as a command router. For work inside a managed tree under `.oms-tree/`, the skill SHALL instruct agents to use Git directly, to push and open a pull request from the tree, and to reflect a merged result in the canonical checkout with `oms pull` followed by `oms record`, rather than running `oms` alias commands from inside the tree.
 
 #### Scenario: Broad-trigger skill targets general workspace Git work
 - **WHEN** the `oms-workspace` skill description is evaluated for relevance
@@ -39,6 +39,12 @@ The `oms-workspace` skill SHALL instruct agents to establish workspace state and
 - **THEN** the skill instructs that adding or removing a repo stages the root topology (`.gitmodules` and the `oms/<alias>` gitlink), which `oms sync`/`oms unsync` commit with `--commit` — run non-interactively without `--commit`, the topology is left unstaged for the user to commit
 - **AND** instructs that `oms record` records a moved pointer only and refuses adds and removals
 - **AND** defers remaining flag detail to `oms sync --help` and `oms unsync --help`
+
+#### Scenario: Broad-trigger skill explains managed-tree scope
+- **WHEN** an agent loads the `oms-workspace` skill
+- **THEN** the skill instructs using Git directly inside a managed tree under `.oms-tree/` and not running `oms` alias commands from there
+- **AND** instructs pushing and opening a pull request from the tree, then reflecting the merged result in the canonical checkout with `oms pull` followed by `oms record`
+- **AND** defers remaining tree detail to `oms tree --help`
 
 ### Requirement: Pointer-record workflow skill
 The `oms-pointer` skill SHALL guide the cross-command flow of moving a submodule's commit (via `oms commit` or `oms pull`) and then recording the root pointer.
@@ -61,7 +67,7 @@ The `oms-pointer` skill SHALL guide the cross-command flow of moving a submodule
 - **AND** defers flag detail to `oms pull --help`
 
 ### Requirement: Branch workflow skill
-The `oms-branch` skill SHALL guide branch selection and detached HEAD avoidance inside submodules.
+The `oms-branch` skill SHALL guide branch selection and detached HEAD avoidance inside submodules. For starting a task that needs its own checkout of a source repository, the skill SHALL instruct creating a managed tree with `oms tree add <alias> <task>` instead of switching the canonical checkout away from its current branch.
 
 #### Scenario: Branch skill distinguishes switch from checkout
 - **WHEN** an agent loads the `oms-branch` skill
@@ -69,6 +75,11 @@ The `oms-branch` skill SHALL guide branch selection and detached HEAD avoidance 
 - **AND** instructs using `oms branch checkout` to track an existing remote branch
 - **AND** instructs avoiding detached HEAD
 - **AND** defers flag detail to `oms branch switch --help` and `oms branch checkout --help`
+
+#### Scenario: Branch skill starts task work in a managed tree
+- **WHEN** an agent starts task work that needs an isolated checkout of a source repository
+- **THEN** the skill instructs creating one with `oms tree add <alias> <task>` instead of switching the canonical checkout
+- **AND** defers flag detail to `oms tree add --help`
 
 ### Requirement: Skills are self-sufficient and schema-stable
 Each published skill SHALL carry the scope-guardrail kernel verbatim and avoid coupling to volatile detail, because skill firing is best-effort rather than guaranteed.

@@ -117,7 +117,7 @@ The system SHALL provide `oms status --json` to report the root repository and c
 - **AND** stdout does not contain JSON
 
 ### Requirement: Shared alias preparation across commands
-The system SHALL prepare a selected alias through one shared implementation for every command that operates inside a submodule working tree — `oms commit`, `oms fetch`, `oms pull`, `oms push`, `oms branch list`, `oms branch switch`, `oms branch checkout`, and `oms branch delete` — classifying its root registration, initializing it automatically when that requires no root topology change, and offering topology-creating registration only for the commands a fresh registration could serve. `oms status`, `oms doctor`, and `oms record` SHALL NOT perform this preparation. When automatic initialization cannot attach the resolved baseline because Git refuses the branch operation, preparation SHALL report the failure and exit non-zero instead of continuing the requested command.
+The system SHALL prepare a selected alias through one shared implementation for every command that operates inside a submodule working tree — `oms commit`, `oms fetch`, `oms pull`, `oms push`, `oms branch list`, `oms branch switch`, `oms branch checkout`, `oms branch delete`, and `oms tree add` — classifying its root registration, initializing it automatically when that requires no root topology change, and offering topology-creating registration only for the commands a fresh registration could serve. `oms status`, `oms doctor`, `oms record`, `oms tree list`, and `oms tree remove` SHALL NOT perform this preparation. When automatic initialization cannot attach the resolved baseline because Git refuses the branch operation, preparation SHALL report the failure and exit non-zero instead of continuing the requested command. `oms tree add` SHALL NOT perform detached-HEAD attachment: its start point is the canonical checkout's current HEAD commit, and it leaves a detached canonical checkout detached without prompting.
 
 #### Scenario: Registration is classified consistently for every command
 - **WHEN** any preparing command resolves an alias
@@ -141,7 +141,7 @@ The system SHALL prepare a selected alias through one shared implementation for 
 
 #### Scenario: Unregistered alias is offered registration for commands a fresh clone can serve
 - **WHEN** the selected alias is declared in `oms.yaml` but not registered in the root repository
-- **AND** the command is `oms fetch`, `oms pull`, `oms branch list`, `oms branch switch`, or `oms branch checkout`
+- **AND** the command is `oms fetch`, `oms pull`, `oms branch list`, `oms branch switch`, `oms branch checkout`, or `oms tree add`
 - **AND** stdin is interactive
 - **THEN** OMS offers to register the alias and continue, stating the root topology consequence
 - **AND** accepting delegates to the sync workflow and resumes the requested command
@@ -206,14 +206,21 @@ The system SHALL prepare a selected alias through one shared implementation for 
 - **THEN** OMS exits non-zero without moving the working tree
 - **AND** names `oms branch switch <alias> <branch>`
 
+#### Scenario: Tree creation skips detached-HEAD attachment
+- **WHEN** the user runs `oms tree add api fix-auth`
+- **AND** the initialized submodule `api` is in detached HEAD
+- **THEN** OMS does not attach, prompt about, or move the canonical checkout
+- **AND** the worktree's branch starts at the current HEAD commit
+- **AND** the canonical checkout remains in detached HEAD afterwards
+
 #### Scenario: Diagnostic and pointer commands do not prepare
-- **WHEN** the user runs `oms status`, `oms doctor`, or `oms record`
+- **WHEN** the user runs `oms status`, `oms doctor`, `oms record`, `oms tree list`, or `oms tree remove`
 - **THEN** OMS does not initialize, register, or attach any alias
 - **AND** reports the state it observes
 - **AND** `oms record` still resolves an omitted selection through the shared alias-resolution rules, which govern selection only and are separate from preparation
 
 ### Requirement: Current submodule alias resolution
-The system SHALL resolve omitted alias selection for supported alias commands using explicit arguments, current path inference, and interactive selection only. A supported one-alias command (`oms commit`) SHALL resolve to at most one alias. A supported multi-alias command (`oms record`) SHALL resolve to a set of aliases and SHALL treat an explicit alias list or `--all` as the explicit argument that suppresses current path inference. When the alias is omitted, the system SHALL decide by the number of valid candidates and SHALL require an interactive terminal only when more than one candidate exists.
+The system SHALL resolve omitted alias selection for supported alias commands using explicit arguments, current path inference, and interactive selection only. A supported one-alias command (`oms commit`) SHALL resolve to at most one alias. A supported multi-alias command (`oms record`) SHALL resolve to a set of aliases and SHALL treat an explicit alias list or `--all` as the explicit argument that suppresses current path inference. When the alias is omitted, the system SHALL decide by the number of valid candidates and SHALL require an interactive terminal only when more than one candidate exists. When the current directory is inside a managed tree under `.oms-tree/`, a supported alias command SHALL fail with managed-tree guidance before alias resolution, candidate selection, or any repository operation, regardless of whether an alias was supplied explicitly.
 
 #### Scenario: Alias inferred inside submodule tree
 - **WHEN** the user runs a supported alias command without an alias from inside `oms/api/`
@@ -232,6 +239,12 @@ The system SHALL resolve omitted alias selection for supported alias commands us
 - **WHEN** the user runs `oms record --all` from inside `oms/api/`
 - **THEN** the command does not narrow the selection to the inferred alias `api`
 - **AND** the command selects every declared repo
+
+#### Scenario: Alias command inside a managed tree fails with guidance
+- **WHEN** the user runs a supported alias command from inside `.oms-tree/<alias>/<task>/`
+- **THEN** the command fails with managed-tree guidance stating that Git is used directly inside a managed tree and that `oms` commands run from the canonical checkout or the workspace root
+- **AND** the command does not infer an alias, build a candidate list, or prompt for selection
+- **AND** the command performs no repository operation
 
 #### Scenario: Interactive candidate selection
 - **WHEN** a supported alias command omits the alias outside any `oms/<alias>/` tree
