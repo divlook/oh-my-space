@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 1.1.0
+
+### Minor Changes
+
+- [#82](https://github.com/divlook/oh-my-space/pull/82) [`23febaa`](https://github.com/divlook/oh-my-space/commit/23febaafa2090f26c53ccb6647814335962c1e3e) Thanks [@divlook](https://github.com/divlook)! - Add managed task trees: `oms tree add`, `oms tree list`, and `oms tree remove` create disposable per-task Git worktrees at `.oms-tree/<alias>/<task>/` on initialized submodules without root commits or `.gitmodules` changes. Alias-targeting commands refuse to run from inside a tree (use Git directly there), `oms unsync` refuses while trees exist, `oms status` gains a `trees` array, and `oms doctor` reports broken tree links and a missing local-exclude entry. The `oms-workspace` and `oms-branch` skills gain managed-tree guidance.
+
 ## 1.0.0
 
 ### Major Changes
