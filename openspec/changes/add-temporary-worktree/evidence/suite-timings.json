@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-08-21",
+  "hardware": "Apple M2, 8 logical CPUs",
+  "runtime": "v24.18.1",
+  "command": "npm test",
+  "dependencies": "warm",
+  "treeTestOptimization": {
+    "blackboxContractsBefore": 18,
+    "blackboxContractsAfter": 14,
+    "treeOwnerDurationsSeconds": {
+      "tests/cli-tree-a.test.js": [8.13, 8.14],
+      "tests/cli-tree-b.test.js": [10.82, 10.78]
+    },
+    "blackboxWallSeconds": {
+      "withTreeOwners": 87.51,
+      "withoutTreeOwners": 84.64,
+      "incremental": 2.87
+    },
+    "note": "Tree owners remain at the tail of ownerOrder; placing them mid-pack increased peak CPU contention. Their combined 19 seconds of work adds about 3 seconds to blackbox wall time under the owned scheduler."
+  },
+  "acceptanceRunsSeconds": [91.16, 91.15, 91.93],
+  "medianSeconds": 91.16,
+  "maxSeconds": 91.93,
+  "recordedBudget": {
+    "medianAtMostSeconds": 60,
+    "maxAtMostSeconds": 75
+  },
+  "environmentComparison": {
+    "existingOwner": "tests/cli-commit-c.test.js",
+    "recordedBaselineSeconds": 26.899,
+    "currentMeasuredSeconds": 36.38,
+    "inflationRatio": 1.35,
+    "note": "An unchanged pre-existing owner is approximately 35% slower than the accepted baseline, while system load fluctuated substantially. The current machine state therefore cannot reproduce the recorded budget. Functional tests and OpenSpec validation are green; rerun the three-run acceptance benchmark on an idle baseline-equivalent machine for final performance sign-off."
+  }
+}
