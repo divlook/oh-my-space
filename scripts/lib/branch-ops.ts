@@ -10,6 +10,7 @@ import {
 import { loadForSubmodules } from "./manifest.js";
 import { pickBranch, resolveInitializedAlias } from "./prompts.js";
 import type { CheckoutOptions } from "./types.js";
+import { refuseInsideManagedTree } from "./tree-ops.js";
 
 /**
  * LOCAL branch management: switch the submodule to an existing local branch or create a new one.
@@ -24,6 +25,7 @@ export async function runSwitch(
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
+  if (refuseInsideManagedTree(repoRoot)) return 1;
 
   const repo = await resolveInitializedAlias(repos, repoRoot, alias, "branch switch");
   if (!repo) return 1;
@@ -62,6 +64,7 @@ export async function runCheckout(alias: string | undefined, branch: string | un
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
+  if (refuseInsideManagedTree(repoRoot)) return 1;
 
   const repo = await resolveInitializedAlias(repos, repoRoot, alias, "branch checkout");
   if (!repo) return 1;

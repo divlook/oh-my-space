@@ -6,6 +6,7 @@ import { exitFromResults, printSummary } from "./operation-results.js";
 import { resolveRemotes, selectRepos } from "./prompts.js";
 import { printRootFollowups } from "./status.js";
 import type { ManageCommand, OperationResult, PushOptions, RemoteOptions, Repo, SourcesOptions } from "./types.js";
+import { refuseInsideManagedTree } from "./tree-ops.js";
 
 function fetchRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
   for (const remote of remotes) {
@@ -66,6 +67,7 @@ export async function runManage(
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
+  if (refuseInsideManagedTree(repoRoot)) return 1;
 
   // Reject the removed push pointer shortcuts before any push runs, with migration guidance.
   if (command === "push" && (options.commit || options.record)) {

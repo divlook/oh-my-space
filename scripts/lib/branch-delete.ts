@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import {
   aliasDir,
   currentBranch,
+  findWorkspaceRoot,
   listLocalBranches,
   localBranchExists,
   localBranchOid,
@@ -20,6 +21,7 @@ import type { Repo } from "./types.js";
 import { prepareAlias } from "./alias-preparation.js";
 import { runBranchList } from "./branch-list.js";
 import { runCheckout, runSwitch } from "./branch-ops.js";
+import { refuseInsideManagedTree } from "./tree-ops.js";
 
 type BranchDeleteOptions = { force?: boolean };
 
@@ -33,6 +35,8 @@ function shq(arg: string): string {
  * a non-interactive shell (the `oms agent` group pattern).
  */
 export async function runBranch(command: Command): Promise<number> {
+  const repoRoot = findWorkspaceRoot();
+  if (repoRoot !== null && refuseInsideManagedTree(repoRoot)) return 1;
   if (!canPrompt()) {
     command.outputHelp();
     return 1;
@@ -313,6 +317,7 @@ export async function runBranchDelete(
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
+  if (refuseInsideManagedTree(repoRoot)) return 1;
 
   const resolved = await resolveDeleteAlias(repos, repoRoot, aliasArg);
   if (resolved.kind === "error") return resolved.code;
