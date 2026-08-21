@@ -577,7 +577,12 @@ function buildTreeStatuses(repoRoot: string, configuredRepos: Repo[], selectedAl
 }
 
 /** Emit exactly one two-space pretty JSON object on stdout. Exits non-zero if any repo read failed. */
-function printStatusJson(repoRoot: string, configuredRepos: Repo[], selectedRepos: Repo[]): number {
+function printStatusJson(
+  repoRoot: string,
+  configuredRepos: Repo[],
+  selectedRepos: Repo[],
+  treeAliases: string[] | null,
+): number {
   const repos = selectedRepos.map((repo) => buildRepoStatus(repoRoot, repo));
   const errors = repos.filter((r) => r.error !== null).map((r) => r.error as string);
   const payload: JsonStatus = {
@@ -587,7 +592,7 @@ function printStatusJson(repoRoot: string, configuredRepos: Repo[], selectedRepo
     currentAlias: inferAliasFromCwd(repoRoot, configuredRepos),
     root: buildRootStatus(repoRoot, configuredRepos, selectedRepos),
     repos,
-    trees: buildTreeStatuses(repoRoot, configuredRepos, selectedRepos.length === configuredRepos.length ? null : selectedRepos.map((r) => r.alias)),
+    trees: buildTreeStatuses(repoRoot, configuredRepos, treeAliases),
     errors,
   };
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -600,6 +605,9 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
   const { repos, repoRoot } = loaded;
 
   let selected: Repo[];
+  // Null means "no alias filter was given": the tree inventory is then reported whole, including
+  // entries whose alias is no longer declared in the manifest.
+  let treeAliases: string[] | null = null;
   if (options.all || aliases.length === 0) {
     selected = repos;
   } else {
@@ -612,10 +620,11 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
     }
     const byAlias = new Map(repos.map((r) => [r.alias, r]));
     selected = uniqueAliases(aliases).map((a) => byAlias.get(a)!);
+    treeAliases = selected.map((repo) => repo.alias);
   }
 
   if (options.json) {
-    return printStatusJson(repoRoot, repos, selected);
+    return printStatusJson(repoRoot, repos, selected, treeAliases);
   }
 
   const rows: StatusRow[] = [];
@@ -656,7 +665,9 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
   }
 
   // Trees are listed only when any exist, keeping the common no-tree output unchanged.
-  const trees = listManagedTrees(repoRoot, repos).filter((tree) => selected.some((r) => r.alias === tree.alias));
+  const trees = listManagedTrees(repoRoot, repos).filter(
+    (tree) => treeAliases === null || treeAliases.includes(tree.alias),
+  );
   if (trees.length > 0) {
     console.log("");
     console.log("Managed trees (.oms-tree/):");

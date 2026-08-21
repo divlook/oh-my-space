@@ -403,6 +403,20 @@ test("status --json exposes the trees array with filtering, broken entries, and 
   assert.match(humanOutput, /Managed trees \(\.oms-tree\/\)/);
   assert.match(humanOutput, /\.oms-tree\/api\/t2\s+t2\s+clean/);
 
+  // An alias filter narrows the inventory to that alias, in JSON and in human output alike.
+  const manifest = join(cwd, "oms.yaml");
+  const declaredApi = readFileSync(manifest, "utf8");
+  writeFileSync(manifest, declaredApi.replace(/alias: api/, "alias: web"));
+  const otherAlias = JSON.parse(run(["status", "--json", "web"], { cwd }).stdout);
+  assert.deepEqual(otherAlias.trees, []);
+  assert.doesNotMatch(run(["status", "web"], { cwd }).stdout, /Managed trees/);
+
+  // Without an alias filter the whole inventory is reported, including an undeclared alias's tree.
+  const undeclared = JSON.parse(run(["status", "--json"], { cwd }).stdout);
+  assert.deepEqual(undeclared.trees.map((entry) => `${entry.alias}/${entry.task}`), ["api/t2"]);
+  assert.match(run(["status"], { cwd }).stdout, /\.oms-tree\/api\/t2\s+t2\s+clean/);
+  writeFileSync(manifest, declaredApi);
+
   // Relocation breaks the link: the entry carries a non-null error and null fields.
   const moved = `${cwd}-moved`;
   renameSync(cwd, moved);
