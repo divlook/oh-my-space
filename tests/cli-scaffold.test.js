@@ -76,6 +76,7 @@ test("submodule command help explains workspace root requirements", () => {
     [["branch", "delete", "--help"], /--force/],
     [["fetch", "--help"], /root Git top-level/],
     [["pull", "--help"], /root Git top-level/],
+    [["push", "--help"], /root Git top-level/],
     [["tree", "--help"], /\.oms-tree/],
     [["tree", "add", "--help"], /--from/],
     [["tree", "remove", "--help"], /--force/],
