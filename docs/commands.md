@@ -18,7 +18,7 @@ Built-in help ships with the installed CLI and is the authoritative exact refere
 | Inspect repository state | `oms status` | Read-only across selected source repositories |
 | Commit source changes | `oms commit` | One source repository only |
 | Record moved source commits | `oms record` | Main project only |
-| List, start, track, or delete branches | `oms branch ...` | One source repository; accepted synchronization may register it |
+| Start a second task in one repository | `oms tree add`, `oms tree list`, `oms tree remove` | One source repository's worktrees under `.oms-tree/`; no root history change |
 | Fetch, pull, or push source history | `oms fetch`, `oms pull`, `oms push` | Selected source repositories |
 | Remove registered repositories | `oms unsync` | Main-project registration and selected source repositories |
 | Install AI-agent instructions | `oms agent ...` | Root-owned files under `oms/` |
@@ -88,6 +88,24 @@ Listing does not switch, create, delete, merge, or push branches. It does not ch
 Deletes one local branch. It never deletes a remote branch or remote-tracking ref and never changes the recorded commit. The current branch and resolved baseline branches are protected even in force mode. Safe deletion is attempted first; force deletion prints recovery information and rechecks the branch commit before deletion.
 
 See [Branch safety](how-oms-works.md#branch-safety) before force deletion.
+
+## Work on tasks in managed trees
+
+### `oms tree add`
+
+Creates a disposable Git worktree of an initialized repository at `.oms-tree/<alias>/<task>/` and checks out branch `<task>` there. A new branch starts at the submodule's current HEAD (`--from` overrides the start point); an existing branch resumes at its tip, and `--from` with an existing branch fails. The canonical checkout is never moved — a detached HEAD stays detached. Creation needs no network.
+
+Creating a tree makes no root commit and no `.gitmodules` entry; `.oms-tree/` is kept out of root status through the root's local exclude file, so trees are machine-local.
+
+### `oms tree list`
+
+Lists every entry in the `.oms-tree/` namespace: trees of declared aliases and of aliases no longer declared, plus foreign directories that are not registered worktrees. Each entry reports its alias, task, branch, dirty state (untracked files count as dirty), and broken-link state. `oms status` reports the same inventory in the `trees` array of its JSON output.
+
+### `oms tree remove`
+
+Removes the worktree but preserves the `<task>` branch and its commits. A dirty worktree is refused without `--force`; force discards working-tree changes only. Broken trees are pruned (leftover directory removed, stale administrative metadata dropped). A foreign directory is deleted when empty and refused when it contains files unless `--force` is given. Empty `.oms-tree/<alias>/` and `.oms-tree/` directories are cleaned up; the root's local exclude entry stays.
+
+Inside a managed tree, use Git directly; `oms commit`, `oms record`, `oms branch`, `oms fetch`, `oms pull`, and `oms push` refuse to run there and ask you to use the canonical checkout or the workspace root. `oms status`, `oms doctor`, and `oms tree` keep working from inside a tree. `oms unsync` refuses while any tree exists for the alias, because unsync deletes the shared submodule Git directory.
 
 ## Synchronize source history
 
