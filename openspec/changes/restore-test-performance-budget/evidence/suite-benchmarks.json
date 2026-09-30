@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "measurements": [
+    {
+      "label": "post-migration",
+      "measuredAt": "2026-09-30T05:22:30.091Z",
+      "runtime": "v24.19.0",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        97029,
+        101869,
+        98237
+      ],
+      "medianMs": 98237,
+      "varianceMs2": 4230699,
+      "maxMs": 101869,
+      "gating": false
+    }
+  ]
+}

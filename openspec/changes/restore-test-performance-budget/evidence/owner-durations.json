@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-09-30T05:09:30.911Z",
+  "runtime": "v24.19.0",
+  "command": "/Users/chad/.nvm/versions/node/v24.19.0/bin/node --test <owner>",
+  "owners": {
+    "tests/cli-commit-a.test.js": {
+      "durationMs": 33981,
+      "status": 0
+    },
+    "tests/cli-commit-b.test.js": {
+      "durationMs": 38230,
+      "status": 0
+    },
+    "tests/cli-commit-c.test.js": {
+      "durationMs": 38603,
+      "status": 0
+    },
+    "tests/cli-preparation-a.test.js": {
+      "durationMs": 31491,
+      "status": 0
+    },
+    "tests/cli-sync-a.test.js": {
+      "durationMs": 31716,
+      "status": 0
+    },
+    "tests/cli-sync-b.test.js": {
+      "durationMs": 40650,
+      "status": 0
+    },
+    "tests/cli-sync-c.test.js": {
+      "durationMs": 35407,
+      "status": 0
+    }
+  }
+}

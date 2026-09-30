@@ -61,14 +61,47 @@ export function validateTestInventory(inventory, discovered) {
   }
 
   const baselineIds = new Set((inventory.baseline?.contracts ?? []).map((contract) => contract.id));
-  const migrations = new Map((inventory.migrations ?? []).map((entry) => [entry.baselineId, entry.finalIds]));
+
+  const migrations = new Map((inventory.migrations ?? []).map((entry) => [entry.baselineId, entry]));
   for (const id of baselineIds) {
-    const finalIds = migrations.get(id);
-    if (!Array.isArray(finalIds) || finalIds.length === 0) errors.push(`Missing migration mapping for ${id}`);
-    else for (const finalId of finalIds) {
-      if (!declaredById.has(finalId)) errors.push(`Migration for ${id} references missing contract ${finalId}`);
+    const migration = migrations.get(id);
+    const hasReplacement = Array.isArray(migration?.finalIds) && migration.finalIds.length > 0;
+    const hasDeletion = migration?.deleted === true;
+    if (hasReplacement === hasDeletion) {
+      errors.push(`Migration for ${id} must declare exactly one replacement mapping or deletion`);
+      continue;
+    }
+    if (hasDeletion) {
+      if (typeof migration.reason !== "string" || !migration.reason.trim()) {
+        errors.push(`Deletion migration for ${id} requires a reason`);
+      }
+    } else {
+      for (const finalId of migration.finalIds) {
+        if (!declaredById.has(finalId)) errors.push(`Migration for ${id} references missing contract ${finalId}`);
+      }
     }
   }
+  const blackboxBudget = inventory.execution?.budgets?.blackbox;
+  const blackboxCount = discovered.filter((contract) => contract.layer === "blackbox").length;
+  if (!Number.isInteger(blackboxBudget) || blackboxBudget < 0) errors.push("Invalid black-box contract budget");
+  else if (blackboxCount > blackboxBudget) errors.push(`Black-box contract budget exceeded: ${blackboxCount} > ${blackboxBudget}`);
+  const budgets = inventory.execution?.budgets ?? {};
+  const performanceBudgets = [
+    ["local median", budgets.localMedianMs],
+    ["local maximum", budgets.localMaxMs],
+    ["CI maximum", budgets.ciMaxMs],
+  ];
+  for (const [label, value] of performanceBudgets) {
+    if (!Number.isInteger(value) || value < 1) errors.push(`Invalid ${label} performance budget`);
+  }
+  if (
+    Number.isInteger(budgets.localMedianMs)
+    && Number.isInteger(budgets.localMaxMs)
+    && budgets.localMaxMs < budgets.localMedianMs
+  ) {
+    errors.push("Local maximum performance budget is below the local median budget");
+  }
+
 
   const discoveredBlackboxOwners = [...new Set(discovered.filter((contract) => contract.layer === "blackbox").flatMap((contract) => contract.owners))];
   const declaredBlackboxOwners = inventory.execution?.layers?.blackbox?.ownerOrder ?? [];

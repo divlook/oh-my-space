@@ -42,12 +42,22 @@ npm run test:branch
 npm run test:tools
 ```
 
+Place each new contract at the least expensive layer that exercises its meaningful boundary:
+
+- `tests/unit` for parsing, validation, planning, and state decisions that need neither a Git process nor an owned filesystem fixture.
+- `tests/integration` for direct library entry points whose behavior depends on real Git or filesystem state in a disposable fixture.
+- Black-box owners for production-bundle wiring, process-integrity/recovery behavior, and at least one end-to-end journey per public command.
+
+Protected process-integrity/recovery and production-bundle-wiring contracts stay black-box unless an equivalent replacement retains that boundary. Other journeys may be consolidated or removed only when observable coverage remains and each migration records its replacement or deletion reason in `tests/test-inventory.json`. That inventory also records deterministic owner assignment and the enforced black-box contract cap; `npm run test:inventory` checks it.
+
 Feature scripts rebuild `dist/oms.js` before running their black-box tests. If you invoke Node's test runner directly, build first:
 
 ```bash
 npm run build
-node --test tests/cli-branch.test.js
+node --test tests/cli-branch-a.test.js
 ```
+
+The test Git environment disables automatic maintenance and garbage collection so background Git processes cannot change a fixture while it is being copied. Bare fixtures also set `receive.autogc=false` because local push receivers do not inherit Git environment configuration overrides. These settings apply only to disposable test repositories and test processes.
 
 Test fixtures are removed in one batch when each worker exits. To inspect fixtures after a failure, retain them and read the worker-root path printed to standard error:
 

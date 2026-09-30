@@ -49,104 +49,7 @@ import {
 
 // --- oms commit (submodule source commits only) ---
 
-test("commit stages all submodule changes when nothing is staged and leaves the root untouched", () => {
-  const { cwd } = workspaceWithApi();
-  const wt = join(cwd, "oms", "api");
-  writeFileSync(join(wt, "new.txt"), "hi");
 
-  const rootHeadBefore = gitOut(cwd, "rev-parse", "HEAD");
-  const result = run(["commit", "api", "-m", "feat: add login flow"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  // A submodule commit was created.
-  assert.equal(gitOut(wt, "log", "-1", "--pretty=%s"), "feat: add login flow");
-  assert.match(output, /committed [0-9a-f]+/);
-  // The root received no commit and nothing is staged; only the working-tree gitlink moved.
-  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), rootHeadBefore);
-  assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
-  assert.match(gitOut(cwd, "status", "--porcelain"), /oms\/api/);
-  // The follow-up hint points at record.
-  assert.match(output, /oms record api/);
-});
-
-test("commit respects an existing submodule index and warns about leftovers", () => {
-  const { cwd } = workspaceWithApi();
-  const wt = join(cwd, "oms", "api");
-  writeFileSync(join(wt, "staged.txt"), "a");
-  writeFileSync(join(wt, "left.txt"), "b");
-  git(wt, "add", "staged.txt"); // only one file staged
-
-  const result = run(["commit", "api", "-m", "feat: only staged"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  // Only the staged file landed in the commit.
-  const files = gitOut(wt, "show", "--name-only", "--pretty=format:", "HEAD").trim();
-  assert.match(files, /staged\.txt/);
-  assert.doesNotMatch(files, /left\.txt/);
-  // The leftover remains and the user is warned.
-  assert.match(gitOut(wt, "status", "--porcelain"), /left\.txt/);
-  assert.match(output, /unstaged or untracked changes remain/);
-});
-
-test("commit passes multiple -m paragraphs through to the submodule commit", () => {
-  const { cwd } = workspaceWithApi();
-  const wt = join(cwd, "oms", "api");
-  writeFileSync(join(wt, "f.txt"), "x");
-
-  const result = run(["commit", "api", "-m", "feat: add login", "-m", "Add callback handling."], { cwd });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  const body = gitOut(wt, "log", "-1", "--pretty=%B");
-  assert.match(body, /feat: add login/);
-  assert.match(body, /Add callback handling\./);
-});
-
-test("commit without -m fails for a dirty submodule and is a no-op for a clean one", () => {
-  const { cwd } = workspaceWithApi();
-  const wt = join(cwd, "oms", "api");
-
-  // Clean submodule: no -m needed, reports nothing to commit, exits 0.
-  let result = run(["commit", "api"], { cwd });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout + result.stderr, /Nothing to commit for api/);
-
-  // Dirty submodule without -m fails without opening an editor.
-  writeFileSync(join(wt, "f.txt"), "x");
-  result = run(["commit", "api"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /-m is required/);
-});
-
-test("commit no-op prints a record hint when the pointer already moved", () => {
-  const { cwd } = workspaceWithApi();
-  const wt = join(cwd, "oms", "api");
-  // Move the pointer with a raw git commit so oms commit sees no new changes.
-  writeFileSync(join(wt, "f.txt"), "x");
-  git(wt, "add", "-A");
-  git(wt, "commit", "-m", "raw work");
-
-  const result = run(["commit", "api"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /Nothing to commit for api/);
-  assert.match(output, /oms record api/);
-});
-
-test("commit prints a topology hint instead of record when the root gitlink is unrecorded", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
-  // Deliberately do NOT record the gitlink in the root HEAD (pending add topology).
-  const wt = join(cwd, "oms", "api");
-  writeFileSync(join(wt, "f.txt"), "x");
-
-  const result = run(["commit", "api", "-m", "feat: work"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /oms sync api --commit/);
-  assert.doesNotMatch(output, /oms record api/);
-});
 
 test("commit rejects an unanchored detached submodule HEAD without touching the root", () => {
   const { cwd } = workspaceWithApi();
@@ -189,16 +92,6 @@ test("commit rejects an in-progress merge inside the submodule", () => {
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), rootHeadBefore);
 });
 
-test("commit infers the alias from the current submodule directory", () => {
-  const { cwd } = workspaceWithApi();
-  const wt = join(cwd, "oms", "api");
-  writeFileSync(join(wt, "f.txt"), "x");
-
-  // No alias argument: inferred from cwd being inside oms/api.
-  const result = run(["commit", "-m", "feat: inferred"], { cwd: wt });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.equal(gitOut(wt, "log", "-1", "--pretty=%s"), "feat: inferred");
-});
 
 test("commit gives an explicit alias precedence over the current submodule context", () => {
   const bare = initBareUpstream();

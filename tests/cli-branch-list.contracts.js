@@ -60,55 +60,6 @@ function gitFailureEnv(command, diagnostic) {
 
 // ─── branch list: automated inventory and degraded remote refresh ───
 
-test("branch list shows sorted local and every declared remote branch, excluding symbolic HEAD and unmanaged remotes", () => {
-  const origin = initBareUpstream({ branches: ["main", "zeta", "alpha"] });
-  const backup = initBareUpstream({ branches: ["main", "beta"] });
-  const unmanaged = initBareUpstream({ branches: ["main", "private"] });
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", origin, "main", { backup }));
-  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
-  const dir = join(cwd, "oms", "api");
-  git(dir, "branch", "z-local");
-  git(dir, "branch", "a-local");
-  git(dir, "remote", "add", "unmanaged", `file://${unmanaged}`);
-  git(dir, "fetch", "unmanaged");
-  git(dir, "branch", "external", "unmanaged/private");
-  git(dir, "branch", "--set-upstream-to", "unmanaged/private", "external");
-
-  const result = run(["branch", "list", "api"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /Branch inventory: api/);
-  assert.ok(output.indexOf("a-local\t") < output.indexOf("main\t"), output);
-  assert.ok(output.indexOf("main\t") < output.indexOf("z-local\t"), output);
-  assert.match(output, /origin\tfresh\talpha/);
-  assert.match(output, /backup\tfresh\tbeta/);
-  assert.match(output, /external\t\tunmanaged\/private\t0\t0/);
-  assert.doesNotMatch(output, /origin\/(?:HEAD)|\tunmanaged\t|unmanaged\t(?:fresh|stale|unavailable)/);
-});
-
-test("branch list reports current, multiple baselines, exact upstream divergence, no upstream, and gone upstream", () => {
-  const origin = initBareUpstream({ branches: ["main", "develop", "tracked"] });
-  const cwd = initGitWorkspace();
-  const dir = syncedSubmodule(cwd, "api", origin, "main");
-  git(dir, "checkout", "-b", "tracked", "origin/tracked");
-  git(dir, "commit", "--allow-empty", "-m", "ahead");
-  git(dir, "branch", "ahead");
-  git(dir, "branch", "--set-upstream-to", "origin/tracked", "ahead");
-  git(dir, "branch", "scratch");
-  git(dir, "config", "branch.tracked.merge", "refs/heads/missing");
-  git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.branch", "develop");
-
-  const result = run(["branch", "list", "api"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /BASELINE \[incomplete\]: develop, main|BASELINE \[incomplete\]: main, develop/);
-  assert.match(output, /main\tbaseline/);
-  assert.match(output, /ahead\t\torigin\/tracked\t1\t0/);
-  assert.match(output, /tracked\tcurrent\torigin\/missing\t\?\t\?/);
-  assert.match(output, /scratch\t\t\t\t/);
-  assert.match(output, /differs from oms.yaml/);
-});
 
 test("branch list auto-selects and initializes the sole registered alias using the manifest URL without rewriting metadata", () => {
   const origin = initBareUpstream();

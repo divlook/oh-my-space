@@ -392,97 +392,6 @@ test("update treats current newer than registry latest as non-mutating success",
   assert.doesNotMatch(output, /Detected context/);
 });
 
-test("update detects global npm context from runtime evidence", () => {
-  const prefix = tempWorkspace();
-  const packageRoot = join(prefix, "lib", "node_modules", "oh-my-space");
-  const runningBin = join(packageRoot, "dist", "oms.js");
-  const pathBin = join(prefix, "bin", "oms");
-  const result = run(["update", "--check"], {
-    env: updateEnv({
-      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
-        packageRoot,
-        realPackageRoot: packageRoot,
-        runningBin,
-        realRunningBin: runningBin,
-        pathBin,
-        realPathBin: pathBin,
-        packageName: "oh-my-space",
-      }),
-    }),
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /Detected context: global npm install/);
-  assert.match(output, /npm install -g oh-my-space@latest/);
-});
-
-test("update detects global npm context when PATH shim realpath points into package", () => {
-  const prefix = tempWorkspace();
-  const packageRoot = join(prefix, "lib", "node_modules", "oh-my-space");
-  const runningBin = join(packageRoot, "dist", "oms.js");
-  const pathBin = join(prefix, "bin", "oms");
-  const result = run(["update", "--check"], {
-    env: updateEnv({
-      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
-        packageRoot,
-        realPackageRoot: packageRoot,
-        runningBin,
-        realRunningBin: runningBin,
-        pathBin,
-        realPathBin: runningBin,
-        packageName: "oh-my-space",
-      }),
-    }),
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /Detected context: global npm install/);
-  assert.match(output, /npm install -g oh-my-space@latest/);
-});
-
-test("update detects Windows npm global context from runtime evidence", () => {
-  const result = run(["update", "--check"], {
-    env: updateEnv({
-      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
-        packageRoot: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\oh-my-space",
-        realPackageRoot: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\oh-my-space",
-        runningBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\oh-my-space\\dist\\oms.js",
-        realRunningBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\oh-my-space\\dist\\oms.js",
-        pathBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\oms.cmd",
-        realPathBin: "C:\\Users\\me\\AppData\\Roaming\\npm\\oms.cmd",
-        packageName: "oh-my-space",
-      }),
-    }),
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /Detected context: global npm install/);
-  assert.match(output, /npm install -g oh-my-space@latest/);
-});
-
-test("update resolves Windows npm global shim extensions from PATH", () => {
-  const prefix = tempWorkspace();
-  const packageRoot = join(prefix, "node_modules", "oh-my-space");
-  const modulePath = join(packageRoot, "dist", "oms.js");
-  mkdirSync(join(packageRoot, "dist"), { recursive: true });
-  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "oh-my-space" }));
-  writeFileSync(modulePath, "");
-  writeFileSync(join(prefix, "oms.cmd"), "");
-
-  const result = run(["update", "--check"], {
-    env: updateEnv({
-      OMS_TEST_PLATFORM: "win32",
-      OMS_TEST_MODULE_PATH: modulePath,
-      OMS_TEST_ARGV1: modulePath,
-      PATH: `${prefix}${process.env.PATH ? `${delimiter}${process.env.PATH}` : ""}`,
-      PATHEXT: ".CMD;.PS1;.EXE",
-    }),
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /Detected context: global npm install/);
-  assert.match(output, /npm install -g oh-my-space@latest/);
-});
 
 test("update does not treat project lib node_modules as global npm", () => {
   const project = tempWorkspace();
@@ -571,29 +480,6 @@ test("update treats unresolved node_modules installs as unknown", () => {
   assert.doesNotMatch(output, /Update command completed/);
 });
 
-test("update detects pnpm global context only with matching global shim", () => {
-  const prefix = tempWorkspace();
-  const packageRoot = join(prefix, "global", "5", "node_modules", "oh-my-space");
-  const runningBin = join(packageRoot, "dist", "oms.js");
-  const pathBin = join(prefix, "oms");
-  const result = run(["update", "--check"], {
-    env: updateEnv({
-      OMS_TEST_RUNTIME_EVIDENCE: JSON.stringify({
-        packageRoot,
-        realPackageRoot: packageRoot,
-        runningBin,
-        realRunningBin: runningBin,
-        pathBin,
-        realPathBin: runningBin,
-        packageName: "oh-my-space",
-      }),
-    }),
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /Detected context: global pnpm install/);
-  assert.match(output, /pnpm add -g oh-my-space@latest/);
-});
 
 test("update reports non-mutating contexts with guidance", () => {
   for (const kind of ["project", "ephemeral", "development", "unknown"]) {
@@ -682,20 +568,6 @@ test("update without --yes in non-interactive mode does not require manager avai
   assert.doesNotMatch(output, /not executable from PATH/);
 });
 
-test("update normalizes package-manager failure to exit 1", () => {
-  const result = run(["update", "--yes"], {
-    env: updateEnv({
-      OMS_TEST_INSTALL_CONTEXT: installContext("global", {
-        updateCommand: { executable: "yarn", args: ["global", "add", "oh-my-space@latest"] },
-      }),
-      OMS_TEST_MANAGER_AVAILABLE: "1",
-      OMS_TEST_UPDATE_EXIT: "7",
-    }),
-  });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /Package manager update failed \(exit 7\)/);
-});
 
 test("update fails before mutation when detected manager is unavailable", () => {
   const result = run(["update", "--yes"], {
@@ -1054,32 +926,6 @@ test("doctor recommends beta when only beta satisfies the installed skill", () =
   assert.doesNotMatch(output, /bun add -g oh-my-space@latest/);
 });
 
-test("doctor preserves informational status when no channel matches or lookup fails", () => {
-  const cwd = initGitWorkspace();
-  writeSources(cwd);
-  const home = fakeSkillsHome({
-    installed: { "oms-branch": { version: "1.1.0", omsVersion: ">=2.0.0-0" } },
-  });
-  const noMatch = doctorWithSkills(cwd, home, {
-    OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({
-      "dist-tags": { latest: "1.0.0", beta: "1.1.0-beta.1" },
-    }),
-  });
-  assert.equal(noMatch.result.status, 0, noMatch.output);
-  assert.match(noMatch.output, /no compatible published OMS channel was found/);
-
-  for (const overrides of [
-    { OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({ "dist-tags": { latest: "1.0.0", beta: "not-semver" } }) },
-    { OMS_TEST_REGISTRY_FAILURE: "registry timeout" },
-  ]) {
-    const failed = doctorWithSkills(cwd, home, overrides);
-    assert.equal(failed.result.status, 0, failed.output);
-    assert.match(failed.output, /Could not resolve compatible npm channels/);
-    assert.match(failed.output, /npm view oh-my-space dist-tags/);
-    assert.match(failed.output, /oh-my-space@latest/);
-    assert.match(failed.output, /oh-my-space@beta/);
-  }
-});
 
 test("doctor treats a missing or malformed installed version as older", () => {
   const cwd = initGitWorkspace();

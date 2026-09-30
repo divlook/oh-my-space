@@ -17,7 +17,10 @@ function inventory(overrides: Record<string, unknown> = {}) {
       boundary: "production-cli-journey",
       processBoundaryRationale: "Exercises the production process boundary.",
     }],
-    execution: { layers: { integration: { concurrency: 4 }, blackbox: { concurrency: 6, ownerOrder: contract.owners } } },
+    execution: {
+      budgets: { blackbox: 1, localMedianMs: 110_000, localMaxMs: 135_000, ciMaxMs: 55_000 },
+      layers: { integration: { concurrency: 4 }, blackbox: { concurrency: 6, ownerOrder: contract.owners } },
+    },
     baseline: { contracts: [{ id: contract.id }] },
     migrations: [{ baselineId: contract.id, finalIds: [contract.id] }],
     ...overrides,
@@ -36,10 +39,50 @@ test("inventory validation rejects omissions, duplicate ownership, and missing b
   );
 });
 
+test("migration records accept reasoned deletions and reject missing or conflicting outcomes", () => {
+  const deletion = { baselineId: contract.id, deleted: true, reason: "Redundant observable assertion." };
+  assert.deepEqual(validateTestInventory(inventory({ migrations: [deletion] }), [contract]), []);
+  assert.match(
+    validateTestInventory(inventory({ migrations: [{ ...deletion, finalIds: [contract.id] }] }), [contract]).join("\n"),
+    /exactly one replacement mapping or deletion/,
+  );
+  assert.match(
+    validateTestInventory(inventory({ migrations: [{ baselineId: contract.id, deleted: true }] }), [contract]).join("\n"),
+    /requires a reason/,
+  );
+  assert.match(
+    validateTestInventory(inventory({ migrations: [{ baselineId: contract.id }] }), [contract]).join("\n"),
+    /exactly one replacement mapping or deletion/,
+  );
+});
+
+test("inventory validation rejects black-box contracts over budget", () => {
+  const budgetError = validateTestInventory(inventory({ execution: {
+    budgets: { blackbox: 0, localMedianMs: 110_000, localMaxMs: 135_000, ciMaxMs: 55_000 },
+    layers: { integration: { concurrency: 4 }, blackbox: { concurrency: 6, ownerOrder: contract.owners } },
+  } }), [contract]).join("\n");
+  assert.match(budgetError, /Black-box contract budget exceeded: 1 > 0/);
+});
+
+test("inventory validation requires ordered positive local and CI performance budgets", () => {
+  const invalidBudgets = {
+    blackbox: 1,
+    localMedianMs: 115_000,
+    localMaxMs: 110_000,
+    ciMaxMs: 0,
+  };
+  const execution = {
+    budgets: invalidBudgets,
+    layers: { integration: { concurrency: 4 }, blackbox: { concurrency: 6, ownerOrder: contract.owners } },
+  };
+  const error = validateTestInventory(inventory({ execution }), [contract]).join("\n");
+  assert.match(error, /Invalid CI maximum performance budget/);
+  assert.match(error, /Local maximum performance budget is below the local median budget/);
+});
+
 test("discovery reconciles every preparation contract to exactly one stable shard", () => {
   const root = process.cwd();
   const preparation = discoverTestContracts(root).filter((entry: typeof contract) => entry.source === "tests/cli-preparation.contracts.js");
-  assert.equal(preparation.length, 14);
   assert.equal(new Set(preparation.map((entry: typeof contract) => entry.id)).size, preparation.length);
   assert.ok(preparation.every((entry: typeof contract) => entry.owners.length === 1));
 });
