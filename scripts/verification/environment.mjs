@@ -29,7 +29,7 @@ export function normalizedTestEnvironment(overrides = {}) {
     GIT_AUTHOR_EMAIL: "test@example.com",
     GIT_COMMITTER_NAME: "Test",
     GIT_COMMITTER_EMAIL: "test@example.com",
-    GIT_CONFIG_COUNT: "6",
+    GIT_CONFIG_COUNT: "8",
     GIT_CONFIG_KEY_0: "protocol.file.allow",
     GIT_CONFIG_VALUE_0: "always",
     GIT_CONFIG_KEY_1: "commit.gpgSign",
@@ -42,6 +42,10 @@ export function normalizedTestEnvironment(overrides = {}) {
     GIT_CONFIG_VALUE_4: "Test",
     GIT_CONFIG_KEY_5: "core.hooksPath",
     GIT_CONFIG_VALUE_5: EMPTY_GIT_CONFIG,
+    GIT_CONFIG_KEY_6: "maintenance.auto",
+    GIT_CONFIG_VALUE_6: "false",
+    GIT_CONFIG_KEY_7: "gc.auto",
+    GIT_CONFIG_VALUE_7: "0",
   });
   return Object.assign(env, overrides);
 }

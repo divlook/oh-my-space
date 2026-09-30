@@ -125,6 +125,8 @@ function getUpstreamTemplate() {
     stdio: "ignore",
     env: testEnv,
   });
+  // Local receive-pack clears Git environment overrides; keep pushed fixtures immutable too.
+  git(upstreamTemplate, "config", "receive.autogc", "false");
   const seed = tempFixture("oms-template-seed-");
   execFileSync("git", ["init", "-b", "main", seed], { stdio: "ignore", env: testEnv });
   configIdentity(seed);
@@ -196,6 +198,7 @@ function gitOut(cwd, ...args) {
 function initEmptyBare() {
   const bare = tempFixture("oms-source-");
   execFileSync("git", ["init", "--bare", "-b", "main", bare], { stdio: "ignore", env: testEnv });
+  git(bare, "config", "receive.autogc", "false");
   return bare;
 }
 

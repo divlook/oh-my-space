@@ -57,6 +57,8 @@ npm run build
 node --test tests/cli-branch-a.test.js
 ```
 
+The test Git environment disables automatic maintenance and garbage collection so background Git processes cannot change a fixture while it is being copied. Bare fixtures also set `receive.autogc=false` because local push receivers do not inherit Git environment configuration overrides. These settings apply only to disposable test repositories and test processes.
+
 Test fixtures are removed in one batch when each worker exits. To inspect fixtures after a failure, retain them and read the worker-root path printed to standard error:
 
 ```bash
