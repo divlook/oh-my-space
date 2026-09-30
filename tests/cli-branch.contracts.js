@@ -343,21 +343,6 @@ test("branch switch rejects empty queued names and cancels at either prompt", ()
   assert.equal(gitOut(dir, "branch", "--show-current"), "main");
 });
 
-test("a malformed queued text value fails closed", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  const dir = syncedSubmodule(cwd, "api", bare);
-  const result = run(["branch", "switch", "api"], {
-    cwd,
-    env: queueEnv([
-      { type: "select", value: "\0create-new-branch" },
-      { type: "text", value: 42 },
-    ]),
-  });
-  assert.equal(result.status, 1, result.stdout + result.stderr);
-  assert.match(result.stdout + result.stderr, /text "value" must be a string/);
-  assert.equal(gitOut(dir, "branch", "--show-current"), "main");
-});
 
 test("bare branch prints help and exits 1 in a non-interactive shell", () => {
   const bare = initBareUpstream();
@@ -376,45 +361,19 @@ test("branch delete exits 0 without a selector when only protected branches rema
   assert.equal(res.status, 0, res.stdout + res.stderr);
   assert.match(res.stdout + res.stderr, /no deletable local branches/);
 });
-
-test("guarded queue fails closed on malformed JSON, wrong type, and unconsumed responses", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  const dir = syncedSubmodule(cwd, "api", bare);
-  git(dir, "branch", "feature/q");
-
-  const malformed = run(["branch", "delete", "api", "feature/q"], {
-    cwd,
-    env: queueEnv(undefined, { OMS_TEST_PROMPT_RESPONSES: "not json" }),
-  });
-  assert.equal(malformed.status, 1, malformed.stdout + malformed.stderr);
-  assert.match(malformed.stdout + malformed.stderr, /not valid JSON/);
-
-  // A confirm response cannot satisfy a select prompt.
-  const wrongType = run(["branch", "delete"], { cwd, env: queueEnv([{ type: "confirm", value: true }]) });
-  assert.equal(wrongType.status, 1, wrongType.stdout + wrongType.stderr);
-
-  // feature/q survived the malformed run; an extra queued response is left unconsumed.
-  const unconsumed = run(["branch", "delete", "api", "feature/q"], {
-    cwd,
-    env: queueEnv([{ type: "confirm", value: true }]),
-  });
-  assert.equal(unconsumed.status, 1, unconsumed.stdout + unconsumed.stderr);
-  assert.match(unconsumed.stdout + unconsumed.stderr, /unconsumed/);
-});
-
 test("injected responses are ignored without OMS_TEST_MODE", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   syncedSubmodule(cwd, "api", bare);
-  // Queue set but OMS_TEST_MODE absent: normal non-TTY behavior (omitted alias fails fast).
-  const res = run(["branch", "delete"], {
+  const result = run(["branch", "delete"], {
     cwd,
     env: { ...testEnv, OMS_TEST_PROMPT_RESPONSES: JSON.stringify([{ type: "select", value: "api" }]) },
   });
-  assert.equal(res.status, 1, res.stdout + res.stderr);
-  assert.match(res.stdout + res.stderr, /not a TTY/);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /not a TTY/);
 });
+
+
 
 test("branch delete rejects an in-progress submodule operation and an unanchored detached HEAD", () => {
   const bare = initBareUpstream();

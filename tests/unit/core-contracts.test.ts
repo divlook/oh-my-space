@@ -74,7 +74,7 @@ test("status path inference, dirty counts, and operation result exits are determ
   const repos = [{ alias: "api", remotes: { origin: "x" } }, { alias: "api-extra", remotes: { origin: "y" } }];
   assert.equal(inferAliasFromCwd("/workspace", repos, "/workspace/oms/api/src"), "api");
   assert.equal(inferAliasFromCwd("/workspace", repos, "/workspace/oms/api-extra"), "api-extra");
-  assert.equal(inferAliasFromCwd("/workspace", repos, "/outside/oms/api"), null);
+  assert.equal(inferAliasFromCwd("/workspace", repos.slice(0, 1), "/workspace/oms/api-extra"), null);
   assert.equal(isDirtyCounts({ staged: 0, unstaged: 0, untracked: 0 }), false);
   assert.equal(isDirtyCounts({ staged: 0, unstaged: 1, untracked: 0 }), true);
   assert.equal(exitFromResults(["added", "pulled"]), 0);

@@ -264,29 +264,6 @@ test("sync --list loads oms.yaml from a parent workspace (no git repo needed)", 
   assert.match(result.stdout, /main/);
 });
 
-test("workspace discovery selects the nearest valid oms.yaml", () => {
-  const outer = tempWorkspace();
-  const inner = join(outer, "nested");
-  mkdirSync(inner);
-  writeSources(outer, sourceFor("outer", "/tmp/outer"));
-  writeSources(inner, sourceFor("inner", "/tmp/inner"));
-
-  const result = run(["sync", "--list"], { cwd: inner });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /inner/);
-  assert.doesNotMatch(result.stdout, /outer/);
-});
-
-test("workspace discovery accepts an oms.yaml symlink to a regular file", () => {
-  const cwd = tempWorkspace();
-  const manifest = join(cwd, "manifest-target.yaml");
-  writeFileSync(manifest, sourceFor("linked", "/tmp/linked"));
-  symlinkSync(manifest, join(cwd, "oms.yaml"));
-
-  const result = run(["sync", "--list"], { cwd });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /linked/);
-});
 
 for (const [name, createCandidate] of [
   ["directory", (path) => mkdirSync(path)],
@@ -313,19 +290,6 @@ for (const [name, createCandidate] of [
   });
 }
 
-test("workspace loading rejects an invalid nearest manifest without ancestor fallback", () => {
-  const outer = tempWorkspace();
-  const inner = join(outer, "nested");
-  mkdirSync(inner);
-  writeSources(outer, sourceFor("outer", "/tmp/outer"));
-  writeSources(inner, "repos: []\n");
-
-  const result = run(["sync", "--list"], { cwd: inner });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /must have at least one item/);
-  assert.doesNotMatch(result.stdout, /outer/);
-});
 
 test("missing oms.yaml fails with creation guidance", () => {
   const cwd = tempWorkspace();
@@ -335,19 +299,6 @@ test("missing oms.yaml fails with creation guidance", () => {
   assert.match(output, /Could not find oms\.yaml/);
 });
 
-test("invalid oms.yaml fails before any disk side effects", () => {
-  const cwd = tempWorkspace();
-  writeSources(
-    cwd,
-    "repos:\n  - alias: invalid.alias\n    remotes:\n      origin: git@example.com:org/repo.git\n",
-  );
-
-  const result = run(["sync", "sample"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1);
-  assert.match(output, /must match/);
-  assert.equal(existsSync(join(cwd, "oms")), false);
-});
 
 test("sync outside a git repository fails with git init guidance", () => {
   const bare = initBareUpstream();

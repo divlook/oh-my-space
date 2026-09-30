@@ -43,20 +43,33 @@ if (process.argv.includes("--write")) {
   };
   const overrides = existsSync(migrationOverridesPath) ? JSON.parse(readFileSync(migrationOverridesPath, "utf8")) : {};
   const currentIds = new Set(contracts.map((contract) => contract.id));
-  const previousMigrations = new Map((previous?.migrations ?? []).map((entry) => [entry.baselineId, entry.finalIds]));
-  const migrations = baseline.contracts.map((contract) => ({
-    baselineId: contract.id,
-    finalIds: overrides[contract.id]
-      ?? (currentIds.has(contract.id) ? [contract.id] : previousMigrations.get(contract.id) ?? []),
-  }));
+  const previousMigrations = new Map((previous?.migrations ?? []).map((entry) => [entry.baselineId, entry]));
+  const migrations = baseline.contracts.map((contract) => {
+    const baselineId = contract.id;
+    const override = overrides[baselineId];
+    if (Array.isArray(override)) return { baselineId, finalIds: override };
+    if (override && typeof override === "object") return { baselineId, ...override };
+    const previousMigration = previousMigrations.get(baselineId);
+    if (currentIds.has(baselineId)) return { baselineId, finalIds: [baselineId] };
+    if (previousMigration?.deleted === true) {
+      return { baselineId, deleted: true, reason: previousMigration.reason };
+    }
+    return { baselineId, finalIds: previousMigration?.finalIds ?? [] };
+  });
+  const blackboxBudget = previous?.execution?.budgets?.blackbox
+    ?? contracts.filter((contract) => contract.layer === "blackbox").length;
   const blackboxOwners = [...new Set(contracts.filter((contract) => contract.layer === "blackbox").flatMap((contract) => contract.owners))];
   blackboxOwners.sort((left, right) => (evidence.owners[right]?.durationMs ?? 0) - (evidence.owners[left]?.durationMs ?? 0) || left.localeCompare(right));
   const inventory = {
     schemaVersion: 1,
     execution: {
+      budgets: { ...(previous?.execution?.budgets ?? {}), blackbox: blackboxBudget },
       layers: {
-        integration: { concurrency: 4 },
-        blackbox: { concurrency: 10, ownerOrder: blackboxOwners },
+        integration: { concurrency: previous?.execution?.layers?.integration?.concurrency ?? 4 },
+        blackbox: {
+          concurrency: previous?.execution?.layers?.blackbox?.concurrency ?? 8,
+          ownerOrder: blackboxOwners,
+        },
       },
     },
     baseline,

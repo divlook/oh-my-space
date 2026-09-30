@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 
 const root = resolve(import.meta.dirname, "..");
 const inventory = JSON.parse(readFileSync(resolve(root, "tests/test-inventory.json"), "utf8"));
+const budgets = inventory.execution?.budgets ?? {};
 const options = parseOptions(process.argv.slice(2), inventory.execution.layers);
 const durationsMs = [];
 const runtime = spawnSync(options.node, ["--version"], { encoding: "utf8" }).stdout.trim();
@@ -55,13 +56,13 @@ if (options.gating || options.ciGating) {
   const failures = options.ciGating
     ? [
         ...(!/^v(?:20\.19\.0|24\.)/.test(runtime) ? [`Expected Node 20.19.0 or Node 24, received ${runtime}`] : []),
-        ...(maxMs > 60_000 ? [`Maximum ${maxMs}ms exceeds 60000ms`] : []),
+        ...(maxMs > budgets.ciMaxMs ? [`Maximum ${maxMs}ms exceeds ${budgets.ciMaxMs}ms`] : []),
       ]
     : [
         ...(!/^v24\./.test(runtime) ? [`Expected Node 24, received ${runtime}`] : []),
         ...(options.runs < 3 ? [`Expected at least 3 runs, received ${options.runs}`] : []),
-        ...(medianMs > 60_000 ? [`Median ${medianMs}ms exceeds 60000ms`] : []),
-        ...(maxMs > 75_000 ? [`Maximum ${maxMs}ms exceeds 75000ms`] : []),
+        ...(medianMs > budgets.localMedianMs ? [`Median ${medianMs}ms exceeds ${budgets.localMedianMs}ms`] : []),
+        ...(maxMs > budgets.localMaxMs ? [`Maximum ${maxMs}ms exceeds ${budgets.localMaxMs}ms`] : []),
       ];
   if (failures.length > 0) {
     for (const failure of failures) console.error(failure);

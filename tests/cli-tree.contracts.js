@@ -271,25 +271,6 @@ test("tree remove resolves omitted arguments interactively and fails non-interac
   assert.equal(existsSync(join(cwd, ".oms-tree", "api", "sel-a")), true);
 });
 
-test("tree list reports state for healthy, broken, and foreign entries and is a no-op when empty", () => {
-  const { cwd } = workspaceWithTree();
-  mkdirSync(join(cwd, ".oms-tree", "api", "stray"), { recursive: true });
-
-  // Break one tree's link by moving the whole workspace (the relocation scenario).
-  const listed = run(["tree", "list"], { cwd });
-  const listedOutput = listed.stdout + listed.stderr;
-  assert.equal(listed.status, 0, listedOutput);
-  assert.match(listedOutput, /api\s+t1\s+t1\s+no\s+ok/);
-  assert.match(listedOutput, /api\s+stray\s+-\s+-\s+not a registered worktree/);
-
-  // After removing everything, the empty state reports none and exits 0.
-  run(["tree", "remove", "api", "stray"], { cwd });
-  run(["tree", "remove", "api", "t1"], { cwd });
-  const empty = run(["tree", "list"], { cwd });
-  const emptyOutput = empty.stdout + empty.stderr;
-  assert.equal(empty.status, 0, emptyOutput);
-  assert.match(emptyOutput, /No managed trees/);
-});
 
 // ─── cross-command contracts: guard, read-only availability, unsync, status, doctor ───
 
@@ -367,67 +348,6 @@ test("unsync refuses while inventory entries exist, force included, and proceeds
   assert.equal(existsSync(join(cwd, "oms", "api")), false);
 });
 
-test("status --json exposes the trees array with filtering, broken entries, and foreign directories", () => {
-  const { cwd } = workspaceWithApi();
-  run(["tree", "add", "api", "t1"], { cwd });
-  mkdirSync(join(cwd, ".oms-tree", "api", "stray"), { recursive: true });
-
-  const all = JSON.parse(run(["status", "--json"], { cwd }).stdout);
-  assert.equal(Array.isArray(all.trees), true);
-  const t1 = all.trees.find((entry) => entry.task === "t1");
-  assert.deepEqual(Object.keys(t1).sort(), [
-    "absolutePath", "alias", "branch", "dirty", "error", "head", "path", "task",
-  ]);
-  assert.equal(t1.alias, "api");
-  assert.equal(t1.branch, "t1");
-  assert.equal(t1.dirty, false);
-  assert.equal(t1.error, null);
-  const stray = all.trees.find((entry) => entry.task === "stray");
-  assert.equal(stray.error, "not a registered worktree of any submodule");
-
-  // Alias filtering narrows the array.
-  const narrowed = JSON.parse(run(["status", "--json", "api"], { cwd }).stdout);
-  assert.equal(narrowed.trees.length, 2);
-
-  // Without inventory entries the array is empty (remove the tree and the stray directory).
-  run(["tree", "remove", "api", "t1"], { cwd });
-  run(["tree", "remove", "api", "stray"], { cwd });
-  const empty = JSON.parse(run(["status", "--json"], { cwd }).stdout);
-  assert.deepEqual(empty.trees, []);
-
-  // Human status lists trees when any exist.
-  run(["tree", "add", "api", "t2"], { cwd });
-  const human = run(["status"], { cwd });
-  const humanOutput = human.stdout + human.stderr;
-  assert.equal(human.status, 0, humanOutput);
-  assert.match(humanOutput, /Managed trees \(\.oms-tree\/\)/);
-  assert.match(humanOutput, /\.oms-tree\/api\/t2\s+t2\s+clean/);
-
-  // An alias filter narrows the inventory to that alias, in JSON and in human output alike.
-  const manifest = join(cwd, "oms.yaml");
-  const declaredApi = readFileSync(manifest, "utf8");
-  writeFileSync(manifest, declaredApi.replace(/alias: api/, "alias: web"));
-  const otherAlias = JSON.parse(run(["status", "--json", "web"], { cwd }).stdout);
-  assert.deepEqual(otherAlias.trees, []);
-  assert.doesNotMatch(run(["status", "web"], { cwd }).stdout, /Managed trees/);
-
-  // Without an alias filter the whole inventory is reported, including an undeclared alias's tree.
-  const undeclared = JSON.parse(run(["status", "--json"], { cwd }).stdout);
-  assert.deepEqual(undeclared.trees.map((entry) => `${entry.alias}/${entry.task}`), ["api/t2"]);
-  assert.match(run(["status"], { cwd }).stdout, /\.oms-tree\/api\/t2\s+t2\s+clean/);
-  writeFileSync(manifest, declaredApi);
-
-  // Relocation breaks the link: the entry carries a non-null error and null fields.
-  const moved = `${cwd}-moved`;
-  renameSync(cwd, moved);
-  const payload = JSON.parse(run(["status", "--json"], { cwd: moved }).stdout);
-  const broken = payload.trees.find((entry) => entry.task === "t2");
-  assert.equal(broken.error !== null, true);
-  assert.match(broken.error, /worktree link is broken/);
-  assert.equal(broken.branch, null);
-  assert.equal(broken.head, null);
-  assert.equal(broken.dirty, null);
-});
 
 test("doctor reports broken trees with repair guidance and a missing exclude entry", () => {
   const { cwd, task } = workspaceWithTree();

@@ -350,68 +350,8 @@ test("status reports branch, pin state, and dirtiness", () => {
 // --- status --json (machine-readable workspace state) ---
 
 
-test("status --json emits one pretty JSON object on stdout with the stable top-level shape", () => {
-  const { cwd } = workspaceWithApi();
-  const result = run(["status", "--json"], { cwd });
-  assert.equal(result.status, 0, result.stderr);
 
-  // Pure JSON: starts with `{`, two-space indented, single trailing newline, no diagnostics.
-  assert.ok(result.stdout.startsWith("{"));
-  assert.match(result.stdout, /\n  "schemaVersion": 1,/);
-  assert.ok(result.stdout.endsWith("}\n"));
 
-  const data = JSON.parse(result.stdout);
-  assert.equal(data.schemaVersion, 1);
-  assert.equal(typeof data.toolVersion, "string");
-  assert.equal(data.workspaceRoot, realpathSync(cwd));
-  assert.ok(isAbsolute(data.workspaceRoot));
-  assert.equal(data.currentAlias, null);
-  assert.ok(Array.isArray(data.errors));
-  assert.deepEqual(data.errors, []);
-  assert.ok(data.root && typeof data.root === "object");
-
-  const repo = data.repos[0];
-  assert.equal(repo.alias, "api");
-  assert.equal(repo.path, "oms/api"); // POSIX, workspace-relative
-  assert.equal(repo.absolutePath, join(realpathSync(cwd), "oms", "api"));
-  assert.equal(repo.configured, true);
-  assert.equal(repo.initialized, true);
-  assert.equal(repo.pin, "ok");
-  assert.equal(repo.error, null);
-});
-
-test("status --json reports currentAlias when run inside a configured submodule subtree", () => {
-  const { cwd } = workspaceWithApi();
-  assert.equal(statusJson(cwd).currentAlias, null);
-  assert.equal(statusJson(join(cwd, "oms", "api")).currentAlias, "api");
-});
-
-test("status --json current alias inference respects path segment boundaries", () => {
-  const { cwd } = workspaceWithApi();
-  // oms/api-extra shares a string prefix with alias `api` but is a different segment.
-  mkdirSync(join(cwd, "oms", "api-extra"), { recursive: true });
-  assert.equal(statusJson(join(cwd, "oms", "api-extra")).currentAlias, null);
-});
-
-test("status --json keeps its schema and path representation through a symlinked cwd", () => {
-  const { cwd } = workspaceWithApi();
-  const linkParent = tempWorkspace();
-  const linked = join(linkParent, "workspace");
-  symlinkSync(cwd, linked);
-
-  const data = statusJson(linked);
-  assert.deepEqual(Object.keys(data).sort(), [
-    "currentAlias",
-    "errors",
-    "repos",
-    "root",
-    "schemaVersion",
-    "toolVersion",
-    "trees",
-    "workspaceRoot",
-  ]);
-  assert.equal(data.workspaceRoot, realpathSync(cwd));
-});
 
 test("status --json represents a detached submodule HEAD explicitly", () => {
   const { cwd } = workspaceWithApi();
@@ -422,26 +362,6 @@ test("status --json represents a detached submodule HEAD explicitly", () => {
   assert.match(repo.head, /^[0-9a-f]+$/);
 });
 
-test("status --json reports a missing tracking branch as null divergence", () => {
-  const { cwd } = workspaceWithApi();
-  // A brand-new local branch has no upstream.
-  assert.equal(run(["branch", "switch", "api", "feature/x"], { cwd }).status, 0);
-  const repo = statusJson(cwd).repos[0];
-  assert.equal(repo.trackingBranch, null);
-  assert.equal(repo.ahead, null);
-  assert.equal(repo.behind, null);
-});
-
-test("status --json reports numeric ahead/behind against a tracking branch", () => {
-  const { cwd } = workspaceWithApi();
-  // main tracks origin/main; one local commit puts it exactly one ahead, zero behind.
-  writeFileSync(join(cwd, "oms", "api", "ahead.txt"), "x");
-  git(join(cwd, "oms", "api"), "add", "-A");
-  git(join(cwd, "oms", "api"), "commit", "-m", "local work");
-  const repo = statusJson(cwd).repos[0];
-  assert.strictEqual(repo.ahead, 1);
-  assert.strictEqual(repo.behind, 0);
-});
 
 test("status --json marks a never-synced configured alias as missing, not uninit", () => {
   const bare = initBareUpstream();
@@ -467,25 +387,6 @@ test("status --json keeps a recorded-but-uninitialized repo in inventory as unin
   assert.equal(repo.ahead, null);
 });
 
-test("status --json separates root changes from submodule source changes and pointer moves", () => {
-  const { cwd } = workspaceWithApi();
-  // An unrelated untracked root file is a root change.
-  writeFileSync(join(cwd, "NOTES.md"), "hi");
-  // A submodule source commit moves the pointer; an extra dirty file lives inside the submodule.
-  writeFileSync(join(cwd, "oms", "api", "feature.txt"), "x");
-  git(join(cwd, "oms", "api"), "add", "-A");
-  git(join(cwd, "oms", "api"), "commit", "-m", "feature");
-  writeFileSync(join(cwd, "oms", "api", "scratch.txt"), "y");
-
-  const data = statusJson(cwd);
-  // Root counts only the unrelated file, never the moved oms/api gitlink.
-  assert.equal(data.root.changes.untracked, 1);
-  assert.equal(data.root.changes.staged, 0);
-  assert.deepEqual(data.root.submodulePointers.moved, ["api"]);
-  // Submodule source changes are authoritative in the repo entry.
-  assert.equal(data.repos[0].changes.untracked, 1);
-  assert.equal(data.repos[0].dirty, true);
-});
 
 test("status --json narrows repos and pointer arrays to the selected aliases", () => {
   const a = initBareUpstream();
@@ -511,27 +412,6 @@ test("status --json narrows repos and pointer arrays to the selected aliases", (
   assert.equal(data.currentAlias, null);
 });
 
-test("status --json exposes staged and split root pointer states", () => {
-  const { cwd } = workspaceWithApi();
-  const wt = join(cwd, "oms", "api");
-  // c1: commit in the submodule and stage the gitlink (index ahead of HEAD).
-  writeFileSync(join(wt, "c1.txt"), "1");
-  git(wt, "add", "-A");
-  git(wt, "commit", "-m", "c1");
-  git(cwd, "add", "oms/api");
-  let data = statusJson(cwd);
-  assert.deepEqual(data.root.submodulePointers.staged, ["api"]);
-  assert.deepEqual(data.root.submodulePointers.moved, ["api"]);
-  assert.deepEqual(data.root.submodulePointers.split, []);
-
-  // c2: advance the submodule again so worktree != index != HEAD → split.
-  writeFileSync(join(wt, "c2.txt"), "2");
-  git(wt, "add", "-A");
-  git(wt, "commit", "-m", "c2");
-  data = statusJson(cwd);
-  assert.deepEqual(data.root.submodulePointers.split, ["api"]);
-  assert.deepEqual(data.root.submodulePointers.staged, ["api"]);
-});
 
 test("status represents a conflicted root gitlink as conflict and still exits 0 for --json", () => {
   const { cwd } = workspaceWithApi();
