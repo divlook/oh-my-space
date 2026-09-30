@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 1.1.1
+
+### Patch Changes
+
+- [#84](https://github.com/divlook/oh-my-space/pull/84) [`af7d903`](https://github.com/divlook/oh-my-space/commit/af7d90328f876d46eb3d6895c7508d5d990234d9) Thanks [@divlook](https://github.com/divlook)! - Reduce test-suite weight by consolidating Git-backed journeys, moving decision checks to cheaper layers, and enforcing a black-box contract budget.
+
 ## 1.1.0
 
 ### Minor Changes
