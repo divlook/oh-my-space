@@ -1,7 +1,7 @@
 # cli-automation-policy Specification
 
 ## Purpose
-TBD - created by syncing change add-branch-list. Update Purpose after archive.
+Define when OMS completes routine preparation and bounded recovery automatically, when repository changes require informed user intent, and how terminal failures report preserved state and actionable next steps.
 
 ## Requirements
 ### Requirement: Automation-first command completion

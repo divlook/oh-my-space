@@ -1,7 +1,7 @@
 # ai-submodule-workflow Specification
 
 ## Purpose
-TBD - created by archiving change improve-ai-submodule-workflow. Update Purpose after archive.
+Define safe, automation-friendly workflows for inspecting and managing submodules, separating submodule commits from root topology and pointer records, and providing actionable status, branch controls, and AI agent guidance.
 ## Requirements
 ### Requirement: Machine-readable workspace status
 The system SHALL provide `oms status --json` to report the root repository and configured submodules in a stable machine-readable format.
