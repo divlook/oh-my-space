@@ -1,19 +1,25 @@
 # Language policy
 
-This repository separates **records** from **conversation**. Do not confuse the two: a record stays in English even when the conversation that produced it happened in another language.
+## Records
 
-## Records are written in English
+Write committed text and published project artifacts in English. These are records, regardless of the conversation language.
 
-Anything committed to the repo or published as a project artifact is a record and must be written in English:
+Records include:
 
-- README and everything under `docs/`
+- README and files under `docs/`
 - Commit messages
 - Pull request titles and bodies
-- Changeset summary files (`.changeset/*.md`)
+- Changeset summaries (`.changeset/*.md`)
 - CHANGELOG entries
 
-## Talk to the user in the user's language
+## Conversation
 
-When conversing with the user, respond in the user's language.
+Respond in the user's language.
+Write uncommitted plans, working notes, and scratch material for the user in the user's language.
 
-Plan files, working notes, and any scratch material written for the user are **conversation, not records** — they are not committed project artifacts, so write them in the user's language, not English.
+## Development references
+
+- For CLI changes, read [Development](docs/development.md) before choosing build and test commands.
+- For Git behavior changes, read [How OMS works](docs/how-oms-works.md) for repository boundaries and safety conditions.
+- For agent instructions or skill changes, read [AI coding tools](docs/ai-coding-tools.md) for installation and version rules.
+- For release work, read [Release channels](docs/release-channels.md) before changing versions or npm tags.

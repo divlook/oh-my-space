@@ -1,10 +1,11 @@
 # Development
 
-This guide is for contributors working on the OMS CLI. Users installing and configuring a workspace should start with [Getting started](getting-started.md).
+This guide covers contributor work on the OMS CLI.
+For workspace installation and configuration, start with [Getting started](getting-started.md).
 
 ## Set up the repository
 
-The project uses the Node.js version in [`.nvmrc`](../.nvmrc), currently Node.js 24.
+Use the Node.js version in [`.nvmrc`](../.nvmrc).
 
 ```bash
 nvm use
@@ -17,7 +18,8 @@ npm ci
 npm run build
 ```
 
-The build type-checks the TypeScript source without emitting from `tsc`, then bundles the CLI to `dist/oms.js`.
+The build checks TypeScript types without output from `tsc`.
+It then bundles the CLI into `dist/oms.js`.
 
 ## Test
 
@@ -27,7 +29,8 @@ Run the canonical full gate:
 npm test
 ```
 
-It type-checks and builds once, then runs the unit, integration, and black-box test layers.
+The full gate checks types and builds once.
+It then runs the unit, integration, and black-box test layers.
 
 For focused work, use the layer or stable feature script that covers the change:
 
@@ -42,28 +45,47 @@ npm run test:branch
 npm run test:tools
 ```
 
-Place each new contract at the least expensive layer that exercises its meaningful boundary:
+### Test layer reference
 
-- `tests/unit` for parsing, validation, planning, and state decisions that need neither a Git process nor an owned filesystem fixture.
-- `tests/integration` for direct library entry points whose behavior depends on real Git or filesystem state in a disposable fixture.
-- Black-box owners for production-bundle wiring, process-integrity/recovery behavior, and at least one end-to-end journey per public command.
+Place each new contract at the least expensive layer that exercises its meaningful boundary.
 
-Protected process-integrity/recovery and production-bundle-wiring contracts stay black-box unless an equivalent replacement retains that boundary. Other journeys may be consolidated or removed only when observable coverage remains and each migration records its replacement or deletion reason in `tests/test-inventory.json`. That inventory also records deterministic owner assignment and the enforced black-box contract cap; `npm run test:inventory` checks it.
+- `tests/unit` covers parsing, validation, planning, and state decisions. These contracts need neither a Git process nor an owned filesystem fixture.
+- `tests/integration` covers direct library entry points. Their behavior depends on real Git or filesystem state in a disposable fixture.
+- Black-box owners cover production-bundle wiring and process-integrity/recovery behavior. They also cover at least one end-to-end journey per public command.
 
-Feature scripts rebuild `dist/oms.js` before running their black-box tests. If you invoke Node's test runner directly, build first:
+Protected process-integrity/recovery and production-bundle-wiring contracts stay black-box unless an equivalent replacement retains that boundary.
+You may consolidate or remove other journeys only when observable coverage remains.
+Each migration must record its replacement or deletion reason in `tests/test-inventory.json`.
+That inventory also records deterministic owner assignment and the enforced black-box contract cap.
+`npm run test:inventory` checks the inventory.
+
+### Direct test runs
+
+Feature scripts rebuild `dist/oms.js` before they run their black-box tests.
+If you invoke Node's test runner directly, build first:
 
 ```bash
 npm run build
 node --test tests/cli-branch-a.test.js
 ```
 
-The test Git environment disables automatic maintenance and garbage collection so background Git processes cannot change a fixture while it is being copied. Bare fixtures also set `receive.autogc=false` because local push receivers do not inherit Git environment configuration overrides. These settings apply only to disposable test repositories and test processes.
+### Fixture reference
 
-Test fixtures are removed in one batch when each worker exits. To inspect fixtures after a failure, retain them and read the worker-root path printed to standard error:
+The test Git environment disables automatic maintenance and garbage collection.
+These settings prevent background Git processes from changing a fixture during copying.
+Bare fixtures also set `receive.autogc=false` because local push receivers do not inherit Git environment configuration overrides.
+These settings apply only to disposable test repositories and test processes.
+Each worker removes its test fixtures in one batch when it exits.
+
+### Inspect retained fixtures
+
+To inspect fixtures after a failure, retain them:
 
 ```bash
 OMS_TEST_RETAIN_FIXTURES=1 npm test
 ```
+
+Read the worker-root path from standard error.
 
 ## Prepare a release
 
@@ -75,6 +97,12 @@ npm run version
 npm run release
 ```
 
-`prepack` runs the project's package validation before publication. Review package contents and release metadata before publishing.
+Review package contents before publication.
+Review release metadata before publication.
+Follow [Release channels](release-channels.md) for the authoritative maintainer steps.
 
-Stable and beta channels have different publication and rollback flows. Follow [Release channels](release-channels.md) for the authoritative maintainer steps, including beta dry runs, dist-tag verification, stable promotion, and rollback.
+### Release reference
+
+`prepack` runs the project's package validation before publication.
+Stable and beta channels have different publication and rollback flows.
+The [Release channels](release-channels.md) guide covers beta dry runs, dist-tag checks, stable promotion, and rollback.

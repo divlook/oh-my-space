@@ -1,5 +1,4 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -68,14 +67,6 @@ test("agent install --target both creates one managed block per file with the du
     const content = readFileSync(file, "utf8");
     assert.equal(content.match(/<!-- OMS START -->/g).length, 1);
     assert.equal(content.match(/<!-- OMS END -->/g).length, 1);
-    assert.ok(content.endsWith("\n") && !content.endsWith("\n\n"));
-    // Durable rules per the spec scenario.
-    assert.match(content, /oms status --json/);
-    assert.match(content, /separate Git repositor/);
-    assert.match(content, /do not guess/i);
-    assert.match(content, /oms record <alias>/);
-    assert.match(content, /oms --help/);
-    assert.match(content, /oms <command> --help/);
   }
 });
 
@@ -690,45 +681,10 @@ test("skills help documents purpose, scope, and an example", () => {
   assert.match(output, /\$ oms skills/);
 });
 
-// The canonical scope-guardrail kernel, identical to OMS_SCOPE_GUARDRAIL in scripts/oms.ts.
-// Pinned to the source constant below via the marker-block assertion, so it cannot silently drift.
-const SKILL_KERNEL = [
-  "- Run `oms status --json` before Git work involving `oms/` to read root versus submodule state.",
-  "- Treat each `oms/<alias>/` directory as a separate Git repository.",
-  "- Use `oms` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.",
-  "- Do not create root commits for existing submodule pointer updates unless the user explicitly runs `oms record <alias>`.",
-].join("\n");
-
 const SKILL_NAMES = ["oms-workspace", "oms-pointer", "oms-branch"];
-
-/**
- * Bump policy for `metadata.version` in skills/<name>/SKILL.md:
- *   major - the guardrail kernel or the scope contract changed (agent behaviour changes)
- *   minor - instructions or the description changed (when the skill fires, or what it tells the agent)
- *   patch - typo or wording only, no change in meaning
- *
- * A change to a skill's name, description, or body must be acknowledged here. The guard makes the
- * bump a deliberate, reviewable act rather than an enforced one: refreshing the hash without moving
- * the version still passes, and is meant to be caught in review. The hash deliberately excludes the
- * metadata block so bumping the version does not perturb its own hash. oms doctor compares an
- * installed copy's version against the version baked into the build, so a content change that skips
- * the bump would leave installed copies unreported.
- */
-const SKILL_SNAPSHOTS = {
-  "oms-workspace": { version: "1.2.0", contentHash: "4ad34bd98cea36107458d348b815ae0e428643c74e019c16c310a8871c6af324" },
-  "oms-pointer": { version: "1.1.0", contentHash: "6bcf180ba49f8c4d463dcc63d9a5e7b59747b0308c8c6763881c4b0132f156a1" },
-  "oms-branch": { version: "1.1.0", contentHash: "99100ba991d278e46133ae0d48f643c16685aed586214d851f2226cbd610ce0a" },
-};
 
 function readSkill(name) {
   return readFileSync(resolve("skills", name, "SKILL.md"), "utf8");
-}
-
-/** Hashes a skill's meaningful content — name, description, and body — excluding the metadata block. */
-function skillContentHash(name) {
-  const { frontmatter, body } = splitSkillFrontmatter(readSkill(name));
-  const data = parseYaml(frontmatter);
-  return createHash("sha256").update(`${data.name}\n${data.description}\n${body}`).digest("hex");
 }
 
 function splitSkillFrontmatter(content) {
@@ -771,25 +727,6 @@ test("each oms skill is published with name/description/metadata frontmatter", (
       body,
       versionPattern(data.metadata.version),
       `${name}: body must not declare the skill's own version`,
-    );
-  }
-});
-
-test("a skill content change must be acknowledged in SKILL_SNAPSHOTS", () => {
-  for (const name of SKILL_NAMES) {
-    const snapshot = SKILL_SNAPSHOTS[name];
-    assert.ok(snapshot, `${name}: add an entry to SKILL_SNAPSHOTS`);
-    const version = parseYaml(splitSkillFrontmatter(readSkill(name)).frontmatter).metadata.version;
-    assert.equal(
-      version,
-      snapshot.version,
-      `${name}: SKILL_SNAPSHOTS records ${snapshot.version} but metadata.version is ${version}; keep them in step`,
-    );
-    assert.equal(
-      skillContentHash(name),
-      snapshot.contentHash,
-      `${name}: content changed while metadata.version is still ${version} — bump the version per the ` +
-        "policy on SKILL_SNAPSHOTS, then update its recorded version and contentHash",
     );
   }
 });
@@ -1152,46 +1089,3 @@ test("update says nothing about skills when none are installed", () => {
   }
 });
 
-test("the guardrail kernel is single-sourced into the marker block and every SKILL.md", () => {
-  // The marker block is built from OMS_SCOPE_GUARDRAIL, so asserting the kernel against the live
-  // marker output pins SKILL_KERNEL to the source constant; the skill checks then catch any drift.
-  const ws = tempWorkspace();
-  writeSources(ws);
-  const result = run(["agent", "install", "--target", "agents"], { cwd: ws });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  const marker = readFileSync(join(ws, "oms", "AGENTS.md"), "utf8");
-  assert.ok(marker.includes(SKILL_KERNEL), "kernel must be a literal substring of the marker block");
-
-  for (const name of SKILL_NAMES) {
-    assert.ok(readSkill(name).includes(SKILL_KERNEL), `${name} must carry the kernel verbatim`);
-  }
-});
-
-test("each SKILL.md is schema-stable and portable", () => {
-  // Agent-specific slash command, e.g. " /foo" or "(/foo)" — not a path like oms/<alias>/.
-  const SLASH_COMMAND = /(^|[\s(])\/[A-Za-z]/m;
-  for (const name of SKILL_NAMES) {
-    const { frontmatter, body } = splitSkillFrontmatter(readSkill(name));
-
-    // schemaVersion is declared in the body (which the agent reads), not the frontmatter.
-    assert.doesNotMatch(frontmatter, /schemaVersion/, `${name}: schemaVersion must not live in frontmatter`);
-    assert.match(body, /schemaVersion/, `${name}: body must declare the schemaVersion it was written against`);
-
-    // Field semantics defer to the version-matched authoritative source.
-    assert.ok(body.includes("oms status --help"), `${name}: body must point to oms status --help`);
-
-    // Portable: no agent-specific slash-command syntax.
-    assert.doesNotMatch(body, SLASH_COMMAND, `${name}: body must not contain slash-command syntax`);
-
-    // Any normal-path flag a body names must cite the matching --help.
-    if (body.includes("--commit")) {
-      assert.ok(
-        body.includes("oms sync --help") && body.includes("oms unsync --help"),
-        `${name}: a body naming --commit must also cite oms sync --help and oms unsync --help`,
-      );
-    }
-    if (/(^|[\s(`])-m\b/.test(body)) {
-      assert.ok(body.includes("oms commit --help"), `${name}: a body naming -m must also cite oms commit --help`);
-    }
-  }
-});

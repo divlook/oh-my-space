@@ -1,44 +1,72 @@
 ---
 name: oms-branch
-description: Use when discovering, starting, switching, or deleting a branch inside an `oms/<alias>/` submodule — `oms branch list` to inspect choices, `oms branch switch` for local branches, `oms branch checkout` for remote branches, and `oms branch delete` for safe local deletion.
+description: Use to inspect, create, switch, or delete source branches in OMS, or to choose a separate task checkout.
 compatibility: Requires oh-my-space >=1.0.0-0.
 metadata:
   author: oh-my-space
-  version: "1.1.0"
+  version: "1.2.0"
   oh-my-space-version: ">=1.0.0-0"
 ---
 
-# Choose the right branch command inside a submodule
+# Choose a source branch
 
-Branching happens inside a submodule (`oms/<alias>/`), which is its own Git repository. Picking the wrong command can leave the submodule in detached HEAD, where new commits are not on any branch and the root pointer cannot be recorded cleanly.
+Each `oms/<alias>/` directory is a separate Git repository.
+A **detached HEAD** means the checkout refers directly to a commit instead of a branch.
+Use a branch for new source commits.
 
-## Scope guardrail (applies before any Git work)
+## Scope guardrail
 
-- Run `oms status --json` before Git work involving `oms/` to read root versus submodule state.
+- Run `oms status --json` before Git work involving `oms/` to identify the main project and each source repository.
 - Treat each `oms/<alias>/` directory as a separate Git repository.
-- Use `oms` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
-- Do not create root commits for existing submodule pointer updates unless the user explicitly runs `oms record <alias>`.
+- Use `oms` commands for workflows in `oms/<alias>/`.
+- Create main-project commits for existing pointer updates only when the user explicitly runs `oms record <alias>`.
 
-## Switch versus checkout
+## Choose the command
 
-- Run `oms branch list <alias>` to discover local and declared-remote branch choices before selecting an operation. It prepares safe existing registration and refreshes declared remotes automatically.
-- `oms branch switch <alias> <branch>` starts or moves to a LOCAL branch, creating it locally if it does not exist yet. No remote is required. Use this to begin new work.
-- `oms branch checkout <alias> <branch>` fetches `origin` and checks out an existing REMOTE branch (`origin/*`) as a local tracking branch. Use this to continue work that already exists on the remote.
+1. Run `oms branch list <alias>` to inspect local and remote branches.
+   OMS prepares existing registration when safe.
+   It refreshes the declared remotes.
+2. Select the command that matches the task:
+   - For a new or existing local branch, run `oms branch switch <alias> <branch>`.
+     OMS creates a missing local branch.
+     This command does not require a remote branch.
+   - For an existing branch on `origin`, run `oms branch checkout <alias> <branch>`.
+     OMS fetches `origin`.
+     It creates a local tracking branch or selects the existing local branch.
+3. Check `oms status --json` for the selected branch.
+   Both commands attach HEAD to a branch.
+   If the checkout is detached, use `oms branch switch` before a source commit.
+   A raw `git checkout <sha>` detaches HEAD.
 
-## Start task work in a managed tree instead of switching
+## Use a separate task checkout
 
-- When a task needs its own checkout of a source repository — to run a second task in parallel, or to keep the canonical checkout where it is — create a managed tree with `oms tree add <alias> <task>` instead of switching the canonical checkout away from its current branch. The tree lives at `.oms-tree/<alias>/<task>/` on branch `<task>`, and the canonical checkout is untouched.
-- Defer flag detail to `oms tree add --help`.
+For a second task or an unchanged canonical checkout, use `oms tree add <alias> <task>`.
+The managed tree resides at `.oms-tree/<alias>/<task>/` on branch `<task>`.
+The canonical checkout remains unchanged.
+Read `oms tree add --help` before selecting options.
+Use the managed-tree procedure in the `oms-workspace` skill for work inside the tree.
 
-## Avoid detached HEAD
+## Delete a local branch
 
-Both commands attach HEAD to a branch. Prefer them over a raw `git checkout <sha>` inside the submodule, which detaches HEAD. If `oms status --json` shows a submodule with no branch (detached), attach one with `oms branch switch` before committing.
+1. Run `oms branch delete <alias> <branch>` for safe local deletion.
+   Omit the alias or branch for interactive selection.
+   OMS displays protected branches but prevents their selection.
+2. If safe deletion fails, check whether the branch contains unmerged commits.
+   Use `--force` only when you intend to lose those commits.
+   Force still protects the current branch and baseline branches.
 
-## Delete a LOCAL branch
+OMS deletes neither remote branches nor remote-tracking references.
+It does not change the recorded pointer.
+Use this command instead of raw `git branch -d` or `git branch -D` to retain baseline protection.
+For a remote branch deletion, use Git directly against the remote.
 
-- `oms branch delete <alias> <branch>` removes one LOCAL branch inside a submodule with a safe delete. It is local-only: it never deletes a remote branch or a remote-tracking ref, and never touches the root pointer. To remove a branch on the remote, use plain Git against the remote instead — this command does not do that.
-- Deleting an unmerged branch is refused by the safe delete; force it with `oms branch delete <alias> <branch> --force` only when losing its unmerged commits is intended. Force still cannot delete the current branch or a baseline branch.
-- Omit the alias or branch to choose interactively; protected branches (current and baseline) are shown but not selectable.
-- Do not `cd` into `oms/<alias>/` and run raw `git branch -d/-D`; the command resolves and protects baseline branches for you.
+## Command reference
 
-These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer branch inventory fields, preparation, freshness, and exit behavior to `oms branch list --help`; defer remaining flag detail to `oms branch switch --help`, `oms branch checkout --help`, and `oms branch delete --help`.
+These instructions use `oms status --json` schemaVersion 1.
+For another schemaVersion, read `oms status --help` for the installed version's field definitions.
+Read the relevant command's help for fields, preparation, freshness, options, and exit behavior:
+
+- `oms branch list --help`
+- `oms branch switch --help`
+- `oms branch checkout --help`
+- `oms branch delete --help`
