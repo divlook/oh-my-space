@@ -59,6 +59,27 @@ Each migration must record its replacement or deletion reason in `tests/test-inv
 That inventory also records deterministic owner assignment and the enforced black-box contract cap.
 `npm run test:inventory` checks the inventory.
 
+### Performance evidence
+
+Keep ongoing performance measurements in `tests/performance/`, independently of active or archived OpenSpec changes.
+
+- `owner-durations.json` records test-owner timings used by `node scripts/validate-test-inventory.mjs --write`.
+- `suite-benchmarks.json` records complete-suite measurements and is uploaded by CI.
+
+Measure the full gate without enforcing a wall-clock budget:
+
+```bash
+node scripts/benchmark-test-suite.mjs --runs 1 --label manual
+```
+
+After building, measure a selected black-box owner:
+
+```bash
+node scripts/benchmark-test-owners.mjs --owner tests/cli-tree-a.test.js
+```
+
+The benchmark scripts update these files. Preserve reviewed historical measurements when running temporary diagnostics.
+
 ### Direct test runs
 
 Feature scripts rebuild `dist/oms.js` before they run their black-box tests.

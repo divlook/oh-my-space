@@ -27,7 +27,7 @@ const owners = requestedOwner
   : requestedPrefix
     ? discoveredOwners.filter((owner) => owner.startsWith(requestedPrefix))
     : discoveredOwners;
-const output = resolve(root, "openspec/changes/restore-test-performance-budget/evidence/owner-durations.json");
+const output = resolve(root, "tests/performance/owner-durations.json");
 const previous = existsSync(output) ? JSON.parse(readFileSync(output, "utf8")) : null;
 const measurements = Object.fromEntries(
   discoveredOwners.flatMap((owner) => previous?.owners?.[owner] ? [[owner, previous.owners[owner]]] : []),

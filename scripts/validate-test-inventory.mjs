@@ -4,7 +4,7 @@ import { discoverTestContracts, validateTestInventory } from "./test-inventory-l
 
 const root = resolve(import.meta.dirname, "..");
 const inventoryPath = resolve(root, "tests/test-inventory.json");
-const evidencePath = resolve(root, "openspec/changes/restore-test-performance-budget/evidence/owner-durations.json");
+const evidencePath = resolve(root, "tests/performance/owner-durations.json");
 const migrationOverridesPath = resolve(root, "tests/test-migration-overrides.json");
 const discovered = discoverTestContracts(root);
 

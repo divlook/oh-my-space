@@ -78,7 +78,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: test-performance-${{ matrix.name }}-${{ github.run_id }}
-          path: openspec/changes/restore-test-performance-budget/evidence/suite-benchmarks.json
+          path: tests/performance/suite-benchmarks.json
       - name: Pack dry run
         if: ${{ steps.marker.outputs.cache-hit != 'true' }}
         run: npm pack --dry-run --ignore-scripts
@@ -135,7 +135,7 @@ jobs:
       - name: Report diagnostic runtime
         if: ${{ always() }}
         run: |
-          duration=$(node -e 'const evidence = require("./openspec/changes/restore-test-performance-budget/evidence/suite-benchmarks.json"); process.stdout.write(String(evidence.measurements.find((entry) => entry.label === "ci-latest-supported")?.maxMs ?? "unavailable"))')
+          duration=$(node -e 'const evidence = require("./tests/performance/suite-benchmarks.json"); process.stdout.write(String(evidence.measurements.find((entry) => entry.label === "ci-latest-supported")?.maxMs ?? "unavailable"))')
           {
             echo "### Latest supported Node.js diagnostic"
             echo
@@ -148,4 +148,4 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: test-performance-latest-${{ github.run_id }}
-          path: openspec/changes/restore-test-performance-budget/evidence/suite-benchmarks.json
+          path: tests/performance/suite-benchmarks.json

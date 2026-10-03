@@ -46,7 +46,7 @@ const entry = {
   maxMs,
   gating: options.gating || options.ciGating,
 };
-const output = resolve(root, "openspec/changes/restore-test-performance-budget/evidence/suite-benchmarks.json");
+const output = resolve(root, "tests/performance/suite-benchmarks.json");
 mkdirSync(dirname(output), { recursive: true });
 const evidence = existsSync(output) ? JSON.parse(readFileSync(output, "utf8")) : { schemaVersion: 1, measurements: [] };
 evidence.measurements = [...evidence.measurements.filter((measurement) => measurement.label !== options.label), entry];
