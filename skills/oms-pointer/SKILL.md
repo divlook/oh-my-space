@@ -1,39 +1,61 @@
 ---
 name: oms-pointer
-description: Use after `oms commit` or `oms pull` moves a submodule's working commit, to record the moved root gitlink pointer with `oms record`. Covers the cross-command commit-or-pull-then-record loop so a submodule source change is not left without a recorded root pointer, and the root pointer is not committed by mistake.
+description: Use after oms commit or oms pull changes a source commit, when the task includes recording the main-project pointer.
 compatibility: Requires oh-my-space >=1.0.0-0.
 metadata:
   author: oh-my-space
-  version: "1.1.0"
+  version: "1.2.0"
   oh-my-space-version: ">=1.0.0-0"
 ---
 
-# Record the root pointer after a submodule commit moves
+# Record a moved pointer
 
-When a submodule's working commit moves — because you ran `oms commit` to commit source changes, or `oms pull` fast-forwarded its branch — the root repository's gitlink still points at the old commit until you record the new one. Recording is a separate, explicit step.
+`oms commit` and `oms pull` can change a source repository's current commit.
+The main project still records the previous commit until `oms record` creates a pointer commit.
+A **pointer** is the gitlink that stores the source commit in the main project.
 
-## Scope guardrail (applies before any Git work)
+## Scope guardrail
 
-- Run `oms status --json` before Git work involving `oms/` to read root versus submodule state.
+- Run `oms status --json` before Git work involving `oms/` to identify the main project and each source repository.
 - Treat each `oms/<alias>/` directory as a separate Git repository.
-- Use `oms` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
-- Do not create root commits for existing submodule pointer updates unless the user explicitly runs `oms record <alias>`.
+- Use `oms` commands for workflows in `oms/<alias>/`.
+- Create main-project commits for existing pointer updates only when the user explicitly runs `oms record <alias>`.
 
-## Commit source, then record the pointer
+## Commit source changes
 
-1. Commit the submodule's source changes with `oms commit <alias> -m "<message>"`. The `-m` flag is required to create the commit. This commits inside `oms/<alias>/` only, never the root gitlink.
-2. Record the moved root pointer afterward with `oms record <alias>`. This is the only step that writes a root commit for the pointer move.
+1. Commit source changes with `oms commit <alias> -m "<message>"`.
+   The command requires `-m`.
+   It commits only inside `oms/<alias>/`.
+2. Push the source commit with `oms push <alias>`.
+   Collaborators must be able to fetch the commit before the main project records it.
+3. Continue to the recording procedure only when the scope guardrail permits a pointer commit.
 
-## A pull that fast-forwards also moves the pointer
+## After a pull
 
-`oms pull <alias>` fast-forwards the submodule branch and moves its working commit, so it moves the root pointer the same way a commit does. Record it with `oms record <alias>` afterward, exactly as after `oms commit`.
+`oms pull <alias>` can advance the source branch through a fast-forward.
+A fast-forward moves the branch to a descendant commit without a merge commit.
+The resulting pointer update needs the same recording procedure as a source commit.
+`oms push` does not move the source checkout or record its pointer.
 
-## Several moved pointers at once
+## Record the selected pointers
 
-A wide pull or push (`oms pull --all`, `oms push --all`) can move several root pointers in one run, and the command then hints `oms record --all` instead of one hint per alias. Record them together with `oms record --all` (or name them: `oms record <alias> <alias>`); they land in one root commit. With `--all`, an alias that cannot be recorded is reported and skipped while the rest are still recorded, and the command exits non-zero — read the skipped reasons rather than assuming everything was recorded.
+1. Check `oms status --json` for unrecorded pointer updates.
+2. Run `oms record <alias>` for the selected repository.
+   For several selected repositories, use `oms record <alias> <alias>`.
+   Use `oms record --all` only when the request includes every moved pointer.
+   OMS records successful selections in one main-project commit.
+3. Check the command's exit status.
+   A non-zero status can indicate partial success.
+   Read each skipped alias's reason.
+4. Check `oms status --json` again.
+   Account for every selected pointer and any skipped alias.
 
-## Do not commit the root pointer by mistake
+Use `oms record` instead of a manual gitlink commit.
+These instructions use `oms status --json` schemaVersion 1.
+For another schemaVersion, read `oms status --help` for the installed version's field definitions.
+Read the relevant command's help before selecting options:
 
-Do not stage and commit the root gitlink yourself to capture a pointer move — that is what `oms record <alias>` is for, and doing it by hand is the mistake this workflow exists to prevent. Run `oms status --json` to confirm whether a pointer is unrecorded before and after.
-
-These instructions were written against `oms status --json` schemaVersion 1. If `oms status --json` reports a different schemaVersion, defer to `oms status --help` for exact field semantics. Defer remaining flag detail to `oms commit --help`, `oms pull --help`, and `oms record --help`.
+- `oms commit --help`
+- `oms pull --help`
+- `oms push --help`
+- `oms record --help`

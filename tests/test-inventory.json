@@ -5818,17 +5818,6 @@
       "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
-      "id": "tests/cli-tools.test.js::a skill content change must be acknowledged in SKILL_SNAPSHOTS",
-      "name": "a skill content change must be acknowledged in SKILL_SNAPSHOTS",
-      "source": "tests/cli-tools.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-tools.test.js"
-      ],
-      "boundary": "production-cli-journey",
-      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
-    },
-    {
       "id": "tests/cli-tools.test.js::agent install --target both creates one managed block per file with the durable rules",
       "name": "agent install --target both creates one managed block per file with the durable rules",
       "source": "tests/cli-tools.test.js",
@@ -6104,17 +6093,6 @@
       "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
-      "id": "tests/cli-tools.test.js::each SKILL.md is schema-stable and portable",
-      "name": "each SKILL.md is schema-stable and portable",
-      "source": "tests/cli-tools.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-tools.test.js"
-      ],
-      "boundary": "production-cli-journey",
-      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
-    },
-    {
       "id": "tests/cli-tools.test.js::legacy bare clone (oms/<alias>/.bare) blocks sync with the 0.6.0 migration hint",
       "name": "legacy bare clone (oms/<alias>/.bare) blocks sync with the 0.6.0 migration hint",
       "source": "tests/cli-tools.test.js",
@@ -6238,17 +6216,6 @@
     {
       "id": "tests/cli-tools.test.js::skills prints the project and global install commands",
       "name": "skills prints the project and global install commands",
-      "source": "tests/cli-tools.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-tools.test.js"
-      ],
-      "boundary": "production-cli-journey",
-      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
-    },
-    {
-      "id": "tests/cli-tools.test.js::the guardrail kernel is single-sourced into the marker block and every SKILL.md",
-      "name": "the guardrail kernel is single-sourced into the marker block and every SKILL.md",
       "source": "tests/cli-tools.test.js",
       "layer": "blackbox",
       "owners": [
@@ -8799,9 +8766,8 @@
     },
     {
       "baselineId": "tests/cli-tools.test.js::a skill content change must be acknowledged in SKILL_SNAPSHOTS",
-      "finalIds": [
-        "tests/cli-tools.test.js::a skill content change must be acknowledged in SKILL_SNAPSHOTS"
-      ]
+      "deleted": true,
+      "reason": "Removed a content-hash snapshot that pinned skill wording instead of consumer behavior."
     },
     {
       "baselineId": "tests/cli-tools.test.js::agent install --target both creates one managed block per file with the durable rules",
@@ -8961,9 +8927,8 @@
     },
     {
       "baselineId": "tests/cli-tools.test.js::each SKILL.md is schema-stable and portable",
-      "finalIds": [
-        "tests/cli-tools.test.js::each SKILL.md is schema-stable and portable"
-      ]
+      "deleted": true,
+      "reason": "Removed source-text assertions for help pointers and schema wording. Published metadata validation remains."
     },
     {
       "baselineId": "tests/cli-tools.test.js::legacy bare clone (oms/<alias>/.bare) blocks sync with the 0.6.0 migration hint",
@@ -9039,9 +9004,8 @@
     },
     {
       "baselineId": "tests/cli-tools.test.js::the guardrail kernel is single-sourced into the marker block and every SKILL.md",
-      "finalIds": [
-        "tests/cli-tools.test.js::the guardrail kernel is single-sourced into the marker block and every SKILL.md"
-      ]
+      "deleted": true,
+      "reason": "Removed literal copies of instruction text. Agent installation behavior remains covered."
     },
     {
       "baselineId": "tests/cli-tools.test.js::unrelated sources/ directory above the workspace does not block oms",

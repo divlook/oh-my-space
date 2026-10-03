@@ -10,10 +10,10 @@ const OMS_MARKER_START = "<!-- OMS START -->";
 const OMS_MARKER_END = "<!-- OMS END -->";
 
 /** Canonical scope-guardrail kernel, single-sourced into the marker block and each published SKILL.md. */
-const OMS_SCOPE_GUARDRAIL = `- Run \`oms status --json\` before Git work involving \`oms/\` to read root versus submodule state.
+const OMS_SCOPE_GUARDRAIL = `- Run \`oms status --json\` before Git work involving \`oms/\` to identify the main project and each source repository.
 - Treat each \`oms/<alias>/\` directory as a separate Git repository.
-- Use \`oms\` commands for scoped submodule workflows; do not guess root repository versus submodule Git scope.
-- Do not create root commits for existing submodule pointer updates unless the user explicitly runs \`oms record <alias>\`.`;
+- Use \`oms\` commands for workflows in \`oms/<alias>/\`.
+- Create main-project commits for existing pointer updates only when the user explicitly runs \`oms record <alias>\`.`;
 
 /** Concise, durable agent rules; detailed usage is deferred to CLI help. The marker's own --help line stays outside the kernel constant. */
 const OMS_INSTRUCTION_BLOCK = `${OMS_MARKER_START}
