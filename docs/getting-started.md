@@ -1,6 +1,6 @@
 # Getting started
 
-This guide takes you from an empty project to a synchronized workspace, then through one complete branch, commit, push, and record workflow.
+This guide starts with an empty project. It covers workspace synchronization and one complete branch, commit, push, and record workflow.
 
 ## Requirements
 
@@ -8,7 +8,7 @@ This guide takes you from an empty project to a synchronized workspace, then thr
 - Git `>=2.40`
 - A Git repository whose top-level directory will contain `oms.yaml`
 
-`oms init` can create a manifest before Git is initialized. Before synchronizing repositories, run `git init` in the same directory.
+`oms init` can create a manifest before you initialize Git. Before synchronizing repositories, run `git init` in the same directory.
 
 ## Install OMS
 
@@ -44,14 +44,19 @@ See [Configure your workspace](configure-your-workspace.md) for the complete for
 
 ## Synchronize the repositories
 
-Add and initialize every declared repository on its configured starting branch, called the baseline:
+Synchronize every declared repository with its configured starting branch, called the baseline:
 
 ```bash
 oms sync --all
+```
+
+Inspect the workspace state:
+
+```bash
 oms status
 ```
 
-The repository is now available at `oms/api/`. The main project records its exact commit, while `oms/api/` remains a normal Git working tree where you can create branches and make commits.
+The repository is now available at `oms/api/`. The main project records its exact commit. `oms/api/` remains a normal Git working tree where you can create branches and make commits.
 
 ## Complete the first change
 
@@ -65,7 +70,9 @@ Use `oms branch switch` to create or move to a local branch. To work from an exi
 
 ### 2. Edit and commit in the source repository
 
-Make your changes under `oms/api/`, then commit them inside that repository:
+Make your changes under `oms/api/`.
+
+Commit them inside that repository:
 
 ```bash
 oms commit api -m "feat: add login"
@@ -95,7 +102,7 @@ A Git submodule stores an exact source-repository commit in the main project. OM
 oms status
 ```
 
-A `moved` pointer means the checked-out source commit differs from the commit recorded by the main project. Push the source commit if needed, then run `oms record <alias>`.
+A `moved` pointer means the checked-out source commit differs from the commit recorded by the main project. Push the source commit if needed. Run `oms record <alias>`.
 
 ## Continue learning
 

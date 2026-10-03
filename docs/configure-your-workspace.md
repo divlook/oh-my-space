@@ -10,7 +10,7 @@ Run this from the intended workspace root:
 oms init
 ```
 
-`oms init` writes a starter manifest. It does not add repositories or install AI tooling. Before running submodule commands, make the same directory a Git root with `git init` if needed.
+`oms init` writes a starter manifest. It does not add repositories or install AI tooling. Before running submodule commands, run `git init` in the same directory if it is not a Git root.
 
 ## Manifest structure
 
@@ -31,25 +31,25 @@ The schema comment is optional at runtime. Keep it to enable editor validation a
 
 ## `repos`
 
-`repos` is a required, non-empty array. Each entry declares one source repository.
+The manifest must contain a non-empty `repos` array. Each entry declares one source repository.
 
 ### `alias`
 
-`alias` is required and must be unique. OMS checks out the repository at `oms/<alias>/`.
+Each entry must specify a unique `alias`. OMS places the repository checkout at `oms/<alias>/`.
 
 An alias:
 
-- starts with an ASCII lowercase letter or digit;
-- continues with ASCII lowercase letters, digits, `-`, `_`, or `@`;
+- starts with an ASCII lowercase letter or digit.
+- continues with ASCII lowercase letters, digits, `-`, `_`, or `@`.
 - cannot contain uppercase letters, `/`, `\`, `.`, or whitespace.
 
 The accepted pattern is `/^[a-z0-9][a-z0-9_@-]*$/`.
 
 ### `remotes`
 
-`remotes` is required and must contain `origin`. Each value is a Git URL that can be cloned.
+Each entry must specify `remotes` that contain `origin`. Each value is a Git URL that supports cloning.
 
-`origin` is the primary remote. During synchronization, it controls the local `origin` URL and the matching `.gitmodules` URL. Additional entries such as `upstream` become additional remotes and are processed in manifest order.
+`origin` is the primary remote. During synchronization, it controls the local `origin` URL and the matching `.gitmodules` URL. OMS processes additional entries, such as `upstream`, as additional remotes in manifest order.
 
 OMS never prints remote URL values while reporting metadata changes.
 
@@ -89,10 +89,15 @@ After editing the manifest, reconcile the workspace:
 
 ```bash
 oms sync --all
+```
+
+Inspect the workspace state:
+
+```bash
 oms status
 ```
 
-`oms sync` adds missing registrations and updates OMS-managed `.gitmodules` metadata. It commits registration and metadata changes by default; run `oms sync --help` before choosing a different finalization mode.
+`oms sync` adds missing registrations and updates OMS-managed `.gitmodules` metadata. It commits registration and metadata changes by default. Run `oms sync --help` before choosing a different finalization mode.
 
 To remove a checked-out repository while keeping its declaration for later use, use `oms unsync`. To remove it from the workspace definition, edit `oms.yaml` as a separate main-project change.
 
