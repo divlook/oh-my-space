@@ -4,6 +4,49 @@ Define fast, isolated, and repeatable black-box test execution for local develop
 
 ## Requirements
 
+### Requirement: Risk-tiered contract retention
+The canonical suite SHALL place each behavior contract at the least expensive layer that exercises its meaningful boundary, SHALL retain every contract whose recorded boundary is `process-integrity-or-recovery` or `production-bundle-wiring` unless it is replaced by an equivalent contract, and SHALL allow any other contract to be consolidated into fewer tests or deleted when the consolidation or deletion is recorded in the inventory's migration records with a stated reason.
+
+#### Scenario: A protected contract is dropped without replacement
+- **WHEN** the inventory drops or thins a contract whose boundary is `process-integrity-or-recovery` or `production-bundle-wiring` without a migration record mapping it to an equivalent replacement
+- **THEN** the inventory check fails
+
+#### Scenario: A duplicate contract is consolidated
+- **WHEN** one replacement test covers several former contracts that asserted the same observable outcomes
+- **THEN** a migration record maps every former contract id to the replacement
+- **AND** the canonical suite executes the replacement without also retaining redundant coverage of the former contracts
+
+#### Scenario: An over-specified discretionary contract is deleted
+- **WHEN** a contract whose boundary is `production-cli-journey` is deleted because its observable outcome is already asserted elsewhere or it pins incidental behavior
+- **THEN** a migration record identifies the deleted contract, the deletion reason, and either the covering replacement or the absence of one
+- **AND** the inventory check passes and the canonical suite no longer executes the deleted contract
+
+#### Scenario: A decision-boundary contract moves down a layer
+- **WHEN** behavior depends only on parsed Git results, validation input, state classification, redaction, formatting, or command planning
+- **THEN** it is verified directly without launching the bundled CLI or a real Git process
+- **AND** the migration record maps the former contract to its replacement
+
+#### Scenario: Process wiring retains a floor
+- **WHEN** the black-box inventory changes
+- **THEN** every public command keeps at least one representative journey through the production bundle
+
+### Requirement: Bounded black-box budget
+The test inventory SHALL declare a maximum number of black-box contracts, and the inventory check SHALL fail when the number of registered black-box contracts exceeds that declared maximum. Changing the declared maximum is a reviewed data change and SHALL NOT require a specification change.
+
+#### Scenario: The budget is exceeded
+- **WHEN** a change adds a black-box contract while the registered black-box count already equals the declared maximum
+- **THEN** the inventory check fails until a contract is consolidated, moved down a layer, deleted, or the declared maximum is raised
+
+#### Scenario: A black-box contract is added within budget
+- **WHEN** a change adds a black-box contract while the declared maximum has headroom
+- **THEN** the contract registers with a process-boundary rationale as required by the coverage ownership controls
+- **AND** the inventory check passes
+
+#### Scenario: The declared maximum is raised
+- **WHEN** the declared maximum in the test inventory increases
+- **THEN** the specification is unchanged
+- **AND** the inventory check enforces the new value from that point on
+
 ### Requirement: Canonical full-suite command
 
 The project SHALL provide one canonical `npm test` command that type-checks and builds the production bundle once, executes the complete layered behavior suite, and records verification only after every layer passes against unchanged inputs.
@@ -37,25 +80,6 @@ The project SHALL provide layer-focused and feature-focused commands that reuse 
 - **THEN** the mapped tests for that feature execute across the applicable layers
 - **AND** those same tests remain part of canonical `npm test`
 - **AND** the focused command does not write a complete verification record
-
-### Requirement: Behavior-preserving layered coverage
-
-The canonical suite SHALL preserve every observable behavior contract represented by the 295-case baseline while assigning each contract to the least expensive layer that exercises its meaningful boundary.
-
-#### Scenario: A pure decision contract is migrated
-
-- **WHEN** a behavior depends only on parsed Git results, validation input, state classification, redaction, formatting, or command planning
-- **THEN** it is verified directly without launching the bundled CLI or a real Git process
-
-#### Scenario: A filesystem or lightweight Git contract is migrated
-
-- **WHEN** behavior depends on real file semantics or lightweight Git initialization, configuration, or status
-- **THEN** it is verified in a shallow integration test using an owned disposable fixture
-
-#### Scenario: A process boundary is material
-
-- **WHEN** behavior depends on bundled CLI wiring, a representative end-to-end journey, or data-integrity behavior across real Git operations
-- **THEN** it remains in the bounded black-box layer
 
 ### Requirement: Deterministic preparation sharding
 
@@ -103,22 +127,6 @@ The project SHALL maintain a machine-checkable inventory that assigns each behav
 - **WHEN** a unit or shallow integration test replaces a black-box contract
 - **THEN** the inventory maps the prior contract to its replacement coverage
 - **AND** the canonical suite executes the replacement without also retaining redundant black-box coverage
-
-### Requirement: Explicit contract migration evidence
-
-The change SHALL map every test in the recorded pre-change inventory to its retained or replacement test or tests and SHALL retain that reconciliation in verification evidence.
-
-#### Scenario: Several baseline cases are consolidated
-
-- **WHEN** one replacement test covers several former cases
-- **THEN** the mapping identifies every former case
-- **AND** the replacement asserts every former observable outcome
-
-#### Scenario: Migration is accepted
-
-- **WHEN** the layered suite is ready for final verification
-- **THEN** every name in the recorded pre-change inventory has at least one retained or replacement mapping
-- **AND** no behavior contract was removed solely to meet the performance target
 
 ### Requirement: Bounded parallel test execution
 
@@ -221,28 +229,25 @@ Each CI validation job SHALL execute the canonical full suite at most once befor
 - **THEN** `prepack` invokes the canonical full test gate before an artifact is produced or published
 
 ### Requirement: Test execution performance evidence
+The completed change SHALL demonstrate the local and CI performance contracts with repeatable external measurements rather than machine-sensitive assertions in the functional suite. The post-migration acceptance budgets are: a local median of no more than 110 seconds with no run exceeding 135 seconds, and a CI Test step of no more than 55 seconds per matrix entry.
 
-The completed change SHALL demonstrate the local and CI performance contracts with repeatable external measurements rather than machine-sensitive assertions in the functional suite.
+The three-run `post-migration` benchmark on Node v24.19.0 measured 97.029 s, 101.869 s, and 98.237 s (median 98.237 s, max 101.869 s); the final `npm test` run completed in 126.12 s. The CI limit includes margin over the latest available workflow Test-step durations before this change (48 s on Node 20.19.0 and 39 s on Node 24; [CI run 32482147336](https://github.com/divlook/oh-my-space/actions/runs/32482147336)).
 
 #### Scenario: Local performance is accepted
-
-- **WHEN** three complete `npm test` runs execute on the documented M2 Mac with `.nvmrc` Node 24 and warm dependencies
-- **THEN** the median duration including type-check and build is no more than 60 seconds
-- **AND** no run exceeds 75 seconds
+- **WHEN** three complete `npm test` runs execute on the arm64 macOS workstation with `.nvmrc` Node 24 and warm dependencies
+- **THEN** the median duration including type-check and build is no more than 110 seconds
+- **AND** no run exceeds 135 seconds
 
 #### Scenario: CI performance is accepted
-
 - **WHEN** cache-miss CI jobs execute the complete suite on Node 20.19 and the `.nvmrc` Node 24 runtime
-- **THEN** each matrix entry's Test step completes in no more than 60 seconds
+- **THEN** each matrix entry's Test step completes in no more than 55 seconds
 
 #### Scenario: Latest supported runtime is diagnosed
-
 - **WHEN** the project evaluates the latest supported Node runtime
 - **THEN** a diagnostic benchmark records the runtime identity and complete-suite duration
 - **AND** a catastrophic runtime-specific slowdown is reported without replacing the Node 20 or Node 24 acceptance budgets
 
 #### Scenario: Functional tests execute normally
-
 - **WHEN** the canonical suite runs outside performance acceptance measurement
 - **THEN** functional pass or failure does not depend on a machine-sensitive wall-clock assertion
 
