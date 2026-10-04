@@ -25,7 +25,8 @@
           "tests/cli-branch-list-a.test.js",
           "tests/cli-scaffold.test.js",
           "tests/cli-tools.test.js",
-          "tests/cli-tree-a.test.js"
+          "tests/cli-tree-a.test.js",
+          "tests/cli-exec.test.js"
         ]
       }
     }
@@ -3287,6 +3288,123 @@
     ]
   },
   "contracts": [
+    {
+      "id": "tests/integration/exec.test.ts::exec accepts dirty detached canonical targets without changing root or source Git state",
+      "name": "exec accepts dirty detached canonical targets without changing root or source Git state",
+      "source": "tests/integration/exec.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/exec.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process"
+    },
+    {
+      "id": "tests/integration/exec.test.ts::exec fails unavailable and foreign targets individually without preparation and continues healthy targets",
+      "name": "exec fails unavailable and foreign targets individually without preparation and continues healthy targets",
+      "source": "tests/integration/exec.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/exec.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process"
+    },
+    {
+      "id": "tests/integration/exec.test.ts::exec preserves literal arguments and failure effects while running unique aliases sequentially",
+      "name": "exec preserves literal arguments and failure effects while running unique aliases sequentially",
+      "source": "tests/integration/exec.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/exec.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process"
+    },
+    {
+      "id": "tests/integration/exec.test.ts::exec rechecks later targets after a child changes their registration",
+      "name": "exec rechecks later targets after a child changes their registration",
+      "source": "tests/integration/exec.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/exec.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process"
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec production routing preserves literal child arguments and explicit alias order",
+      "name": "exec production routing preserves literal child arguments and explicit alias order",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "production-bundle-wiring",
+      "processBoundaryRationale": "Runs the production bundle with real children to prove raw argument routing and selection before child execution."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec --all routes manifest order and takes precedence over explicit aliases",
+      "name": "exec --all routes manifest order and takes precedence over explicit aliases",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "production-bundle-wiring",
+      "processBoundaryRationale": "Runs the production bundle with real children to prove raw argument routing and selection before child execution."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec rejects invalid selection and missing command boundaries before starting any child",
+      "name": "exec rejects invalid selection and missing command boundaries before starting any child",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "production-bundle-wiring",
+      "processBoundaryRationale": "Runs the production bundle with real children to prove raw argument routing and selection before child execution."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec streams stdout and stderr live and inherits stdin before the child closes",
+      "name": "exec streams stdout and stderr live and inherits stdin before the child closes",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Runs the production bundle with ready real children to prove live inherited streams, signal lifecycle, exit status, and preserved effects."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec parent-only SIGINT waits for child closure and preserves completed effects",
+      "name": "exec parent-only SIGINT waits for child closure and preserves completed effects",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Runs the production bundle with ready real children to prove live inherited streams, signal lifecycle, exit status, and preserved effects."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec child-first SIGINT interrupts the invocation without starting later targets",
+      "name": "exec child-first SIGINT interrupts the invocation without starting later targets",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Runs the production bundle with ready real children to prove live inherited streams, signal lifecycle, exit status, and preserved effects."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec continues after a ready child receives a non-SIGINT signal",
+      "name": "exec continues after a ready child receives a non-SIGINT signal",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Runs the production bundle with ready real children to prove live inherited streams, signal lifecycle, exit status, and preserved effects."
+    },
     {
       "id": "tests/cli-branch-list.contracts.js::bare branch routes list through the guarded action selector without leftover responses",
       "name": "bare branch routes list through the guarded action selector without leftover responses",

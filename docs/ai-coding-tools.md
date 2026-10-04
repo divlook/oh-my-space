@@ -74,7 +74,7 @@ It forwards supported arguments to `npx skills`.
 
 | Skill | Use it when | Guardrail |
 | --- | --- | --- |
-| `oms-workspace` | Git scope is ambiguous, a pointer moves, or you add or remove repositories. | Establishes main-project versus source-repository scope. Separates repository registration from recorded-commit updates. |
+| `oms-workspace` | Git scope is ambiguous, a pointer moves, repository registration changes, or commands must run across source repositories. | Separates main-project and source changes. Separates registration from recorded-commit updates. Selects canonical checkouts for `oms exec`. Keeps task commands inside managed trees. |
 | `oms-pointer` | `oms commit` or `oms pull` moves a source checkout. | Pushes and records the moved commit deliberately. Excludes unrelated main-project paths. |
 | `oms-branch` | You start or switch a branch in a source repository. | Chooses a new local branch versus an existing remote branch. Avoids an unintended detached checkout. |
 
@@ -82,6 +82,33 @@ Skill loading is best-effort.
 An agent decides whether a skill description matches the task.
 Skills complement the always-on marker block and built-in command help.
 Skills do not replace either source of instructions.
+
+### Commands across repositories
+
+Use the `oms-workspace` skill when a task needs tests, builds, or inspections across canonical source checkouts.
+A **canonical checkout** is the declared source repository at `oms/<alias>/`.
+The skill selects these checkouts for `oms exec`.
+`oms-workspace` version 1.4.0 requires OMS >=1.2.0-0.
+This range includes beta releases of OMS 1.2.0.
+
+1. Read `oms exec --help`.
+2. Select only the aliases that the task includes.
+3. Run the requested command from the workspace root:
+
+```bash
+oms exec api web -- npm test
+```
+
+4. Check the result for every selected alias.
+
+OMS does not prepare unavailable targets.
+Do not treat the printed `oms sync <alias>` guidance as permission to change repository registration.
+OMS continues after command or target failures.
+Ctrl+C stops later targets, but OMS preserves effects from commands that already ran.
+See [Run commands across repositories](commands.md#run-commands-across-repositories) for arguments, exit codes, and interruption limits.
+
+For a task inside `.oms-tree/<alias>/<task>/`, run tests and builds directly inside that tree.
+`oms exec` runs only in canonical checkouts and refuses invocation from a managed tree.
 
 ## Keep installed skills current
 
@@ -147,7 +174,7 @@ A registry lookup failure preserves the local mismatch report with explicit stab
 3. For a new local branch, use `oms branch switch`.
 4. For an existing remote branch, use `oms branch checkout` instead.
 5. Edit inside `oms/<alias>/`.
-6. Run checks inside `oms/<alias>/`.
+6. Run checks inside `oms/<alias>/`. Use `oms exec` from the root for checks across selected canonical checkouts.
 7. Use `oms commit <alias>` for the source repository.
 8. Use `oms push <alias>` for the source repository.
 9. Use `oms record <alias>` to commit the new recorded commit in the main project.

@@ -20,6 +20,7 @@ Built-in help ships with the installed CLI and is the authoritative exact refere
 | Record moved source commits | `oms record` | Main project only |
 | Start a second task in one repository | `oms tree add`, `oms tree list`, `oms tree remove` | Source-repository worktrees under `.oms-tree/`, no root history change |
 | Fetch, pull, or push source history | `oms fetch`, `oms pull`, `oms push` | Selected source repositories |
+| Run tests, builds, or other commands | `oms exec` | Selected canonical source checkouts. Child commands control additional effects. |
 | Remove registered repositories | `oms unsync` | Main-project registration and selected source repositories |
 | Install AI-agent instructions | `oms agent ...` | Root-owned files under `oms/` |
 | Show or install agent skills | `oms skills` | Tool installation, not repository history |
@@ -129,6 +130,7 @@ Use Git directly inside a managed tree. These commands refuse to run there:
 - `oms fetch`
 - `oms pull`
 - `oms push`
+- `oms exec`
 
 They direct you to the canonical checkout or the workspace root. `oms status`, `oms doctor`, and `oms tree` still work inside a tree. `oms unsync` refuses while any tree exists for the alias. Unsync deletes the shared submodule Git directory.
 
@@ -145,6 +147,106 @@ They direct you to the canonical checkout or the workspace root. `oms status`, `
 ### `oms push`
 
 `oms push` pushes the current source branch to selected remotes. It refuses an unregistered repository and never records the moved source commit. Recording requires a separate `oms record` step. OMS limits upstream setup to `origin`.
+
+## Run commands across repositories
+
+### `oms exec`
+
+`oms exec [aliases...] [--all] -- <command> [args...]` runs a command in each selected canonical checkout.
+A **canonical checkout** is the declared source repository at `oms/<alias>/`.
+OMS runs one child process at a time.
+A **child process** runs the supplied command.
+OMS accepts dirty files and detached HEAD.
+It refuses invocation from a managed tree.
+
+### Arguments and shell syntax
+
+Put the first `--` before the executable.
+OMS passes the executable and subsequent arguments unchanged.
+These arguments can include:
+
+- Empty strings.
+- Child flags such as `--help` and `--all`.
+- Additional `--` arguments.
+
+OMS does not interpret shell syntax.
+Your calling shell still processes quoting and expansions before OMS receives the arguments.
+Quote values that must remain literal.
+Invoke an available shell explicitly for pipelines or command chaining:
+
+```bash
+oms exec api web -- npm test
+oms exec --all -- node -e 'console.log(process.cwd())'
+oms exec api -- sh -c 'npm test && npm run build'
+```
+
+### Selection and target checks
+
+OMS applies these selection rules before it starts a child process:
+
+- Explicit aliases run once in first-occurrence order.
+- `--all` takes precedence over explicit aliases. It selects every declared alias in manifest order.
+- If you omit aliases and `--all`, OMS offers the repository selector only in an interactive terminal.
+- Non-interactive sessions require explicit aliases or `--all`.
+- An unknown explicit alias without `--all` causes the complete selection to fail. No child process starts.
+
+A missing separator or an empty executable causes failure before selection.
+`oms exec --help` needs no separator or command.
+
+OMS does not initialize, register, fetch, switch branches, record pointers, or repair targets as preparation.
+Missing, uninitialized, occupied, or inconsistently registered targets fail individually.
+OMS gives `oms sync <alias>` guidance for each failed target.
+It preserves that target and continues with later eligible targets.
+Other commands retain their preparation rules.
+
+### Input, output, and results
+
+Child processes inherit your environment and permissions.
+They also inherit standard input (stdin), standard output (stdout), and standard error (stderr).
+OMS streams output under a header that identifies the alias.
+The final summary reports every selected alias.
+Child processes consume stdin sequentially.
+OMS does not replay piped input for each repository.
+
+OMS continues after these failures:
+
+- A child process exits with a non-zero code.
+- A child process ends with a signal other than SIGINT.
+- OMS cannot start a child process.
+- A target is unavailable.
+
+Results report numeric child exit codes or failure reasons.
+OMS does not use a child exit code as its own exit code:
+
+| Condition | OMS exit code |
+| --- | --- |
+| Every selected target succeeds | 0 |
+| Usage, workspace discovery, or selection fails | 1 |
+| A command or target fails | 2 |
+| Ctrl+C or SIGINT interrupts the invocation | 130 |
+
+### Interruption and side effects
+
+SIGINT is the interrupt signal that a terminal normally sends for Ctrl+C.
+Ctrl+C interrupts the active child process.
+OMS starts no later targets.
+It waits for the active child process to finish.
+The summary preserves completed results and identifies unstarted aliases as not run.
+OMS then exits 130.
+If a child process ends with SIGINT, OMS also interrupts the invocation.
+
+OMS does not forcibly kill a child process that ignores SIGINT.
+That child process can delay exit.
+OMS does not control descendant processes that intentionally detach.
+Those processes may continue to run.
+
+This runner is not a sandbox.
+User commands can change files, Git state, or remote services.
+They can also access the network.
+OMS performs no additional network operations.
+It does not implicitly commit, push, or undo changes.
+Child effects remain after failure or interruption.
+
 
 ## AI tooling
 
