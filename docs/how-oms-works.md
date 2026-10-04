@@ -43,7 +43,7 @@ Adding, listing, and removing trees creates no root commit, `.gitmodules` entry,
 
 OMS excludes `.oms-tree/` from root status through the root's local `.git/info/exclude` file. OMS never adds a tracked `.gitignore` entry because that entry requires a root commit. Trees are machine-local. A teammate's fresh clone does not contain them.
 
-Use plain Git inside a managed tree. OMS alias commands (`commit`, `record`, `branch`, `fetch`, `pull`, `push`) refuse to run there.
+Use plain Git inside a managed tree. OMS alias commands (`commit`, `record`, `branch`, `fetch`, `pull`, `push`, `exec`) refuse to run there.
 
 Use this pull-request workflow to return the merged result to the canonical checkout:
 
@@ -85,7 +85,7 @@ By default, OMS commits repository registration and OMS-managed `.gitmodules` ch
 
 ## Registration and preparation
 
-Commands classify the selected alias before working:
+Commands other than `oms exec` use these registration and preparation rules:
 
 - **Registered and initialized:** Commands continue normally.
 - **Registered but uninitialized:** Commands initialize the repository without changing the main project's registered paths. They then continue.
@@ -95,6 +95,76 @@ Commands classify the selected alias before working:
 OMS never registers a repository silently. In a non-interactive session, an operation that needs your decision fails without changing the registered workspace.
 
 Before commit, pull, or push, OMS may attach a detached checkout to a local branch that points to the same commit. A **detached HEAD** means Git uses a commit directly instead of a branch. If attachment requires a different commit, OMS asks first or prints `oms branch switch` guidance.
+
+`oms exec` does not use automatic preparation.
+It checks each selected canonical checkout immediately before it starts the child process.
+OMS accepts initialized repositories with consistent registration, including dirty or detached checkouts.
+Missing, uninitialized, occupied, or inconsistent targets fail with `oms sync <alias>` guidance.
+OMS preserves those targets and continues with later eligible targets.
+It does not prepare targets or offer repair prompts.
+
+## Command execution boundaries
+
+A **canonical checkout** is the declared source repository at `oms/<alias>/`.
+`oms exec` selects these checkouts.
+It does not infer the current alias or use a managed task tree.
+OMS checks the complete selection before it starts a child process.
+
+- Explicit aliases run once in first-occurrence order.
+- `--all` takes precedence over explicit aliases and uses manifest order.
+- Without a selection, OMS prompts only in an interactive terminal.
+
+The first `--` separates OMS arguments from the executable and its arguments.
+OMS invokes the executable directly without a shell.
+It preserves argument boundaries and child flags.
+Invoke a shell explicitly when you need shell syntax:
+
+```bash
+oms exec api -- sh -c 'npm test && npm run build'
+```
+
+A **child process** runs the supplied command in the selected checkout.
+OMS runs one child process at a time.
+Each child process inherits your environment and standard input, output, and error streams.
+OMS streams output under a header that identifies the alias.
+Child processes consume input sequentially.
+OMS does not replay piped input for each target.
+
+OMS does not initialize, register, fetch, switch branches, record pointers, or repair targets around execution.
+It does not implicitly commit, push, or undo changes.
+It performs no additional network operations.
+Child processes retain your permissions.
+They may change files, Git state, and remote services.
+This runner is not a sandbox.
+
+Child effects remain after failure or interruption.
+OMS continues with later eligible targets after non-zero exits, non-SIGINT signals, spawn failures, and target failures.
+A **spawn failure** means that OMS cannot start the child process.
+The final summary reports every selected alias with its child exit code or failure reason.
+OMS uses these exit codes instead of the numeric child exit code:
+
+- `0`: Every selected target succeeds.
+- `1`: Usage, workspace discovery, or selection fails.
+- `2`: A command or target fails.
+- `130`: Ctrl+C or SIGINT interrupts the invocation.
+
+SIGINT is the interrupt signal that a terminal normally sends for Ctrl+C.
+Ctrl+C, or a child process that ends with SIGINT, interrupts the invocation.
+OMS interrupts the active child process.
+It starts no later targets.
+It waits for the active child process to finish.
+
+OMS preserves completed effects and results.
+It reports unstarted aliases as not run.
+It then exits 130.
+
+OMS does not forcibly kill child processes that ignore SIGINT.
+Such a child process can delay exit.
+OMS does not control descendant processes that intentionally detach.
+Those processes may continue to run.
+
+See [Run commands across repositories](commands.md#run-commands-across-repositories) for syntax and examples.
+
 
 ## Status
 

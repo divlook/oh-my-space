@@ -10,6 +10,7 @@ import { runBranchList } from "./lib/branch-list.js";
 import { runCheckout, runSwitch } from "./lib/branch-ops.js";
 import { runCommit, runRecord } from "./lib/commit.js";
 import { runDoctor } from "./lib/doctor.js";
+import { runExec } from "./lib/exec.js";
 import {
   agentInstallHelp,
   agentUninstallHelp,
@@ -18,6 +19,7 @@ import {
   branchListHelp,
   branchSwitchHelp,
   commitHelp,
+  execHelp,
   exitHelp,
   fetchHelp,
   initHelp,
@@ -71,6 +73,7 @@ async function exitWith(action: Promise<number>): Promise<void> {
 const commandNames = new Set([
   "init",
   "doctor",
+  "exec",
   "sync",
   "status",
   "commit",
@@ -88,6 +91,10 @@ const commandNames = new Set([
 ]);
 
 const collectRepeatable = (value: string, acc: string[]): string[] => [...acc, value];
+// Only exec owns a raw child-command boundary; Commander never sees child flags.
+const execSeparator = process.argv[2] === "exec" ? process.argv.indexOf("--", 3) : -1;
+const execCommand = execSeparator === -1 ? [] : process.argv.slice(execSeparator + 1);
+const cliArgs = execSeparator === -1 ? process.argv : process.argv.slice(0, execSeparator);
 const program = new Command();
 
 program
@@ -115,6 +122,17 @@ program
   .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async () => {
     await exitWith(runDoctor());
+  });
+
+program
+  .command("exec")
+  .description("Run a command sequentially in initialized canonical source checkouts without preparation.")
+  .usage("[aliases...] [--all] -- <command> [args...]")
+  .argument("[aliases...]", "repo aliases to execute in (omit for interactive multi-select)")
+  .option("--all", "select every declared source repo in manifest order")
+  .addHelpText("after", `${execHelp}${workspaceContextHelp}`)
+  .action(async (aliases: string[], options: SourcesOptions) => {
+    await exitWith(runExec(aliases, options, execCommand));
   });
 
 program
@@ -357,4 +375,4 @@ if (requestedCommand && !requestedCommand.startsWith("-") && !commandNames.has(r
   process.exit(1);
 }
 
-await program.parseAsync();
+await program.parseAsync(cliArgs);

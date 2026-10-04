@@ -68,6 +68,38 @@ Examples:
   $ oms unsync api --no-commit # leave the removal topology unstaged
   $ oms unsync api --commit    # same as the default; accepted for compatibility
 `;
+export const execHelp = `
+Scope: runs only in initialized canonical checkouts at oms/<alias>/, never managed trees.
+OMS performs no preparation: no initialization, registration, fetching, branch switching, pointer
+recording, or repair. Dirty files and detached HEAD are allowed. Unavailable targets fail individually
+with "oms sync <alias>" guidance; later eligible targets still run.
+
+The first -- separates OMS options from the executable and literal arguments. Child --help, --all,
+and additional -- arguments are passed unchanged. OMS does not interpret shell syntax; invoke an
+available shell explicitly when needed. A separator and non-empty executable are required.
+Explicit aliases run once in first-occurrence order; --all takes precedence and uses manifest order.
+Without a selection, OMS prompts only in an interactive terminal; otherwise name aliases or use --all.
+
+Children inherit your environment, permissions, stdin, stdout, and stderr. Output streams live under
+alias-labelled headers, with a final result for every alias. Stdin is consumed sequentially, not replayed
+for each child. Non-zero exits, non-SIGINT signals, spawn failures, and target failures do not stop later
+targets. Numeric child exit codes and failure reasons appear in results, not as the OMS exit code.
+
+Ctrl+C (SIGINT) interrupts the active child and stops later targets. OMS waits for that child to close,
+reports unstarted aliases as not run, and exits 130. A child ending with SIGINT also interrupts the
+invocation. OMS does not forcibly kill children that ignore SIGINT or contain intentionally detached
+descendants; such children can delay exit, and detached descendants may continue running.
+
+This runner is not a sandbox. User commands can change files, Git state, or remote services and access
+the network. OMS performs no additional network operations, implicit commit or push, or rollback.
+Completed effects and changes from failed or interrupted children are preserved.
+Examples:
+  $ oms exec api web -- npm test
+  $ oms exec --all -- node -e 'console.log(process.cwd())'
+  $ oms exec api -- sh -c 'npm test && npm run build'
+Exit codes: 0 all targets succeeded | 1 usage/workspace/selection error | 2 command or target failure
+            130 invocation interrupted
+`;
 export const fetchHelp = `
 Preparation initializes existing registrations automatically. An unregistered alias is offered an explicit
 sync; accepting creates a root topology commit, then fetch continues. A multi-alias selection asks once;
