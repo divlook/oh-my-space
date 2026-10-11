@@ -18,9 +18,14 @@ OMS preserves Git's reproducibility and automates routine submodule setup and bo
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) `>=20.19.0`
+- [Node.js](https://nodejs.org) `^24 || >=26`
 - Git `>=2.40`
 - A Git repository with `oms.yaml` at its top level before you synchronize repositories
+
+Node 24 is the minimum supported line and the development, release, and required CI baseline.
+Node 26 and later are permitted, but not every future version is verified.
+Node 20, 22, and 25 are no longer supported; upgrade Node before installing the next major OMS release.
+CI also runs a separate, non-gating latest-runtime diagnostic.
 
 ## Install
 

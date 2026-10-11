@@ -20,7 +20,7 @@ const result = await esbuild.build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node20",
+  target: "node24",
   minify: false,
   keepNames: true,
   sourcemap: false,

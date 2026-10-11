@@ -41,7 +41,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20.19.0"
+    "node": "^24 || >=26"
   },
   "scripts": {
     "build": "tsc --noEmit && node scripts/build.mjs",
@@ -65,11 +65,11 @@
     "release:beta": "node scripts/publish-beta.mjs"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.7.0",
-    "@changesets/cli": "^2.29.7",
-    "@changesets/get-release-plan": "^4.0.16",
+    "@changesets/changelog-github": "^1.0.1",
+    "@changesets/cli": "^3.0.3",
+    "@changesets/get-release-plan": "^5.0.2",
     "@clack/prompts": "^1.4.0",
-    "@types/node": "^20.19.0",
+    "@types/node": "^24.19.2",
     "@types/semver": "^7.7.1",
     "commander": "^14.0.3",
     "esbuild": "^0.28.1",
