@@ -5,7 +5,7 @@ import { REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
 import { readPackageVersion, runtimePlatform, testEnv } from "./env.js";
 import { findWorkspaceRoot } from "./git.js";
 import { detectInstallContext, formatCommand } from "./install-context.js";
-import { channelInstallCommand } from "./package-channels.js";
+import { channelInstallCommand, latestFromRegistryJson } from "./package-channels.js";
 import { omsSkillsInstalled, reportSkillFindings } from "./skills.js";
 import type { InstallContext, PackageManager, UpdateCommand, UpdateOptions } from "./types.js";
 
@@ -30,21 +30,6 @@ async function fetchLatestPackageVersion(): Promise<string> {
     if (e instanceof Error) throw e;
     throw new Error(`Could not parse npm registry response: ${String(e)}`);
   }
-}
-
-export function latestFromRegistryJson(data: unknown): string {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    throw new Error("npm registry response was not a JSON object");
-  }
-  const distTags = (data as { "dist-tags"?: unknown })["dist-tags"];
-  if (!distTags || typeof distTags !== "object" || Array.isArray(distTags)) {
-    throw new Error("npm registry response is missing dist-tags.latest");
-  }
-  const latest = (distTags as { latest?: unknown }).latest;
-  if (typeof latest !== "string" || latest.length === 0) {
-    throw new Error("npm registry response is missing dist-tags.latest");
-  }
-  return latest;
 }
 
 export function compareVersions(currentVersion: string, latestVersion: string): number {

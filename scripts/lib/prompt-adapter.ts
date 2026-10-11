@@ -16,7 +16,7 @@ import { isTestMode } from "./env.js";
 const ENV_NAME = "OMS_TEST_PROMPT_RESPONSES";
 
 /** Sentinel returned by guarded prompts when an injected `{"type":"cancel"}` entry is consumed. */
-export const PROMPT_CANCEL: unique symbol = Symbol("oms:prompt-cancel");
+const PROMPT_CANCEL: unique symbol = Symbol("oms:prompt-cancel");
 
 /** True for both clack's native cancel symbol and OMS's injected cancel sentinel. */
 export function isCancel(value: unknown): value is symbol {
@@ -24,7 +24,7 @@ export function isCancel(value: unknown): value is symbol {
 }
 
 /** A misconfigured test queue; thrown to force a fail-closed exit 1 without opening a real prompt. */
-export class PromptQueueError extends Error {}
+class PromptQueueError extends Error {}
 
 type PromptType = "select" | "confirm" | "multiselect" | "text";
 
@@ -115,13 +115,24 @@ export function canPrompt(): boolean {
   return Boolean(process.stdin.isTTY) || promptQueueActive();
 }
 
-type Consumed =
+type ConsumedValue<Value> =
   | { injected: false }
   | { injected: true; cancelled: true }
-  | { injected: true; cancelled: false; useDefault: true }
-  | { injected: true; cancelled: false; value: string | boolean | string[] };
+  | { injected: true; cancelled: false; value: Value };
+
+type ConsumedSelect =
+  | ConsumedValue<string>
+  | { injected: true; cancelled: false; useDefault: true };
+type ConsumedMultiselect = ConsumedValue<string[]>;
+type ConsumedConfirm = ConsumedValue<boolean>;
+type ConsumedText = ConsumedValue<string>;
+type Consumed = ConsumedSelect | ConsumedMultiselect | ConsumedConfirm | ConsumedText;
 
 /** Consume the next queued response for a prompt of the given kind, or defer to a real prompt. */
+function consume(kind: "select"): ConsumedSelect;
+function consume(kind: "multiselect"): ConsumedMultiselect;
+function consume(kind: "confirm"): ConsumedConfirm;
+function consume(kind: "text"): ConsumedText;
 function consume(kind: PromptType): Consumed {
   ensureInit();
   if (!active) return { injected: false };
@@ -181,11 +192,6 @@ export async function guardedMultiselect<Value>(
 ): Promise<Value[] | symbol> {
   const injected = consume("multiselect");
   if (injected.injected) {
-    // `consume` rejects a select entry for a multiselect prompt first, so this narrows the shared
-    // `Consumed` union rather than guarding a reachable runtime path.
-    if (!injected.cancelled && "useDefault" in injected) {
-      throw new PromptQueueError("A queued default is valid only for a select prompt.");
-    }
     return injected.cancelled ? PROMPT_CANCEL : (injected.value as Value[]);
   }
   return clackMultiselect<Value>(options);
@@ -197,11 +203,7 @@ export async function guardedConfirm(
 ): Promise<boolean | symbol> {
   const injected = consume("confirm");
   if (injected.injected) {
-    // Same union narrowing as guardedMultiselect; the mismatch is already rejected in `consume`.
-    if (!injected.cancelled && "useDefault" in injected) {
-      throw new PromptQueueError("A queued default is valid only for a select prompt.");
-    }
-    return injected.cancelled ? PROMPT_CANCEL : (injected.value as boolean);
+    return injected.cancelled ? PROMPT_CANCEL : injected.value;
   }
   return clackConfirm(options);
 }
@@ -212,11 +214,7 @@ export async function guardedText(
 ): Promise<string | symbol> {
   const injected = consume("text");
   if (injected.injected) {
-    // Same union narrowing as guardedMultiselect; the mismatch is already rejected in `consume`.
-    if (!injected.cancelled && "useDefault" in injected) {
-      throw new PromptQueueError("A queued default is valid only for a select prompt.");
-    }
-    return injected.cancelled ? PROMPT_CANCEL : (injected.value as string);
+    return injected.cancelled ? PROMPT_CANCEL : injected.value;
   }
   return clackText(options);
 }

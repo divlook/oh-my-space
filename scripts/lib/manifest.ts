@@ -110,7 +110,7 @@ export function validateSources(data: unknown): Repo[] {
   return validated;
 }
 
-export function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: boolean }): void {
+function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: boolean }): void {
   const artifacts = [
     found.manifest ? `'${LEGACY_MANIFEST}'` : null,
     found.data ? `'${LEGACY_DATA_DIRNAME}/'` : null,

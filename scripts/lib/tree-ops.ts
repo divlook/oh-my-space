@@ -34,7 +34,7 @@ import type { Repo } from "./types.js";
  * exclude file.
  */
 
-export type ManagedTreeState = "healthy" | "broken" | "foreign";
+type ManagedTreeState = "healthy" | "broken" | "foreign";
 
 /** One inventory entry under `.oms-tree/`, whatever its health. */
 export type ManagedTree = {
@@ -66,7 +66,7 @@ export type PorcelainWorktreeEntry = {
 };
 
 /** Repository-relative tree path — the rule agents use to derive a tree's location. */
-export function treeRelPath(alias: string, task: string): string {
+function treeRelPath(alias: string, task: string): string {
   return `${TREE_DIRNAME}/${alias}/${task}`;
 }
 
@@ -250,7 +250,7 @@ export function appendLocalExcludeEntry(content: string): string | null {
 }
 
 /** The root's local exclude file path, or null when it cannot be located. */
-export function rootLocalExcludePath(repoRoot: string, runner: RawGitRunner = productionGitRunner): string | null {
+function rootLocalExcludePath(repoRoot: string, runner: RawGitRunner = productionGitRunner): string | null {
   const dotGit = join(repoRoot, ".git");
   let stat;
   try {
@@ -274,7 +274,7 @@ export function rootExcludeEntryPresent(repoRoot: string, runner: RawGitRunner =
 }
 
 /** Keep `.oms-tree/` out of the root's untracked files, idempotently, without root commits. */
-export function ensureTreeExcluded(repoRoot: string, runner: RawGitRunner = productionGitRunner): void {
+function ensureTreeExcluded(repoRoot: string, runner: RawGitRunner = productionGitRunner): void {
   const path = rootLocalExcludePath(repoRoot, runner);
   if (path === null) {
     log.warn("could not locate the root's local exclude file; .oms-tree/ may show as untracked in git status.");

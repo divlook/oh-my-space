@@ -7069,6 +7069,17 @@
       "processBoundaryRationale": null
     },
     {
+      "id": "tests/unit/prompt-adapter.test.ts::prompt queues preserve typed values, cancellation, and select defaults",
+      "name": "prompt queues preserve typed values, cancellation, and select defaults",
+      "source": "tests/unit/prompt-adapter.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/prompt-adapter.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
       "id": "tests/unit/prompt-adapter.test.ts::prompt responses are inactive unless test mode is enabled",
       "name": "prompt responses are inactive unless test mode is enabled",
       "source": "tests/unit/prompt-adapter.test.ts",

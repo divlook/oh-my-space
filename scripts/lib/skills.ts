@@ -150,7 +150,7 @@ export function classifySkillMetadata(
 }
 
 /** Installed OMS skill findings across independent freshness and compatibility dimensions. */
-export function skillFindings(workspaceRoot: string | null, runningVersion = readPackageVersion()): SkillFinding[] {
+function skillFindings(workspaceRoot: string | null, runningVersion = readPackageVersion()): SkillFinding[] {
   const references = readSkillReferences();
   if (!references) return [];
 

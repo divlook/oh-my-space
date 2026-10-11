@@ -73,7 +73,7 @@ function resolveRunningBin(mockedArgv1: string | undefined, modulePath: string):
   return modulePath;
 }
 
-export function collectRuntimeEvidence(): RuntimeEvidence {
+function collectRuntimeEvidence(): RuntimeEvidence {
   const mocked = testEnv("OMS_TEST_RUNTIME_EVIDENCE");
   if (mocked !== undefined) return JSON.parse(mocked) as RuntimeEvidence;
 

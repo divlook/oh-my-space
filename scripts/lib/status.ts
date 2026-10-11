@@ -49,7 +49,7 @@ function aheadBehind(dir: string): { ahead: string; behind: string } {
 // ─── Git state inspection: the shared spine for status JSON, commit, record, sync/unsync, pull/push ───
 
 /** Short HEAD SHA, or null when it cannot be read (unlike shortSha, which returns a sentinel). */
-export function headShortSha(dir: string): string | null {
+function headShortSha(dir: string): string | null {
   const r = runGit(dir, ["rev-parse", "--short", "HEAD"]);
   return r.success ? r.stdout.trim() || null : null;
 }
@@ -80,7 +80,7 @@ function trackingState(dir: string): TrackingState {
   };
 }
 
-export type ChangeCounts = { staged: number; unstaged: number; untracked: number };
+type ChangeCounts = { staged: number; unstaged: number; untracked: number };
 
 /**
  * Count changed paths from `git status --porcelain=v1 -z`. A staged rename/copy entry consumes the
@@ -153,7 +153,7 @@ export function submoduleOperationInProgress(dir: string): string | null {
   ]);
 }
 
-export type PinValue = "ok" | "moved" | "uninit" | "missing" | "conflict";
+type PinValue = "ok" | "moved" | "uninit" | "missing" | "conflict";
 
 export type GitlinkState = {
   alias: string;
@@ -254,7 +254,7 @@ export function pendingAddTopology(s: GitlinkState): boolean {
  * Why one alias can or cannot have its root pointer recorded right now. A `benign` verdict is a normal
  * no-op (the pointer simply has not moved); a `problem` verdict needs user action first.
  */
-export type RecordVerdict =
+type RecordVerdict =
   | { kind: "recordable" }
   | { kind: "benign"; message: string }
   | { kind: "problem"; message: string };
@@ -337,10 +337,10 @@ export function readAliasDirEntries(repoRoot: string, alias: string): AliasDirEn
 }
 
 /** The single check applied to a selected alias's root topology before a mutating command runs. */
-export type RootTopologyCheck = "conflict" | "inProgressOp" | "occupiedPath";
+type RootTopologyCheck = "conflict" | "inProgressOp" | "occupiedPath";
 
 /** Result of a root-topology preflight: safe to mutate, or a deterministic human-readable reason. */
-export type RootTopologySafety = { safe: true } | { safe: false; reason: string };
+type RootTopologySafety = { safe: true } | { safe: false; reason: string };
 
 /** Shared refusal message when oms/<alias> exists but cannot be read (permission or I/O error). */
 export function unreadablePathReason(alias: string): string {
