@@ -16,7 +16,7 @@
 ## 3. End-to-end acceptance
 
 - [x] 3.1 Run three warm-dependency complete Node 24 suite measurements and confirm median at most 110 seconds and maximum at most 135 seconds; inspect the built package with `npm pack --dry-run --ignore-scripts`, verify runtime metadata and executable version parity, preserve historical evidence, and remove temporary verification scaffolds.
-- [ ] 3.2 Observe a cache-miss required Node 24 CI run with a Test step at most 55 seconds and the separate latest-runtime diagnostic; confirm there is no Node 20 validation or duplicate Node 24 job, required-check naming remains effective, and diagnostic failure cannot replace required baseline success. Record external prerequisites explicitly if CI execution or branch-protection inspection is unavailable; do not claim these checks were exercised locally.
+- [x] 3.2 Observe a cache-miss required Node 24 CI run with a Test step at most 55 seconds and the separate latest-runtime diagnostic; confirm there is no Node 20 validation or duplicate Node 24 job, required-check naming remains effective, and diagnostic failure cannot replace required baseline success. Record external prerequisites explicitly if CI execution or branch-protection inspection is unavailable; do not claim these checks were exercised locally.
 - [x] 3.3 Run `openspec validate upgrade-changesets-and-require-node24 --strict`, reconcile all affected callers and current docs with the verified behavior, and confirm no implementation step published a package, moved dist-tags, or rewrote archived artifacts.
 
 ## Implementation evidence (2026-10-11)
@@ -29,8 +29,12 @@
 - All three canonical suites passed in each benchmark. Initial overlapping setup/implementation measurement: 115897/112120/100625 ms, median 112120 ms (budget failed); retained as `node24-changesets3`. Uncontended measurement: 64669/66830/86528 ms, median 66830 ms and max 86528 ms (budgets passed); retained as `node24-changesets3-uncontended` in `tests/performance/suite-benchmarks.json`.
 - Package dry-run inspection passed (six files, executable `dist/oms.js`, metadata/CLI version 1.2.0). Major intent combines with the pending patch to target 2.0.0; the working package version was not manually advanced. Temporary scripts and fixtures were removed. Strict OpenSpec validation passed. No package publication, dist-tag mutation, project commit/push, or archived-artifact rewrite was performed.
 
-### External acceptance still pending (task 3.2)
+### Remote acceptance completed (task 3.2)
 
 The main protection endpoint returned `Branch not protected`; active ruleset 16993995 contains deletion/non-fast-forward rules only, with no required status-check names. The existing `test (development)` name is retained. Parsed workflow checks passed for one required `.nvmrc` job, exact cache keys, PR-only triggering, package gates, and a separate non-gating current diagnostic.
 
-The implementation is local and uncommitted. Its cache-miss Node 24 CI Test duration (at most 55 seconds) and current-runtime diagnostic have not been observed. They require a separately authorized commit/push and PR event, workflow approval if required, and an exact verification-marker cache miss. Existing remote runs are not evidence for this implementation. Keep task 3.2 unchecked until those results are available.
+PR [#91](https://github.com/divlook/oh-my-space/pull/91), branch `upgrade-changesets-and-require-node24`, implementation commit `2fe9c72244e4e414d1330845318af9d54e221a73`: [CI run 38146292668](https://github.com/divlook/oh-my-space/actions/runs/38146292668) succeeded. GitHub tested merge commit `baa053c0ec119e6a948ebdeba7f2c69c2ad604f7` against base `c7fe7d64290db586754a9204757ede141ab934a9`.
+
+- Required `test (development)`: Node v24.21.0 on Ubuntu 24.04 x64; exact verification-marker cache miss confirmed. Dependency installation, complete canonical suite, package inspection, and marker save all succeeded. The Test step ran from 14:13:27Z to 14:14:07Z (40 seconds); internal complete-suite measurement was 39474 ms, below the 55-second budget. Total job duration was 56 seconds, which is not the Test-step budget.
+- Separate `test (latest-supported diagnostic)`: Node v26.11.1; complete-suite measurement 33026 ms, benchmark step 33 seconds, total job 48 seconds; succeeded without replacing the Node 24 gate. Only these two jobs ran, with no Node 20 or duplicate Node 24 validation. The diagnostic remains configured with `continue-on-error: true`; its failure path was not deliberately induced.
+- Required check name remains `test (development)`; repository rules have no required-status-check dependency to migrate. No package was published, no npm tag was moved, and the PR was not merged.
