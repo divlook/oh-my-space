@@ -18,7 +18,7 @@ export function gitmodulesBranch(repoRoot: string, alias: string): string | null
  * Outcome of attaching a detached submodule without changing its checked-out commit. `branch` is the
  * requested baseline in every variant, so callers can name it without tracking their own copy.
  */
-export type AttachBranchResult =
+type AttachBranchResult =
   | { kind: "already-attached"; branch: string }
   | { kind: "attached"; branch: string }
   | { kind: "diverged"; branch: string; headOid: string; branchOid: string }
@@ -86,7 +86,7 @@ export function attachBranch(repoRoot: string, alias: string, branch: string): A
  * Reconcile the submodule's git remotes with the declared `remotes` map: add missing remotes and
  * update URLs that drifted. Non-destructive — remotes no longer in oms.yaml are left untouched.
  */
-export type RemoteReconciliation = { name: string; ok: true } | { name: string; ok: false; diagnostic: string };
+type RemoteReconciliation = { name: string; ok: true } | { name: string; ok: false; diagnostic: string };
 
 export function ensureRemotes(
   repoRoot: string,

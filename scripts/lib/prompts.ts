@@ -329,7 +329,7 @@ export async function resolveCommandAlias(
 }
 
 /** How a record selection was made; `--all` and the picker allow per-alias skips, a named list does not. */
-export type AliasSetResolution =
+type AliasSetResolution =
   | { kind: "aliases"; aliases: string[]; explicit: boolean }
   | { kind: "noop" }
   | { kind: "error" };

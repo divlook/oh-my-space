@@ -27,7 +27,7 @@ import type { Repo } from "./types.js";
  */
 
 /** How completely an alias is registered across root HEAD, the root index, and the working tree. */
-export type AliasRegistration =
+type AliasRegistration =
   | "initialized"
   | "registered-uninitialized"
   | "partially registered"
@@ -36,9 +36,9 @@ export type AliasRegistration =
    * inconsistency: the state is unknown, not wrong, and the remedy is to retry rather than repair. */
   | "indeterminate";
 
-export type PrepareResult = { ok: true } | { ok: false; code: number };
+type PrepareResult = { ok: true } | { ok: false; code: number };
 
-export type PrepareOptions = {
+type PrepareOptions = {
   /** Command label used in guidance messages, e.g. `branch list` or `pull`. */
   command: string;
   /**
@@ -223,7 +223,7 @@ export async function prepareAlias(
 }
 
 /** What a detached submodule HEAD needs before the command can safely proceed. */
-export type AttachVerdict =
+type AttachVerdict =
   | { kind: "on-branch"; branch: string }
   | { kind: "attached"; branch: string }
   | { kind: "needs-intent"; oid: string }
@@ -234,7 +234,7 @@ export type AttachVerdict =
  * tip is exactly HEAD makes the switch a pure relabel. When none exists, switching would move the
  * checkout, so the caller must collect intent instead.
  */
-export function attachDetachedHead(repoRoot: string, alias: string): AttachVerdict {
+function attachDetachedHead(repoRoot: string, alias: string): AttachVerdict {
   const dir = aliasDir(repoRoot, alias);
   const current = currentBranch(dir);
   if (current !== null) return { kind: "on-branch", branch: current };
@@ -313,7 +313,7 @@ export async function resolveDetachedHead(
   return { ok: true };
 }
 
-export type BatchPreparation = {
+type BatchPreparation = {
   /** Aliases the command may operate on. */
   ready: Repo[];
   /** Aliases the user chose to skip; reported but not a failure. */

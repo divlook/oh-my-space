@@ -14,7 +14,7 @@ export type AliasMetadataPlan = {
 };
 
 /** Outcome of an atomic `.gitmodules` reconciliation batch. */
-export type ReconcileResult =
+type ReconcileResult =
   | { ok: true; changedFields: Map<string, string[]> }
   | {
       ok: false;

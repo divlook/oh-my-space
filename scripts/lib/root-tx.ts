@@ -28,7 +28,7 @@ import type { GitResult } from "./types.js";
  */
 
 /** Absolute Git directory of the root repository. */
-export function gitDir(repoRoot: string): string {
+function gitDir(repoRoot: string): string {
   return runGit(repoRoot, ["rev-parse", "--absolute-git-dir"]).stdout.trim();
 }
 
@@ -113,7 +113,7 @@ function realIndexPath(repoRoot: string): string {
 }
 
 /** SHA-256 of a file's bytes, or null when the file is absent. */
-export function hashFile(path: string): string | null {
+function hashFile(path: string): string | null {
   try {
     return createHash("sha256").update(readFileSync(path)).digest("hex");
   } catch {
@@ -283,7 +283,7 @@ function runGitEnv(cwd: string, args: string[], env: NodeJS.ProcessEnv): GitResu
   return runGit(cwd, args, false, env);
 }
 
-export type FinalizeInput = {
+type FinalizeInput = {
   repoRoot: string;
   kind: "add" | "remove";
   /** Aliases finalized as pending-add topology (gitlink staged from the submodule worktree HEAD). */
@@ -299,7 +299,7 @@ export type FinalizeInput = {
   gitRunner?: RawGitRunner;
 };
 
-export type FinalizeResult =
+type FinalizeResult =
   | { ok: true; commitOid: string }
   | { ok: false; exitCode: number; reason: string; headAdvanced?: boolean };
 

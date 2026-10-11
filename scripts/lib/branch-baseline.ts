@@ -7,11 +7,11 @@ import type { Repo } from "./types.js";
 export type ProtectedReason = { branch: string; reason: string };
 
 /** Baseline resolution outcome: the protected branches, or a fail-closed reason keyed to its source. */
-export type BaselineResolution =
+type BaselineResolution =
   | { ok: true; protectedReasons: ProtectedReason[]; driftWarning: string | null }
   | { ok: false; reason: string };
 
-export type BaselineReport = {
+type BaselineReport = {
   state: "known" | "incomplete" | "unknown";
   baselines: ProtectedReason[];
   unmatched: string[];

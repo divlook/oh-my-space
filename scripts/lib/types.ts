@@ -84,7 +84,7 @@ export type ManageCommand = "fetch" | "pull" | "push";
 
 export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
-export type InstallContextKind = "global" | "project" | "ephemeral" | "development" | "unknown";
+type InstallContextKind = "global" | "project" | "ephemeral" | "development" | "unknown";
 
 export type UpdateCommand = {
   executable: PackageManager;

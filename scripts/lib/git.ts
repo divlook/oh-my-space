@@ -84,7 +84,7 @@ export function isGitVersionSupported(v: { major: number; minor: number }): bool
   return v.minor >= MIN_GIT_MINOR;
 }
 
-export type WorkspaceManifestResolution =
+type WorkspaceManifestResolution =
   | { kind: "found"; manifestPath: string; repoRoot: string }
   | { kind: "missing" }
   | { kind: "invalid"; manifestPath: string; reason: string };

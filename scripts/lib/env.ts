@@ -8,7 +8,7 @@ import type { SkillReference } from "./skill-metadata.js";
 export const moduleFilePath = fileURLToPath(import.meta.url);
 
 export const packageRoot = resolve(dirname(moduleFilePath), "..");
-export const useColor = process.stdout.isTTY;
+const useColor = process.stdout.isTTY;
 export const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[0m` : s);
 
 export function isTestMode(): boolean {
@@ -54,7 +54,7 @@ export function readPackageVersion(): string {
 }
 
 /** The commit baked in at build time, or null when unavailable (dev/no-git build). */
-export function readBuildCommit(): string | null {
+function readBuildCommit(): string | null {
   const info = readJson<{ commit?: string | null }>(
     join(dirname(moduleFilePath), "build-info.json"),
   );

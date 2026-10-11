@@ -6,7 +6,7 @@ import test, { after } from "node:test";
 import { analyzeManagedBlock, installManagedBlock } from "../../scripts/lib/agent.js";
 import { selectBetaBaseVersion } from "../../scripts/lib/beta-release-plan.js";
 import { detectInstallContext, formatCommand, globalUpdateCommand } from "../../scripts/lib/install-context.js";
-import { channelInstallCommand, registryDistTagsFromJson } from "../../scripts/lib/package-channels.js";
+import { channelInstallCommand, latestFromRegistryJson, registryDistTagsFromJson } from "../../scripts/lib/package-channels.js";
 import { validatePublishedSkillMetadata } from "../../scripts/lib/skill-metadata.js";
 import {
   classifyCompatibility,
@@ -17,7 +17,6 @@ import {
 import {
   compareVersions,
   isPrereleaseVersion,
-  latestFromRegistryJson,
 } from "../../scripts/lib/update.js";
 
 const roots: string[] = [];
@@ -27,19 +26,46 @@ after(() => {
 
 test("update version and channel decisions reject malformed registry or semver inputs", () => {
   assert.equal(latestFromRegistryJson({ "dist-tags": { latest: "2.0.0" } }), "2.0.0");
+  for (const data of [null, undefined, false, 1, "response", []]) {
+    assert.throws(() => latestFromRegistryJson(data), /not a JSON object$/);
+    assert.throws(() => registryDistTagsFromJson(data), /not a JSON object with dist-tags$/);
+  }
   assert.throws(() => latestFromRegistryJson({ versions: [] }), /missing dist-tags\.latest/);
+  assert.throws(() => registryDistTagsFromJson({ versions: [] }), /not a JSON object with dist-tags/);
+  for (const distTags of [undefined, null, [], "tags", {}]) {
+    const data = { "dist-tags": distTags };
+    assert.throws(() => latestFromRegistryJson(data), /missing dist-tags\.latest/);
+    assert.throws(() => registryDistTagsFromJson(data), /missing dist-tags\.latest/);
+  }
+  for (const latest of [undefined, null, "", 42]) {
+    const data = { "dist-tags": { latest, beta: "not-semver" } };
+    assert.throws(() => latestFromRegistryJson(data), /missing dist-tags\.latest/);
+    assert.throws(() => registryDistTagsFromJson(data), /invalid dist-tags\.latest/);
+  }
+  const invalidVersion = latestFromRegistryJson({ "dist-tags": { latest: "not-semver", beta: "not-semver" } });
+  assert.equal(invalidVersion, "not-semver");
+  assert.throws(() => compareVersions("1.0.0", invalidVersion), /Registry latest version is not valid semver/);
+  assert.throws(
+    () => registryDistTagsFromJson({ "dist-tags": { latest: invalidVersion, beta: "not-semver" } }),
+    /invalid dist-tags\.latest/,
+  );
   assert.deepEqual(
     registryDistTagsFromJson({ "dist-tags": { latest: "1.0.0", beta: "2.0.0-beta.1" } }),
     { latest: "1.0.0", beta: "2.0.0-beta.1" },
   );
-  assert.deepEqual(
-    registryDistTagsFromJson({ "dist-tags": { latest: "1.0.0" } }),
-    { latest: "1.0.0", beta: null },
-  );
-  assert.throws(
-    () => registryDistTagsFromJson({ "dist-tags": { latest: "1.0.0", beta: "not-semver" } }),
-    /invalid dist-tags\.beta/,
-  );
+  for (const distTags of [{ latest: "1.0.0" }, { latest: "1.0.0", beta: null }]) {
+    assert.equal(latestFromRegistryJson({ "dist-tags": distTags }), "1.0.0");
+    assert.deepEqual(registryDistTagsFromJson({ "dist-tags": distTags }), { latest: "1.0.0", beta: null });
+  }
+  for (const beta of [undefined, "", "not-semver", 42, [], {}]) {
+    const data = { "dist-tags": { latest: "1.0.0", beta } };
+    assert.equal(latestFromRegistryJson(data), "1.0.0");
+    assert.throws(() => registryDistTagsFromJson(data), /invalid dist-tags\.beta/);
+  }
+  const inheritedTags = Object.create({ latest: "1.0.0", beta: "2.0.0-beta.1" });
+  const inheritedResponse = Object.create({ "dist-tags": inheritedTags });
+  assert.equal(latestFromRegistryJson(inheritedResponse), "1.0.0");
+  assert.deepEqual(registryDistTagsFromJson(inheritedResponse), { latest: "1.0.0", beta: "2.0.0-beta.1" });
   assert.equal(compareVersions("1.0.0", "2.0.0"), -1);
   assert.equal(compareVersions("2.0.0", "2.0.0"), 0);
   assert.throws(() => compareVersions("local", "2.0.0"), /not valid semver/);
