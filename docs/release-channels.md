@@ -31,11 +31,14 @@ bun add -g oh-my-space@beta
 
 ## Maintainer beta flow
 
+Use Node 24 from [`.nvmrc`](../.nvmrc) for stable and beta release preparation.
+
 1. Add or confirm a pending Changeset whose computed `oh-my-space` release matches the intended next stable version.
 2. Select a clean commit for the beta release.
 3. Preview the beta package without publication:
 
 ```bash
+npm test
 npm run release:beta
 ```
 
@@ -60,7 +63,14 @@ Maintainers publish beta releases manually from a selected clean commit.
 Beta releases do not require a `beta` branch.
 The script derives the intended stable base from the pending Changesets release plan.
 It appends the current commit's short hash.
+The resulting version is `<stable target>-beta.sha-<current commit short hash>`.
 It restores package metadata after publication or a dry run.
+The default dry run neither publishes a package nor moves npm dist-tags.
+
+Run `npm test` on the selected commit before beta preparation so `prepack` can reuse its exact verification record.
+Without that record, `prepack` runs the suite after the temporary prerelease version is set.
+The current suite has stable-version assumptions in skill diagnostics and beta fingerprint fixtures; that unverified-checkout path fails.
+The verified beta path reuses the stable-source test result, rebuilds the beta artifact, and checks CLI/package version parity without bypassing the package gate.
 
 - The script requires exactly one pending `oh-my-space` release with a stable, forward `newVersion`.
 - It rejects missing, ambiguous, prerelease, or non-forward release plans before it changes package metadata.
@@ -94,6 +104,11 @@ The short hash creates a new prerelease version without a manual sequence number
 
 Promote a tested beta through publication of a stable SemVer version to `latest`.
 Do not retag the beta version as stable.
+Confirm that pending Changesets describe the intended stable release before running `npm run version`.
+This command applies the release intent to package metadata and the changelog, consumes the Changesets, and refreshes the lockfile; it does not publish.
+With Changesets 3, no unreleased Changesets means exit code 1, not a successful no-op.
+Package metadata remains unchanged, and the subsequent lockfile refresh does not run.
+Add the intended release Changeset before retrying; do not suppress the failure.
 
 ```bash
 npm run version

@@ -16,17 +16,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: minimum-supported
-            kind: version
-            node-version: '20.19.0'
-          - name: development
-            kind: nvmrc
-            node-version-file: .nvmrc
-    name: test (${{ matrix.name }})
+    name: test (development)
     env:
       MARKER_PATH: .ci-verified
     steps:
@@ -34,17 +24,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Setup minimum supported Node.js
-        if: ${{ matrix.kind == 'version' }}
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
       - name: Setup development Node.js
-        if: ${{ matrix.kind == 'nvmrc' }}
         uses: actions/setup-node@v6
         with:
-          node-version-file: ${{ matrix.node-version-file }}
+          node-version-file: .nvmrc
           cache: npm
       - name: Compute verification key
         id: key
@@ -72,12 +55,12 @@ jobs:
         run: npm ci
       - name: Test
         if: ${{ steps.marker.outputs.cache-hit != 'true' }}
-        run: node scripts/benchmark-test-suite.mjs --runs 1 --label ci-${{ matrix.name }} --ci-gating
+        run: node scripts/benchmark-test-suite.mjs --runs 1 --label ci-development --ci-gating
       - name: Upload test performance evidence
         if: ${{ steps.marker.outputs.cache-hit != 'true' }}
         uses: actions/upload-artifact@v6
         with:
-          name: test-performance-${{ matrix.name }}-${{ github.run_id }}
+          name: test-performance-development-${{ github.run_id }}
           path: tests/performance/suite-benchmarks.json
       - name: Pack dry run
         if: ${{ steps.marker.outputs.cache-hit != 'true' }}
@@ -141,7 +124,7 @@ jobs:
             echo
             echo "Runtime: $(node --version)"
             echo "Complete-suite duration: ${duration}ms"
-            echo "This benchmark is non-gating; Node 20.19 and Node 24 remain acceptance gates."
+            echo "This benchmark is non-gating; Node 24 is the required acceptance baseline."
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload diagnostic performance evidence
         if: ${{ always() }}

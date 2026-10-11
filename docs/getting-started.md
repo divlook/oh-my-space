@@ -4,9 +4,20 @@ This guide starts with an empty project. It covers workspace synchronization and
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) `>=20.19.0`
+- [Node.js](https://nodejs.org) `^24 || >=26`
 - Git `>=2.40`
 - A Git repository whose top-level directory will contain `oms.yaml`
+
+Node 24 is the minimum supported line and the development, release, and required CI baseline.
+Node 26 and later are permitted, but not every future version is verified.
+The latest-runtime CI diagnostic is separate and non-gating.
+If you use Node 20, 22, or 25, upgrade to Node 24 before installing the next major OMS release.
+For example, with nvm:
+
+```bash
+nvm install 24
+nvm use 24
+```
 
 `oms init` can create a manifest before you initialize Git. Before synchronizing repositories, run `git init` in the same directory.
 

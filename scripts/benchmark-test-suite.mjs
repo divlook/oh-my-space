@@ -55,7 +55,7 @@ console.log(JSON.stringify(entry));
 if (options.gating || options.ciGating) {
   const failures = options.ciGating
     ? [
-        ...(!/^v(?:20\.19\.0|24\.)/.test(runtime) ? [`Expected Node 20.19.0 or Node 24, received ${runtime}`] : []),
+        ...(!/^v24\./.test(runtime) ? [`Expected Node 24, received ${runtime}`] : []),
         ...(maxMs > budgets.ciMaxMs ? [`Maximum ${maxMs}ms exceeds ${budgets.ciMaxMs}ms`] : []),
       ]
     : [

@@ -5,9 +5,12 @@ For workspace installation and configuration, start with [Getting started](getti
 
 ## Set up the repository
 
-Use the Node.js version in [`.nvmrc`](../.nvmrc).
+Use Node 24, as configured in [`.nvmrc`](../.nvmrc), for development and release preparation.
+The published runtime range is `^24 || >=26`: Node 20, 22, and 25 are not supported.
+Newer runtimes permitted by `>=26` are not all verified by CI.
 
 ```bash
+nvm install
 nvm use
 npm ci
 ```
@@ -31,6 +34,11 @@ npm test
 
 The full gate checks types and builds once.
 It then runs the unit, integration, and black-box test layers.
+
+Pull-request CI has one required validation job, `test (development)`, on `.nvmrc` Node 24.
+It reuses verification only when the content fingerprint, resolved Node version, runner image, and architecture match exactly.
+On a cache miss, it installs dependencies, runs the complete suite, inspects the package, and records a verification marker.
+The separate `current` Node diagnostic is non-gating and does not replace Node 24 validation.
 
 For focused work, use the layer or stable feature script that covers the change:
 
@@ -79,6 +87,8 @@ node scripts/benchmark-test-owners.mjs --owner tests/cli-tree-a.test.js
 ```
 
 The benchmark scripts update these files. Preserve reviewed historical measurements when running temporary diagnostics.
+Acceptance budgets remain a three-run local median of at most 110 seconds, no local run above 135 seconds, and a cache-miss Node 24 CI Test step of at most 55 seconds.
+Use `--gating` with at least three runs for local Node 24 acceptance, or `--ci-gating` for the Node 24 CI budget.
 
 ### Direct test runs
 
@@ -119,6 +129,7 @@ npm run release
 ```
 
 Review package contents before publication.
+`npm run version` requires pending Changesets. With Changesets 3, an empty plan fails with exit code 1, leaves package metadata unchanged, and skips the subsequent lockfile refresh.
 Review release metadata before publication.
 Follow [Release channels](release-channels.md) for the authoritative maintainer steps.
 

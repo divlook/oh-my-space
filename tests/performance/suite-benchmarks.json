@@ -17,6 +17,40 @@
       "varianceMs2": 4230699,
       "maxMs": 101869,
       "gating": false
+    },
+    {
+      "label": "node24-changesets3",
+      "measuredAt": "2026-10-11T13:41:02.658Z",
+      "runtime": "v24.19.0",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        115897,
+        112120,
+        100625
+      ],
+      "medianMs": 112120,
+      "varianceMs2": 42181638,
+      "maxMs": 115897,
+      "gating": true
+    },
+    {
+      "label": "node24-changesets3-uncontended",
+      "measuredAt": "2026-10-11T13:46:39.651Z",
+      "runtime": "v24.19.0",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        64669,
+        66830,
+        86528
+      ],
+      "medianMs": 66830,
+      "varianceMs2": 96721890,
+      "maxMs": 86528,
+      "gating": true
     }
   ]
 }
