@@ -61,6 +61,9 @@ Place each new contract at the least expensive layer that exercises its meaningf
 - `tests/integration` covers direct library entry points. Their behavior depends on real Git or filesystem state in a disposable fixture.
 - Black-box owners cover production-bundle wiring and process-integrity/recovery behavior. They also cover at least one end-to-end journey per public command.
 
+Compatibility tests must use explicit runtime versions, skill requirements, and registry versions for each scenario rather than deriving the compatibility condition from the package release version.
+Use `currentVersion` when checking the actual package version or keeping installed and reference skill versions equal; use `OMS_TEST_PACKAGE_VERSION` to fix the simulated OMS runtime version.
+
 Protected process-integrity/recovery and production-bundle-wiring contracts stay black-box unless an equivalent replacement retains that boundary.
 You may consolidate or remove other journeys only when observable coverage remains.
 Each migration must record its replacement or deletion reason in `tests/test-inventory.json`.

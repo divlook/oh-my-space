@@ -50,7 +50,8 @@ async function doctor(cwd: string, home: string, overrides: NodeJS.ProcessEnv): 
     OMS_TEST_MODE: "1",
     OMS_TEST_SKILLS_HOME: home,
     OMS_TEST_SKILL_REFERENCES: reference,
-    OMS_TEST_PACKAGE_VERSION: currentVersion,
+    // Keep the runtime incompatible with the skill range across release bumps.
+    OMS_TEST_PACKAGE_VERSION: "1.0.0",
     ...overrides,
   });
   try {
