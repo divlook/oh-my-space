@@ -6821,6 +6821,17 @@
       "processBoundaryRationale": null
     },
     {
+      "id": "tests/integration/branch-clean.test.ts::cleanup initialization followed by no candidates reports retained preparation",
+      "name": "cleanup initialization followed by no candidates reports retained preparation",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
       "id": "tests/integration/branch-clean.test.ts::cleanup origin default requires its local branch and explicit bases do not silently substitute",
       "name": "cleanup origin default requires its local branch and explicit bases do not silently substitute",
       "source": "tests/integration/branch-clean.test.ts",
@@ -6933,6 +6944,17 @@
     {
       "id": "tests/integration/branch-clean.test.ts::cleanup treats same-name same-OID recreation as confirmed and already absent as successful",
       "name": "cleanup treats same-name same-OID recreation as confirmed and already absent as successful",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup unmerged-only no-op preserves dirty files and branches without ordinary exclusions",
+      "name": "cleanup unmerged-only no-op preserves dirty files and branches without ordinary exclusions",
       "source": "tests/integration/branch-clean.test.ts",
       "layer": "integration",
       "owners": [

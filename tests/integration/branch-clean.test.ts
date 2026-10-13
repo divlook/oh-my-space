@@ -132,7 +132,6 @@ test("cleanup uses each repository default and cached explicit remote bases with
     assert.doesNotMatch(readFileSync(intercepted.log, "utf8"), /\bfetch\b/);
     const empty = await clean(cwd);
     assert.equal(empty.code, 0, empty.output);
-    assert.ok(empty.output.includes(`refs/heads/${base}`));
   }
 });
 
@@ -156,7 +155,12 @@ test("cleanup rejects missing ambiguous symbolic and nonbranch bases without pro
 
 test("cleanup declines cancels and refuses noninteractive candidates but succeeds without candidates", async () => {
   const { cwd, wt } = fixture();
-  assert.equal((await clean(cwd)).code, 0);
+  const before = snapshot(cwd, wt);
+  const empty = await clean(cwd, { responses: [] });
+  assert.equal(empty.code, 0, empty.output);
+  assert.match(empty.output, /api/);
+  assert.doesNotMatch(empty.output, /comparison base|refs\/heads\/|Candidate:|Excluded:|Preparation|transactions|Delete these/i);
+  assert.deepEqual(snapshot(cwd, wt), before);
   git(wt, "branch", "topic");
   for (const responses of [undefined, [{ type: "confirm", value: false }], [{ type: "cancel" }]]) {
     const result = await clean(cwd, { responses });
@@ -164,6 +168,41 @@ test("cleanup declines cancels and refuses noninteractive candidates but succeed
     assert.ok(localBranchExists(wt, "topic"));
     assert.ok(result.output.includes(gitOut(wt, "rev-parse", "topic")));
   }
+});
+
+test("cleanup unmerged-only no-op preserves dirty files and branches without ordinary exclusions", async () => {
+  const { cwd, wt } = fixture();
+  git(wt, "checkout", "-b", "unmerged");
+  git(wt, "commit", "--allow-empty", "-m", "unmerged topic");
+  const tip = gitOut(wt, "rev-parse", "HEAD");
+  git(wt, "checkout", "main");
+  writeFileSync(join(wt, "dirty"), "keep");
+  const before = snapshot(cwd, wt);
+  const result = await clean(cwd, { responses: [] });
+  assert.equal(result.code, 0, result.output);
+  assert.doesNotMatch(result.output, /comparison base|Candidate:|Excluded:|Preparation|transactions|all.*merged|working.*clean/i);
+  assert.equal(gitOut(wt, "rev-parse", "unmerged"), tip);
+  assert.deepEqual(snapshot(cwd, wt), before);
+});
+
+test("cleanup initialization followed by no candidates reports retained preparation", async () => {
+  const original = workspaceWithApi();
+  const cwd = tempFixture("clean-empty-uninitialized-");
+  execFileSync("git", ["clone", original.cwd, cwd], { env: testEnv, stdio: "ignore" });
+  configIdentity(cwd);
+  const root = gitOut(cwd, "rev-parse", "HEAD");
+  const rootIndex = gitOut(cwd, "ls-files", "--stage");
+  const result = await clean(cwd, { responses: [] });
+  const wt = join(cwd, "oms", "api");
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /initialized.*registered source/i);
+  assert.doesNotMatch(result.output, /comparison base|Candidate:|Excluded:|transactions|Delete these/i);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "main");
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), gitOut(cwd, "rev-parse", "HEAD:oms/api"));
+  assert.equal(gitOut(wt, "config", "branch.main.remote"), "origin");
+  assert.equal(gitOut(wt, "config", "branch.main.merge"), "refs/heads/main");
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), root);
+  assert.equal(gitOut(cwd, "ls-files", "--stage"), rootIndex);
 });
 
 test("cleanup retains registered initialization baseline attachment and tracking after decline", async () => {
@@ -221,6 +260,14 @@ test("cleanup shallow history deletes proven ancestors and preserves unproven an
   assert.equal(localBranchExists(wt, "proven"), false);
   assert.ok(localBranchExists(wt, "unproven"));
   assert.match(result.output, /shallow|limited.history/i);
+  const before = snapshot(cwd, wt);
+  const empty = await clean(cwd, { responses: [], env: intercepted.env });
+  assert.equal(empty.code, 0, empty.output);
+  assert.match(empty.output, /shallow|limited.history/i);
+  assert.match(empty.output, /deepen|repair/i);
+  assert.doesNotMatch(empty.output, /comparison base|Candidate:|Excluded:|transactions|Delete these/i);
+  assert.equal(gitOut(wt, "rev-parse", "unproven"), old);
+  assert.deepEqual(snapshot(cwd, wt), before);
   assert.doesNotMatch(readFileSync(intercepted.log, "utf8"), /\bfetch\b/);
 });
 
@@ -232,6 +279,7 @@ test("cleanup planning inspection errors fail closed instead of becoming idle de
     const result = await clean(cwd, { env: intercepted.env });
     assert.notEqual(result.code, 0, `${match}: ${result.output}`);
     assert.ok(localBranchExists(wt, "a-first") && localBranchExists(wt, "z-last"), match);
+    assert.doesNotMatch(result.output, /no eligible|no initialization was needed/i);
   }
 });
 

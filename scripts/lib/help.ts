@@ -157,36 +157,16 @@ Deletion remains local to the submodule and never changes root topology.
 `;
 
 export const branchCleanHelp = `
-Clean merged local branches in one source repository. Omit the alias for interactive selection.
-OMS does not accept --all, --force, or --yes.
-
-Base:
-  The default is the local oms.yaml branch, or the local branch named by cached origin/HEAD.
-  OMS has no default named main and no remote fallback.
-  --base selects an existing direct local or remote-tracking branch. Protected baselines still apply.
-  OMS does not refresh refs or reconcile remotes after preparation.
-
-Safety:
-  - OMS displays the base, branch tips, exclusions, and preparation effects before one confirmation.
-  - Confirmation defaults to No. Candidates require an interactive terminal.
-  - Only proven ancestry qualifies, including in shallow repositories.
-  - OMS excludes the current branch, local base, protected baselines, and branches in any worktree.
-  - OMS refuses unsafe source state, inconsistent registration, and unreliable inspection.
-  - Initialization, fetched data, baseline attachment or creation, and tracking settings remain after decline.
-  - Stop other Git or IDE changes to source branches, worktrees, and configuration from confirmation waiting until cleanup finishes.
-  - Commit checks do not lock all repository state. Concurrent recreation can lose branch settings.
-
-Results:
-  OMS prints recovery commands. Completed deletions remain after partial failure, including configuration failure.
-  OMS does not retry with force or restore deleted branches automatically.
-  After preparation, OMS preserves remote refs, source HEAD/files/index, root tracked state, and recorded commits.
-  Exit codes: 0 complete or empty batch | 1 refusal/decline/cancel | 2 initialization failure or incomplete batch
-
 Examples:
   $ oms branch clean api
   $ oms branch clean api --base origin/develop
 
-Full rules for refs, source state, revalidation, concurrency, shallow history, and recovery:
+Deletes local branches only, with interactive confirmation that defaults to No.
+The default base is the configured local branch, or the local branch named by
+cached origin/HEAD. Refs are not refreshed after preparation.
+OMS initializes existing registrations when needed; those effects remain on decline.
+
+Detailed safety and recovery:
   https://github.com/divlook/oh-my-space/blob/HEAD/docs/how-oms-works.md#merged-branch-cleanup-safety
 `;
 export const treeHelp = `

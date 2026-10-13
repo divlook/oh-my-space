@@ -11,7 +11,7 @@ import type { GitResult, Repo } from "./types.js";
 type Ref = Readonly<{ ref: string; oid: string; symbolic: string }>;
 type Branch = Ref & Readonly<{ name: string; reasons: readonly string[] }>;
 type Context = Readonly<{ declaration: string; registration: string; recorded: string }>;
-type Plan = Readonly<{ alias: string; base: Ref; context: Context; branches: readonly Branch[] }>;
+type Plan = Readonly<{ alias: string; base: Ref; context: Context; branches: readonly Branch[]; limitedHistory: boolean }>;
 type Outcome = { branch: Branch; kind: "deleted" | "already absent" | "preserved" | "failed" | "not run"; reason?: string; configFailed?: boolean };
 type SourceSafety = { protected: Map<string, string[]>; shallow: boolean };
 
@@ -117,6 +117,7 @@ function makePlan(root: string, repo: Repo, baseArg: string | undefined): Plan {
   const matches = refs.filter((entry) => requested.startsWith("refs/") ? entry.ref === requested : entry.ref === `refs/heads/${requested}` || entry.ref === `refs/remotes/${requested}`);
   if (matches.length !== 1 || matches[0].symbolic) throw new Error(`Comparison base ${JSON.stringify(requested)} is missing, ambiguous, or symbolic. Supply an existing direct local or remote-tracking branch with --base; no refs were refreshed.`);
   const base = matches[0];
+  let limitedHistory = false;
   const branches = refs.filter((entry) => entry.ref.startsWith("refs/heads/")).map((entry): Branch => {
     const name = entry.ref.slice("refs/heads/".length);
     const reasons = [...(safety.protected.get(name) ?? [])];
@@ -124,11 +125,14 @@ function makePlan(root: string, repo: Repo, baseArg: string | undefined): Plan {
     if (entry.symbolic) reasons.push("symbolic local branch ref");
     if (!reasons.length) {
       const reason = ancestry(dir, entry.oid, base.oid, safety.shallow);
-      if (reason) reasons.push(reason);
+      if (reason) {
+        reasons.push(reason);
+        if (safety.shallow) limitedHistory = true;
+      }
     }
     return Object.freeze({ ...entry, name, reasons: Object.freeze(reasons) });
   }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-  return Object.freeze({ alias: repo.alias, context, base, branches: Object.freeze(branches) });
+  return Object.freeze({ alias: repo.alias, context, base, branches: Object.freeze(branches), limitedHistory });
 }
 
 function execute(root: string, repo: Repo, plan: Plan): Outcome[] {
@@ -200,20 +204,25 @@ export async function runBranchClean(aliasArg: string | undefined, options: { ba
   const wasInitialized = submoduleInitialized(repoRoot, repo.alias);
   const preparation = await prepareAlias(repoRoot, repo, { command: "branch clean", topologyOffer: false });
   if (!preparation.ok) return preparation.code;
-  const effects = wasInitialized ? "Preparation: the source was already initialized; no initialization was needed." : "Preparation initialized the registered source; fetched data, baseline branch creation or attachment, and tracking configuration remain even if cleanup is declined.";
+  const effects = wasInitialized ? undefined : "Preparation initialized the registered source; fetched data, baseline branch creation or attachment, and tracking configuration remain even if cleanup is declined.";
   let plan: Plan;
   try { plan = makePlan(repoRoot, repo, options.base); }
-  catch (error) { log.error(error instanceof Error ? error.message : String(error)); log.info(effects); return 1; }
+  catch (error) { log.error(error instanceof Error ? error.message : String(error)); if (effects) log.info(effects); return 1; }
+  const candidates = plan.branches.filter((branch) => !branch.reasons.length);
+  if (!candidates.length) {
+    log.info(`${plan.alias}: no eligible merged local branches to clean.`);
+    if (effects) log.info(effects);
+    if (plan.limitedHistory) log.warn("Ancestry could not be proven with limited shallow history; deepen or repair history explicitly, then rerun.");
+    return 0;
+  }
   log.info(`Cleanup ${plan.alias}: comparison base ${plan.base.ref} ${plan.base.oid} (local/cached refs; not refreshed).`);
-  log.info(effects);
+  if (effects) log.info(effects);
   log.warn("Do not mutate source branches, worktrees, or configuration through other Git or IDE operations from confirmation waiting through completion. Commit-value transactions do not atomically protect ref type, generation, occupancy, metadata, or configuration; same-name recreation and movement away and back to the same OID are not distinguished.");
   for (const branch of plan.branches) log.info(`${branch.reasons.length ? "Excluded" : "Candidate"}: ${branch.name} ${branch.oid}${branch.reasons.length ? ` — ${branch.reasons.join(", ")}` : ""}`);
-  const candidates = plan.branches.filter((branch) => !branch.reasons.length);
-  if (!candidates.length) { log.info("No eligible merged local branches to clean."); return 0; }
   const rerun = `oms branch clean ${shq(repo.alias)}${options.base !== undefined ? ` --base ${shq(options.base)}` : ""}`;
   if (!canPrompt()) { log.error(`No branches deleted. Rerun in an interactive terminal: ${rerun}`); return 1; }
   const confirmed = await guardedConfirm({ message: `Delete these ${candidates.length} merged local branches in ${repo.alias}?`, initialValue: false });
-  if (isCancel(confirmed) || !confirmed) { cancel("Cleanup declined or cancelled; no branches deleted."); log.info(effects); return 1; }
+  if (isCancel(confirmed) || !confirmed) { cancel("Cleanup declined or cancelled; no branches deleted."); if (effects) log.info(effects); return 1; }
   const outcomes = execute(repoRoot, repo, plan);
   for (const outcome of outcomes) {
     log.info(`${outcome.kind}: ${outcome.branch.name} ${outcome.branch.oid}${outcome.reason ? ` — ${outcome.reason}` : ""}`);
