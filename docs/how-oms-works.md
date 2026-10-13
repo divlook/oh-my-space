@@ -53,7 +53,7 @@ Use this pull-request workflow to return the merged result to the canonical chec
 4. After the pull request merges, run `oms pull <alias>` in the canonical checkout to move the submodule branch.
 5. Run `oms record <alias>` to commit the moved root pointer.
 
-`oms tree remove <alias> <task>` deletes only the worktree. The `<task>` branch and its commits remain. Branch deletion requires a separate `oms branch delete` decision.
+`oms tree remove <alias> <task>` deletes only the worktree. The `<task>` branch and its commits remain. Delete one branch with `oms branch delete`, or confirm a merged-branch batch with `oms branch clean <alias>`.
 
 `oms unsync` refuses while any tree exists for the alias. Unsync deletes the shared submodule Git directory that those trees use.
 
@@ -185,6 +185,22 @@ See [Run commands across repositories](commands.md#run-commands-across-repositor
 OMS protects the current branch and every reliably resolved baseline, including both sides of baseline metadata drift. OMS refuses ambiguous or malformed baseline metadata to protect branches. OMS also refuses deletion during a merge, rebase, cherry-pick, revert, bisect, or sequencer operation.
 
 Safe deletion uses Git's merged-branch check first. Force deletion requires an explicit choice. Before force deletion, OMS prints the branch tip and a recreation command. OMS then checks the tip again. If another process moves the branch, OMS stops deletion to preserve the unexpected commit.
+
+### Merged branch cleanup safety
+
+`oms branch clean [alias] [--base <ref>]` cleans local branches in exactly one source repository. Omitted aliases always require interactive selection. OMS prepares existing registration without offering new registration; initialization, fetched data, baseline branch creation or attachment, and tracking settings remain if you decline deletion. Managed-tree invocation, inconsistent registration, in-progress source Git operations, and detached HEAD different from the source gitlink committed in root HEAD are refused. A staged gitlink is not the **recorded commit**. Inspection errors fail closed.
+
+The **comparison base** is the existing local branch named by the selected declaration's `branch`, or by existing `origin/HEAD` when omitted. There is no fixed `main` default, remote substitution, or automatic refresh after preparation. `--base` accepts an unambiguous existing direct local or remote-tracking branch, not a tag, commit ID, or revision expression. Cached remote refs may be behind. Update them deliberately through the existing fetch/pull workflow before a new cleanup invocation. An explicit comparison base never bypasses unresolved **protected baselines**; declare `branch` or repair `origin/HEAD` first.
+
+Eligibility requires the branch tip to be contained in the comparison base's history, regardless of HEAD or upstream. Patch equivalence, squash/rebase results without ancestry, and missing remote branches do not prove a merge. OMS excludes the current branch, local comparison base, every reliably resolved protected baseline (including metadata drift), and branches in any registered worktree, even outside `.oms-tree/`. Dirty files are allowed and preserved. Shallow history allows proven ancestors only; explicitly deepen or repair unproven history before rerunning. No implicit fetch fills the gaps.
+
+OMS displays the full base ref and commit, sorted branch tips, exclusions, preparation effects, and concurrency limits before one default-No confirmation. No candidates exits `0` without prompting. Decline, cancellation, or candidates without an interactive terminal exits `1` without deletion. There is no force, workspace-wide, standalone preview, or confirmation-bypass mode.
+
+Before each candidate, OMS rereads the selected declaration, registration, root-committed gitlink, source safety, protected baselines, all-worktree occupancy, ref types and commits, and ancestry. A changed candidate is preserved. A changed base or selected context, unsafe source state, or unreliable shared inspection stops remaining work. Unrelated declarations or root commits alone do not invalidate the plan. Each ref transaction verifies the displayed base and candidate commit values before deleting that candidate; it never switches the checkout or retries with force.
+
+**External concurrent mutation is unsupported.** Other Git or IDE operations must not change source branches, worktrees, or configuration from confirmation waiting through completion. Commit verification does not atomically guard direct-ref type, branch generation, occupancy, metadata, operation markers, or configuration. Candidate identity is name plus commit ID: recreation at the same name and commit, or movement away and back to that commit, is not distinguished. A worktree introduced after inspection can lose its branch. Recreation between ref deletion and configuration cleanup can lose the new branch's settings. These checks are not a universal repository lock.
+
+Results distinguish deleted, already absent, preserved, failed, and not run. Only successfully deleted branch names have their configuration sections removed; missing configuration is harmless. A configuration failure remains a completed ref deletion with incomplete cleanup, a precise repair command, and exit `2`. Candidate-local failures allow later independently safe candidates; shared safety changes stop them. Successful or already-absent batches exit `0`; incomplete batches exit `2` without rollback. Output includes original full tips and shell-safe recreation commands while commits remain available, plus rerun or repair guidance. There is no durable recovery journal. After preparation, remote refs, source HEAD/files/index, root tracked state, and recorded commits remain unchanged.
 
 ## Partial success and preserved state
 

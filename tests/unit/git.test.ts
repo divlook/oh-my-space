@@ -7,7 +7,6 @@ import {
   isDirty,
   parseGitVersion,
   redactSensitiveUrls,
-  resolveOriginHead,
   runGit,
   runSub,
   type RawGitRunner,
@@ -45,9 +44,6 @@ test("branch and dirty classifiers consume raw Git outcomes without a process", 
   assert.equal(isDirty("/repo", queuedRunner([ok(" M source.ts\n")])), true);
   assert.equal(isDirty("/repo", queuedRunner([ok("\n")])), false);
   assert.equal(isDirty("/repo", queuedRunner([failed()])), false);
-
-  assert.equal(resolveOriginHead("/repo", queuedRunner([ok("origin/main\n"), ok()])), "main");
-  assert.equal(resolveOriginHead("/repo", queuedRunner([ok("origin/main\n"), failed()])), null);
 });
 
 test("local branch inspection parses upstream divergence and degrades malformed counts", () => {

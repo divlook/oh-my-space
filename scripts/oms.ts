@@ -6,6 +6,7 @@ import { readPackageVersion } from "./lib/env.js";
 import { assertPromptQueueDrained } from "./lib/prompt-adapter.js";
 import { runAgentInstall, runAgentUninstall } from "./lib/agent.js";
 import { runBranch, runBranchDelete } from "./lib/branch-delete.js";
+import { runBranchClean } from "./lib/branch-clean.js";
 import { runBranchList } from "./lib/branch-list.js";
 import { runCheckout, runSwitch } from "./lib/branch-ops.js";
 import { runCommit, runRecord } from "./lib/commit.js";
@@ -15,6 +16,7 @@ import {
   agentInstallHelp,
   agentUninstallHelp,
   branchCheckoutHelp,
+  branchCleanHelp,
   branchDeleteHelp,
   branchListHelp,
   branchSwitchHelp,
@@ -183,7 +185,7 @@ program
 
 const branchCommand = program
   .command("branch")
-  .description("Inspect, switch, checkout, or delete submodule branches (interactive action selector).")
+  .description("Inspect, switch, checkout, delete, or clean source branches (interactive action selector).")
   .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async () => {
     await exitWith(runBranch(branchCommand));
@@ -234,6 +236,16 @@ branchCommand
   .addHelpText("after", `${branchDeleteHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, branch: string | undefined, options: { force?: boolean }) => {
     await exitWith(runBranchDelete(alias, branch, options));
+  });
+
+branchCommand
+  .command("clean")
+  .description("Confirm deletion of merged local branches in one source repository.")
+  .argument("[alias]", "declared source alias (omit to pick interactively)")
+  .option("--base <ref>", "existing local or remote-tracking comparison branch")
+  .addHelpText("after", `${branchCleanHelp}${workspaceContextHelp}`)
+  .action(async (alias: string | undefined, options: { base?: string }) => {
+    await exitWith(runBranchClean(alias, options));
   });
 
 const treeCommand = program
