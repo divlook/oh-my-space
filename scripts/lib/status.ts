@@ -488,8 +488,7 @@ type JsonTreeStatus = {
  * Build one repo's JSON status. Never throws: an initialized repo whose HEAD cannot be read keeps the
  * normal entry shape with null scalars, safe-default structured fields, and a concise `error` message.
  */
-function buildRepoStatus(repoRoot: string, repo: Repo): JsonRepoStatus {
-  const state = gitlinkState(repoRoot, repo.alias);
+function buildRepoStatus(repoRoot: string, repo: Repo, state: GitlinkState): JsonRepoStatus {
   const common = {
     alias: repo.alias,
     path: submodulePath(repo.alias),
@@ -542,7 +541,7 @@ function buildRepoStatus(repoRoot: string, repo: Repo): JsonRepoStatus {
  * Build the root JSON status. root.changes always excludes every configured submodule gitlink path so
  * pointer movement is reported only through submodulePointers, whose arrays cover the selected repos.
  */
-function buildRootStatus(repoRoot: string, configuredRepos: Repo[], selectedRepos: Repo[]): JsonRootStatus {
+function buildRootStatus(repoRoot: string, configuredRepos: Repo[], states: GitlinkState[]): JsonRootStatus {
   const { branch, head, detached } = headState(repoRoot);
   const excludePaths = new Set<string>([
     ...registeredSubmodulePaths(repoRoot),
@@ -550,19 +549,18 @@ function buildRootStatus(repoRoot: string, configuredRepos: Repo[], selectedRepo
   ]);
   const changes = changeCounts(repoRoot, excludePaths);
   const pointers = { moved: [] as string[], staged: [] as string[], split: [] as string[], conflict: [] as string[] };
-  for (const repo of selectedRepos) {
-    const s = gitlinkState(repoRoot, repo.alias);
-    if (s.conflict) pointers.conflict.push(repo.alias);
-    if (s.moved) pointers.moved.push(repo.alias);
-    if (s.staged) pointers.staged.push(repo.alias);
-    if (s.split) pointers.split.push(repo.alias);
+  for (const s of states) {
+    if (s.conflict) pointers.conflict.push(s.alias);
+    if (s.moved) pointers.moved.push(s.alias);
+    if (s.staged) pointers.staged.push(s.alias);
+    if (s.split) pointers.split.push(s.alias);
   }
   return { branch, head, detached, dirty: isDirtyCounts(changes), changes, submodulePointers: pointers };
 }
 
 /** Managed-tree JSON entries, narrowed by the selected aliases when a filter applies. */
 function buildTreeStatuses(repoRoot: string, configuredRepos: Repo[], selectedAliases: string[] | null): JsonTreeStatus[] {
-  const trees = listManagedTrees(repoRoot, configuredRepos);
+  const trees = listManagedTrees(repoRoot, configuredRepos, { dirtyAliases: selectedAliases ?? "all" });
   const narrowed = selectedAliases === null ? trees : trees.filter((tree) => selectedAliases.includes(tree.alias));
   return narrowed.map((tree: ManagedTree) => ({
     alias: tree.alias,
@@ -583,14 +581,15 @@ function printStatusJson(
   selectedRepos: Repo[],
   treeAliases: string[] | null,
 ): number {
-  const repos = selectedRepos.map((repo) => buildRepoStatus(repoRoot, repo));
+  const states = selectedRepos.map((repo) => gitlinkState(repoRoot, repo.alias));
+  const repos = selectedRepos.map((repo, index) => buildRepoStatus(repoRoot, repo, states[index]));
   const errors = repos.filter((r) => r.error !== null).map((r) => r.error as string);
   const payload: JsonStatus = {
     schemaVersion: 1,
     toolVersion: readPackageVersion(),
     workspaceRoot: repoRoot,
     currentAlias: inferAliasFromCwd(repoRoot, configuredRepos),
-    root: buildRootStatus(repoRoot, configuredRepos, selectedRepos),
+    root: buildRootStatus(repoRoot, configuredRepos, states),
     repos,
     trees: buildTreeStatuses(repoRoot, configuredRepos, treeAliases),
     errors,
@@ -665,7 +664,7 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
   }
 
   // Trees are listed only when any exist, keeping the common no-tree output unchanged.
-  const trees = listManagedTrees(repoRoot, repos).filter(
+  const trees = listManagedTrees(repoRoot, repos, { dirtyAliases: treeAliases ?? "all" }).filter(
     (tree) => treeAliases === null || treeAliases.includes(tree.alias),
   );
   if (trees.length > 0) {

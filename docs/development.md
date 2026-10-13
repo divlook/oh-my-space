@@ -93,6 +93,31 @@ The benchmark scripts update these files. Preserve reviewed historical measureme
 Acceptance budgets remain a three-run local median of at most 110 seconds, no local run above 135 seconds, and a cache-miss Node 24 CI Test step of at most 55 seconds.
 Use `--gating` with at least three runs for local Node 24 acceptance, or `--ci-gating` for the Node 24 CI budget.
 
+### Workspace inspection measurements
+
+`status-inspection.json` records production-bundle Git calls, outputs, and three-run median/range timings separately from suite timings. JSON status now collects each selected alias's pointer state once per invocation; later invocations read it again. The A measurements halve root pointer HEAD/index/conflict reads without removing root or source working-file reads.
+
+Doctor still discovers and diagnoses the complete tree namespace, but no longer checks healthy trees' working files during inventory. The B measurements remove one such read in F3 and eleven in F4; other doctor Git commands remain. Tree listing and removal still inspect dirty state, including undeclared trees.
+
+Alias-filtered JSON and text status inspect working files only in selected aliases' healthy trees. In C's F4 measurements, `status api --json` and `status api` inspect five trees instead of eleven. Discovery still includes every alias; unfiltered status and `tree list` inspect all eleven healthy trees and retain dirty reporting for undeclared entries.
+
+Tree add's duplicate guard also uses discovery-only inventory. D removes one healthy-tree dirty read in F3 and eleven in F4. Healthy, broken, and foreign duplicates still refuse before preparation with files, refs, registration, and root index/HEAD preserved; a new task still succeeds without moving the canonical checkout.
+
+Unsync's tree-presence guard uses discovery-only inventory too: E removes one healthy-tree dirty read in F3 and eleven in F4. Healthy, broken, and foreign entries still block even forced unsync. Empty inventory continues through the existing deletion, topology transaction, and recovery flow; those operations are not part of the inventory savings.
+
+To reproduce, build on Node 24 and use immutable local bare seeds with canonical-only templates. Create each replica at its final path before adding trees; verify every mutable gitdir stays inside it and each healthy tree's administrative back-reference points to its own `.git` file. Use these workspace shapes:
+
+- F1: one tracked alias, no trees.
+- F2: ten initialized aliases, `web` without upstream tracking, no trees.
+- F3: one tracked alias with one dirty tree.
+- F4: ten initialized aliases with five `api` and five `web` trees (one dirty in each), plus a broken `api` entry, a nonempty foreign `web` directory, and a healthy undeclared `orphan` tree.
+
+Run `status --json`, `status api --json`, `status`, `status api`, `doctor`, and `tree list` three times per shape. Use separate fresh replicas for duplicate add, dirty removal, and unsync refusal, including broken-only and foreign-only `api` variants and normal add/unsync controls. Check moved, staged, and split pointers on subsequent F1/F2 invocations. Compare output and exits after normalizing replica paths and independently created commit IDs.
+
+For counts, temporarily wrap `child_process.spawnSync` in a Node preload and call `syncBuiltinESMExports`; validate interception with a known Git read. Count tree working-file reads by `status` calls whose cwd is a managed tree. Run doctor with empty `HOME` and `XDG_STATE_HOME`, clear inherited OMS test/prompt and Git/Node overrides, and count/reject attempted `fetch` calls before network access. Any attempted fetch invalidates the sample. Remove instrumentation and fixtures after measuring.
+
+Timings are diagnostic: sequential local runs use a warm filesystem cache, no Node compile cache, and uncontrolled host load. They are not a CI threshold or an absolute latency promise. Existing output fields, ordering, exit behavior, and mutation safeguards remain unchanged.
+
 ### Direct test runs
 
 Feature scripts rebuild `dist/oms.js` before they run their black-box tests.

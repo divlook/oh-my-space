@@ -48,7 +48,7 @@ export type ManagedTree = {
   branch: string | null;
   /** Short HEAD SHA, or null when unreadable. */
   head: string | null;
-  /** Staged, unstaged, and untracked changes present; null when unreadable. */
+  /** Staged, unstaged, and untracked changes present; null when unreadable or not inspected. */
   dirty: boolean | null;
   error: string | null;
   /** Submodule gitdir whose porcelain reported this entry; null for foreign directories. */
@@ -134,6 +134,7 @@ function submoduleGitDir(repoRoot: string, alias: string): string | null {
 export function listManagedTrees(
   repoRoot: string,
   repos: Repo[],
+  inspection: { dirtyAliases: "all" | readonly string[] },
   runner: RawGitRunner = productionGitRunner,
 ): ManagedTree[] {
   const root = join(repoRoot, TREE_DIRNAME);
@@ -221,8 +222,9 @@ export function listManagedTrees(
 
   trees.sort((left, right) => left.alias.localeCompare(right.alias) || left.task.localeCompare(right.task));
   // Dirty derivation runs last, in the sorted order above, so queued-runner tests stay deterministic.
+  const dirtyAliases = inspection.dirtyAliases === "all" ? null : new Set(inspection.dirtyAliases);
   for (const tree of trees) {
-    if (tree.state !== "healthy") continue;
+    if (tree.state !== "healthy" || (dirtyAliases !== null && !dirtyAliases.has(tree.alias))) continue;
     const status = runGit(tree.absolutePath, ["status", "--porcelain=v1"], false, undefined, runner);
     if (!status.success) {
       tree.error = "could not inspect worktree state";
@@ -408,7 +410,7 @@ export async function runTreeAdd(
   }
 
   // Refuse a duplicate before preparation: the path is already an inventory entry, whatever it is.
-  const duplicate = listManagedTrees(repoRoot, repos).find((tree) => tree.alias === alias && tree.task === task);
+  const duplicate = listManagedTrees(repoRoot, repos, { dirtyAliases: [] }).find((tree) => tree.alias === alias && tree.task === task);
   if (duplicate) {
     log.error(
       `A managed tree already exists at ${duplicate.path}. Remove it first with "oms tree remove ${alias} ${task}".`,
@@ -452,7 +454,7 @@ export async function runTreeList(): Promise<number> {
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
 
-  const trees = listManagedTrees(repoRoot, repos);
+  const trees = listManagedTrees(repoRoot, repos, { dirtyAliases: "all" });
   if (trees.length === 0) {
     log.info(`No managed trees. Create one with "oms tree add <alias> <task>".`);
     return 0;
@@ -582,7 +584,7 @@ export async function runTreeRemove(
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
 
-  const trees = listManagedTrees(repoRoot, repos);
+  const trees = listManagedTrees(repoRoot, repos, { dirtyAliases: "all" });
   const entry = await resolveTreeRemoveTarget(trees, aliasArg, taskArg);
   if (!entry) return 1;
 
