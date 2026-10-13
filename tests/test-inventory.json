@@ -22,11 +22,12 @@
           "tests/cli-sync-a.test.js",
           "tests/cli-preparation-a.test.js",
           "tests/cli-branch-a.test.js",
+          "tests/cli-branch-clean.test.js",
           "tests/cli-branch-list-a.test.js",
+          "tests/cli-exec.test.js",
           "tests/cli-scaffold.test.js",
           "tests/cli-tools.test.js",
-          "tests/cli-tree-a.test.js",
-          "tests/cli-exec.test.js"
+          "tests/cli-tree-a.test.js"
         ]
       }
     }
@@ -3289,121 +3290,26 @@
   },
   "contracts": [
     {
-      "id": "tests/integration/exec.test.ts::exec accepts dirty detached canonical targets without changing root or source Git state",
-      "name": "exec accepts dirty detached canonical targets without changing root or source Git state",
-      "source": "tests/integration/exec.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/exec.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process"
-    },
-    {
-      "id": "tests/integration/exec.test.ts::exec fails unavailable and foreign targets individually without preparation and continues healthy targets",
-      "name": "exec fails unavailable and foreign targets individually without preparation and continues healthy targets",
-      "source": "tests/integration/exec.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/exec.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process"
-    },
-    {
-      "id": "tests/integration/exec.test.ts::exec preserves literal arguments and failure effects while running unique aliases sequentially",
-      "name": "exec preserves literal arguments and failure effects while running unique aliases sequentially",
-      "source": "tests/integration/exec.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/exec.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process"
-    },
-    {
-      "id": "tests/integration/exec.test.ts::exec rechecks later targets after a child changes their registration",
-      "name": "exec rechecks later targets after a child changes their registration",
-      "source": "tests/integration/exec.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/exec.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process"
-    },
-    {
-      "id": "tests/cli-exec.test.js::exec production routing preserves literal child arguments and explicit alias order",
-      "name": "exec production routing preserves literal child arguments and explicit alias order",
-      "source": "tests/cli-exec.test.js",
+      "id": "tests/cli-branch-clean.test.js::branch clean production journey deletes two merged branches and preserves protected unmerged and other repositories",
+      "name": "branch clean production journey deletes two merged branches and preserves protected unmerged and other repositories",
+      "source": "tests/cli-branch-clean.test.js",
       "layer": "blackbox",
       "owners": [
-        "tests/cli-exec.test.js"
-      ],
-      "boundary": "production-bundle-wiring",
-      "processBoundaryRationale": "Runs the production bundle with real children to prove raw argument routing and selection before child execution."
-    },
-    {
-      "id": "tests/cli-exec.test.js::exec --all routes manifest order and takes precedence over explicit aliases",
-      "name": "exec --all routes manifest order and takes precedence over explicit aliases",
-      "source": "tests/cli-exec.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-exec.test.js"
-      ],
-      "boundary": "production-bundle-wiring",
-      "processBoundaryRationale": "Runs the production bundle with real children to prove raw argument routing and selection before child execution."
-    },
-    {
-      "id": "tests/cli-exec.test.js::exec rejects invalid selection and missing command boundaries before starting any child",
-      "name": "exec rejects invalid selection and missing command boundaries before starting any child",
-      "source": "tests/cli-exec.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-exec.test.js"
-      ],
-      "boundary": "production-bundle-wiring",
-      "processBoundaryRationale": "Runs the production bundle with real children to prove raw argument routing and selection before child execution."
-    },
-    {
-      "id": "tests/cli-exec.test.js::exec streams stdout and stderr live and inherits stdin before the child closes",
-      "name": "exec streams stdout and stderr live and inherits stdin before the child closes",
-      "source": "tests/cli-exec.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-exec.test.js"
+        "tests/cli-branch-clean.test.js"
       ],
       "boundary": "process-integrity-or-recovery",
-      "processBoundaryRationale": "Runs the production bundle with ready real children to prove live inherited streams, signal lifecycle, exit status, and preserved effects."
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
     },
     {
-      "id": "tests/cli-exec.test.js::exec parent-only SIGINT waits for child closure and preserves completed effects",
-      "name": "exec parent-only SIGINT waits for child closure and preserves completed effects",
-      "source": "tests/cli-exec.test.js",
+      "id": "tests/cli-branch-clean.test.js::branch clean production routing rejects unsupported selection and preserves noninteractive candidates",
+      "name": "branch clean production routing rejects unsupported selection and preserves noninteractive candidates",
+      "source": "tests/cli-branch-clean.test.js",
       "layer": "blackbox",
       "owners": [
-        "tests/cli-exec.test.js"
+        "tests/cli-branch-clean.test.js"
       ],
       "boundary": "process-integrity-or-recovery",
-      "processBoundaryRationale": "Runs the production bundle with ready real children to prove live inherited streams, signal lifecycle, exit status, and preserved effects."
-    },
-    {
-      "id": "tests/cli-exec.test.js::exec child-first SIGINT interrupts the invocation without starting later targets",
-      "name": "exec child-first SIGINT interrupts the invocation without starting later targets",
-      "source": "tests/cli-exec.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-exec.test.js"
-      ],
-      "boundary": "process-integrity-or-recovery",
-      "processBoundaryRationale": "Runs the production bundle with ready real children to prove live inherited streams, signal lifecycle, exit status, and preserved effects."
-    },
-    {
-      "id": "tests/cli-exec.test.js::exec continues after a ready child receives a non-SIGINT signal",
-      "name": "exec continues after a ready child receives a non-SIGINT signal",
-      "source": "tests/cli-exec.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-exec.test.js"
-      ],
-      "boundary": "process-integrity-or-recovery",
-      "processBoundaryRationale": "Runs the production bundle with ready real children to prove live inherited streams, signal lifecycle, exit status, and preserved effects."
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
     },
     {
       "id": "tests/cli-branch-list.contracts.js::bare branch routes list through the guarded action selector without leftover responses",
@@ -4636,6 +4542,83 @@
       ],
       "boundary": "process-integrity-or-recovery",
       "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec --all routes manifest order and takes precedence over explicit aliases",
+      "name": "exec --all routes manifest order and takes precedence over explicit aliases",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec child-first SIGINT interrupts the invocation without starting later targets",
+      "name": "exec child-first SIGINT interrupts the invocation without starting later targets",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec continues after a ready child receives a non-SIGINT signal",
+      "name": "exec continues after a ready child receives a non-SIGINT signal",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec parent-only SIGINT waits for child closure and preserves completed effects",
+      "name": "exec parent-only SIGINT waits for child closure and preserves completed effects",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec production routing preserves literal child arguments and explicit alias order",
+      "name": "exec production routing preserves literal child arguments and explicit alias order",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec rejects invalid selection and missing command boundaries before starting any child",
+      "name": "exec rejects invalid selection and missing command boundaries before starting any child",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "process-integrity-or-recovery",
+      "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/cli-exec.test.js::exec streams stdout and stderr live and inherits stdin before the child closes",
+      "name": "exec streams stdout and stderr live and inherits stdin before the child closes",
+      "source": "tests/cli-exec.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-exec.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
       "id": "tests/cli-preparation.contracts.js::a partial delegated sync does not ask a second preparation question",
@@ -6739,6 +6722,237 @@
       "processBoundaryRationale": null
     },
     {
+      "id": "tests/integration/branch-clean.test.ts::cleanup aborts remaining work on base selected declaration registration recorded commit or operation changes",
+      "name": "cleanup aborts remaining work on base selected declaration registration recorded commit or operation changes",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup candidate-local ref and config failures retain accurate partial outcomes and recovery guidance",
+      "name": "cleanup candidate-local ref and config failures retain accurate partial outcomes and recovery guidance",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup declines cancels and refuses noninteractive candidates but succeeds without candidates",
+      "name": "cleanup declines cancels and refuses noninteractive candidates but succeeds without candidates",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup deletes sorted true ancestors independently of HEAD and upstream and preserves repository boundaries",
+      "name": "cleanup deletes sorted true ancestors independently of HEAD and upstream and preserves repository boundaries",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup detached safety uses root HEAD gitlink rather than a staged pointer",
+      "name": "cleanup detached safety uses root HEAD gitlink rather than a staged pointer",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup emits executable shell-safe recreation and exact configuration repair commands",
+      "name": "cleanup emits executable shell-safe recreation and exact configuration repair commands",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup expected-tip and expected-base transactions reject races without force retries",
+      "name": "cleanup expected-tip and expected-base transactions reject races without force retries",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup ignores unrelated root commits declarations and staged source pointer movement",
+      "name": "cleanup ignores unrelated root commits declarations and staged source pointer movement",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup initialization failure preserves resumable state and inconsistent registration refuses deletion",
+      "name": "cleanup initialization failure preserves resumable state and inconsistent registration refuses deletion",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup origin default requires its local branch and explicit bases do not silently substitute",
+      "name": "cleanup origin default requires its local branch and explicit bases do not silently substitute",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup planning inspection errors fail closed instead of becoming idle detached or empty inventory",
+      "name": "cleanup planning inspection errors fail closed instead of becoming idle detached or empty inventory",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup preserves changed occupied symbolic and newly protected candidates and continues safe branches",
+      "name": "cleanup preserves changed occupied symbolic and newly protected candidates and continues safe branches",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup preserves squash-equivalent branches and symbolic local refs",
+      "name": "cleanup preserves squash-equivalent branches and symbolic local refs",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup protects metadata baselines and all external and managed worktree branches",
+      "name": "cleanup protects metadata baselines and all external and managed worktree branches",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup refuses unregistered and in-progress targets without topology offers",
+      "name": "cleanup refuses unregistered and in-progress targets without topology offers",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup rejects missing ambiguous symbolic and nonbranch bases without protection bypass",
+      "name": "cleanup rejects missing ambiguous symbolic and nonbranch bases without protection bypass",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup retains registered initialization baseline attachment and tracking after decline",
+      "name": "cleanup retains registered initialization baseline attachment and tracking after decline",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup shallow history deletes proven ancestors and preserves unproven ancestry without fetching",
+      "name": "cleanup shallow history deletes proven ancestors and preserves unproven ancestry without fetching",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup shared inspection failures after confirmation abort all remaining candidates",
+      "name": "cleanup shared inspection failures after confirmation abort all remaining candidates",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup treats same-name same-OID recreation as confirmed and already absent as successful",
+      "name": "cleanup treats same-name same-OID recreation as confirmed and already absent as successful",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean.test.ts::cleanup uses each repository default and cached explicit remote bases without fetching",
+      "name": "cleanup uses each repository default and cached explicit remote bases without fetching",
+      "source": "tests/integration/branch-clean.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
       "id": "tests/integration/branch-list-decision.test.ts::branch list reports baselines, upstream divergence, and missing upstream state",
       "name": "branch list reports baselines, upstream divergence, and missing upstream state",
       "source": "tests/integration/branch-list-decision.test.ts",
@@ -6778,6 +6992,50 @@
       "layer": "integration",
       "owners": [
         "tests/integration/doctor-failure.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/exec.test.ts::exec accepts dirty detached canonical targets without changing root or source Git state",
+      "name": "exec accepts dirty detached canonical targets without changing root or source Git state",
+      "source": "tests/integration/exec.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/exec.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/exec.test.ts::exec fails unavailable and foreign targets individually without preparation and continues healthy targets",
+      "name": "exec fails unavailable and foreign targets individually without preparation and continues healthy targets",
+      "source": "tests/integration/exec.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/exec.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/exec.test.ts::exec preserves literal arguments and failure effects while running unique aliases sequentially",
+      "name": "exec preserves literal arguments and failure effects while running unique aliases sequentially",
+      "source": "tests/integration/exec.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/exec.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/exec.test.ts::exec rechecks later targets after a child changes their registration",
+      "name": "exec rechecks later targets after a child changes their registration",
+      "source": "tests/integration/exec.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/exec.test.ts"
       ],
       "boundary": "owned-filesystem-or-process",
       "processBoundaryRationale": null

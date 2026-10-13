@@ -256,10 +256,10 @@ export function shortOid(dir: string, rev: string, runner: RawGitRunner = produc
 
 /** Branch name that origin/HEAD points to (e.g. "main"), or null when the default is unset or dangling. */
 export function resolveOriginHead(dir: string, runner: RawGitRunner = productionGitRunner): string | null {
-  const r = runGit(dir, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], false, undefined, runner);
+  const r = runGit(dir, ["symbolic-ref", "refs/remotes/origin/HEAD"], false, undefined, runner);
   if (!r.success) return null;
   const ref = r.stdout.trim();
-  const name = ref.startsWith("origin/") ? ref.slice("origin/".length) : "";
+  const name = ref.startsWith("refs/remotes/origin/") ? ref.slice("refs/remotes/origin/".length) : "";
   if (!name) return null;
   // A default that points at a nonexistent remote-tracking branch is not a usable baseline.
   return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${name}`], false, undefined, runner).success ? name : null;

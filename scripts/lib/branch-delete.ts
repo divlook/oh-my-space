@@ -14,12 +14,14 @@ import {
   submodulePath,
 } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
-import { gitlinkState, submoduleOperationInProgress } from "./status.js";
+import { submoduleOperationInProgress } from "./status.js";
+import { checkDeleteSourceSafety as checkSubmodulePreconditions } from "./source-safety.js";
 import { resolveBaselines, type ProtectedReason } from "./branch-baseline.js";
 import { canPrompt, guardedConfirm, guardedSelect, isCancel } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
 import { prepareAlias } from "./alias-preparation.js";
 import { runBranchList } from "./branch-list.js";
+import { runBranchClean } from "./branch-clean.js";
 import { runCheckout, runSwitch } from "./branch-ops.js";
 import { refuseInsideManagedTree } from "./tree-ops.js";
 
@@ -48,6 +50,7 @@ export async function runBranch(command: Command): Promise<number> {
       { value: "switch", label: "switch to or create a local branch in a submodule" },
       { value: "checkout", label: "check out a remote branch in a submodule" },
       { value: "delete", label: "delete a local branch in a submodule" },
+      { value: "clean", label: "clean merged local branches in a source repository" },
     ],
   });
   if (isCancel(action)) {
@@ -58,6 +61,7 @@ export async function runBranch(command: Command): Promise<number> {
   if (action === "switch") return runSwitch(undefined, undefined, {});
   if (action === "checkout") return runCheckout(undefined, undefined);
   if (action === "delete") return runBranchDelete(undefined, undefined, {});
+  if (action === "clean") return runBranchClean(undefined, {});
   return 1;
 }
 
@@ -105,25 +109,6 @@ async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: str
   return repo ? { kind: "repo", repo } : { kind: "error", code: 1 };
 }
 
-/** Reject an in-progress submodule Git operation or an unanchored detached HEAD before any deletion. */
-function checkSubmodulePreconditions(repoRoot: string, repo: Repo): { ok: true } | { ok: false; reason: string } {
-  const dir = aliasDir(repoRoot, repo.alias);
-  const op = submoduleOperationInProgress(dir);
-  if (op) {
-    return { ok: false, reason: `${repo.alias}: a ${op} is in progress inside oms/${repo.alias}. Resolve, continue, or abort it first.` };
-  }
-  if (currentBranch(dir) === null) {
-    const state = gitlinkState(repoRoot, repo.alias);
-    const anchored = state.headOid !== null && state.worktreeOid !== null && state.worktreeOid === state.headOid;
-    if (!anchored) {
-      return {
-        ok: false,
-        reason: `${repo.alias}: submodule HEAD is detached and not anchored to the recorded gitlink. Attach it with "oms branch switch ${repo.alias} <branch>" first.`,
-      };
-    }
-  }
-  return { ok: true };
-}
 
 /** Collapse per-branch protection reasons; a branch that is both current and baseline shows both. */
 function buildProtectedMap(reasons: ProtectedReason[]): Map<string, string> {

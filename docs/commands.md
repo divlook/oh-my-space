@@ -19,6 +19,7 @@ Built-in help ships with the installed CLI and is the authoritative exact refere
 | Commit source changes | `oms commit` | One source repository only |
 | Record moved source commits | `oms record` | Main project only |
 | Start a second task in one repository | `oms tree add`, `oms tree list`, `oms tree remove` | Source-repository worktrees under `.oms-tree/`, no root history change |
+| Clean merged local branches | `oms branch clean` | One source repository, no recorded-commit change |
 | Fetch, pull, or push source history | `oms fetch`, `oms pull`, `oms push` | Selected source repositories |
 | Run tests, builds, or other commands | `oms exec` | Selected canonical source checkouts. Child commands control additional effects. |
 | Remove registered repositories | `oms unsync` | Main-project registration and selected source repositories |
@@ -93,6 +94,25 @@ Listing does not switch, create, delete, merge, or push branches. It does not ch
 OMS attempts safe deletion first. Force deletion prints recovery information and checks the branch commit again before deletion.
 
 See [Branch safety](how-oms-works.md#branch-safety) before force deletion.
+
+### `oms branch clean`
+
+`oms branch clean [alias] [--base <ref>]` displays and confirms one batch of merged local branches in one source repository. Omit the alias to select interactively, even with a sole alias or from inside its checkout. There is no workspace-wide cleanup, force mode, or confirmation bypass.
+
+The **comparison base** defaults to the existing local branch named by that repository's `oms.yaml` `branch`, otherwise by its cached `origin/HEAD`. There is no fixed `main` default or remote fallback. `--base` selects an unambiguous existing direct local or remote-tracking branch, including a full ref name. It does not replace **protected baselines**. If those cannot be resolved, declare `branch` or repair `origin/HEAD` first. Cleanup does not refresh refs or reconcile remotes after preparation.
+
+```bash
+oms branch clean api                      # use the configured local comparison base
+oms branch clean api --base origin/develop # use a cached remote-tracking base
+```
+
+OMS initializes existing registrations without offering new registration. Initialization, fetched data, baseline branch creation or attachment, and tracking settings remain after decline. The plan shows full refs and commit IDs, candidates, exclusion reasons, preparation effects, and concurrency restrictions before a confirmation that defaults to No. Decline or cancellation exits `1`; candidates without an interactive terminal are preserved with exit `1`. No candidates exits `0` without prompting.
+
+Only proven ancestry in the comparison base qualifies a branch. Extra commits and non-ancestor squash or rebase results remain. The current branch, local comparison base, all protected baselines, and branches checked out in any worktree are excluded. Shallow repositories allow proven ancestors but preserve unproven history; deepen or repair it explicitly before rerunning. Unsafe source operations, detached HEAD away from the recorded commit, inconsistent registration, and unreliable inspection refuse cleanup. A staged pointer is not the recorded commit.
+
+Keep other Git or IDE branch, worktree, and configuration changes paused from confirmation waiting through completion. Expected-commit checks do not lock all repository state. Same-name/OID recreation is not distinguished, and recreation between deletion and configuration cleanup can lose the recreated branch's settings. See [Merged branch cleanup safety](how-oms-works.md#merged-branch-cleanup-safety) for the full boundary.
+
+Results distinguish deleted, already absent, preserved, failed, and not run. Deleted branches receive their full original tip and a shell-safe recreation command while the commit is available. Partial failure exits `2` without rollback or force retry. A configuration-cleanup failure remains a completed ref deletion and includes a repair command; independently safe candidates continue. After preparation, cleanup preserves remote refs, source HEAD/files/index, root tracked state, and recorded commits.
 
 ## Work on tasks in managed trees
 
