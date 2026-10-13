@@ -133,7 +133,7 @@ test("tree-ops classifies the filesystem ∪ porcelain union with foreign direct
     // (legacy), then one status probe per healthy tree in sorted order (fix-auth, task).
     const runner = queuedRunner([ok(declaredPorcelain), ok(legacyPorcelain), ok(""), ok("")]);
 
-    const trees = listManagedTrees(root, [repo("api")], runner);
+    const trees = listManagedTrees(root, [repo("api")], { dirtyAliases: "all" }, runner);
     const byPath = new Map(trees.map((tree) => [tree.path, tree]));
 
     const fixAuth = byPath.get(".oms-tree/api/fix-auth");
@@ -200,7 +200,7 @@ test("tree-ops dirty derivation is untracked-inclusive and broken entries keep n
     // healthy (clean is prunable in every report), so one status probe. Untracked output ⇒ dirty.
     const runner = queuedRunner([ok(porcelain), ok(dirtyPorcelain), ok("?? untracked.txt\n")]);
 
-    const trees = listManagedTrees(root, [repo("api")], runner);
+    const trees = listManagedTrees(root, [repo("api")], { dirtyAliases: "all" }, runner);
     const byTask = new Map(trees.map((tree) => [tree.task, tree]));
 
     const clean = byTask.get("clean");

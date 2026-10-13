@@ -126,6 +126,21 @@ test("tree add refuses duplicate paths including foreign directories, invalid na
   const unknown = run(["tree", "add", "missing", "t"], { cwd });
   assert.equal(unknown.status, 1, unknown.stdout + unknown.stderr);
   assert.match(unknown.stdout + unknown.stderr, /Unknown alias "missing"/);
+
+  // A missing directory still occupies its registered worktree slot.
+  rmSync(join(cwd, ".oms-tree", "api", "t1"), { recursive: true });
+  const api = join(cwd, "oms", "api");
+  const before = rootSnapshot(cwd);
+  const index = readFileSync(join(cwd, ".git", "index"));
+  const branch = gitOut(api, "rev-parse", "t1");
+  const registration = gitOut(api, "worktree", "list", "--porcelain");
+  const brokenDuplicate = run(["tree", "add", "api", "t1"], { cwd });
+  assert.equal(brokenDuplicate.status, 1, brokenDuplicate.stdout + brokenDuplicate.stderr);
+  assert.equal(existsSync(join(cwd, ".oms-tree", "api", "t1")), false);
+  assert.equal(gitOut(api, "rev-parse", "t1"), branch);
+  assert.equal(gitOut(api, "worktree", "list", "--porcelain"), registration);
+  assert.deepEqual(readFileSync(join(cwd, ".git", "index")), index);
+  assertRootSnapshot(cwd, before);
 });
 
 test("tree add works offline and asserts the exclude entry idempotently with no root commit", () => {
@@ -332,6 +347,22 @@ test("unsync refuses while inventory entries exist, force included, and proceeds
   const forcedOutput = forced.stdout + forced.stderr;
   assert.equal(forced.status, 1, forcedOutput);
   assert.match(forcedOutput, /managed trees exist/);
+
+  // Missing working files do not make the shared Git directory safe to delete.
+  rmSync(tree, { recursive: true });
+  const api = join(cwd, "oms", "api");
+  const index = readFileSync(join(cwd, ".git", "index"));
+  const branch = gitOut(api, "rev-parse", "t1");
+  const registration = gitOut(api, "worktree", "list", "--porcelain");
+  for (const force of [false, true]) {
+    const brokenBlocked = run(["unsync", "api", ...(force ? ["--force"] : []), "--no-commit"], { cwd });
+    assert.equal(brokenBlocked.status, 1, brokenBlocked.stdout + brokenBlocked.stderr);
+    assert.equal(existsSync(join(api, ".git")), true);
+    assert.equal(gitOut(api, "rev-parse", "t1"), branch);
+    assert.equal(gitOut(api, "worktree", "list", "--porcelain"), registration);
+    assert.deepEqual(readFileSync(join(cwd, ".git", "index")), index);
+    assertRootSnapshot(cwd, before);
+  }
 
   // A foreign entry blocks too: it occupies the namespace and may be a lost tree.
   run(["tree", "remove", "api", "t1"], { cwd });

@@ -513,7 +513,7 @@ export async function runUnsync(aliases: string[], options: UnsyncOptions): Prom
 
   // Unsync deletes the submodule's shared Git directory, which would take every attached tree's
   // branch history with it; force discards working-tree changes, not commit history.
-  const inventory = listManagedTrees(repoRoot, repos);
+  const inventory = listManagedTrees(repoRoot, repos, { dirtyAliases: [] });
   const blocked = picked
     .map((repo) => ({
       repo,

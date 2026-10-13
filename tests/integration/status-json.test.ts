@@ -56,7 +56,7 @@ test("status JSON keeps its schema and canonical workspace path through a symlin
   assert.equal(repo.error, null);
 });
 
-async function statusJsonAt(cwd: string) {
+async function statusJsonAt(cwd: string, aliases: string[] = []) {
   const originalCwd = process.cwd();
   const originalWrite = process.stdout.write;
   let output = "";
@@ -66,7 +66,7 @@ async function statusJsonAt(cwd: string) {
   }) as typeof process.stdout.write;
   try {
     process.chdir(cwd);
-    assert.equal(await runStatus([], { all: true, json: true }), 0);
+    assert.equal(await runStatus(aliases, { json: true }), 0);
   } finally {
     process.chdir(originalCwd);
     process.stdout.write = originalWrite;
@@ -112,7 +112,15 @@ test("status JSON projects branch, source, and pointer states in one Git journey
   writeFileSync(join(api, "second.txt"), "next");
   git(api, "add", "second.txt");
   git(api, "commit", "-m", "second");
-  data = await statusJsonAt(cwd);
+  data = await statusJsonAt(cwd, ["api"]);
+  assert.deepEqual(data.repos.map((repo: { alias: string }) => repo.alias), ["api"]);
+  assert.equal(data.repos[0].pin, "moved");
+  assert.deepEqual(data.root.submodulePointers.moved, ["api"]);
   assert.deepEqual(data.root.submodulePointers.split, ["api"]);
+  assert.deepEqual(data.root.submodulePointers.staged, ["api"]);
+
+  git(cwd, "add", "oms/api");
+  data = await statusJsonAt(cwd, ["api"]);
+  assert.deepEqual(data.root.submodulePointers.split, []);
   assert.deepEqual(data.root.submodulePointers.staged, ["api"]);
 });

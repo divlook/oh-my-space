@@ -114,7 +114,7 @@ export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): 
 
   // Managed-tree diagnostics: broken links get repair guidance; a missing local-exclude entry
   // would let .oms-tree/ pollute the root's untracked files until the next `oms tree add`.
-  const treeInventory = listManagedTrees(repoRoot, repos);
+  const treeInventory = listManagedTrees(repoRoot, repos, { dirtyAliases: [] });
   for (const tree of treeInventory) {
     if (tree.state === "broken") {
       log.warn(
