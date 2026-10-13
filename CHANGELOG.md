@@ -1,5 +1,35 @@
 # oh-my-space
 
+## 2.0.0
+
+### Major Changes
+
+- [#91](https://github.com/divlook/oh-my-space/pull/91) [`2fe9c72`](https://github.com/divlook/oh-my-space/commit/2fe9c72244e4e414d1330845318af9d54e221a73) Thanks [@divlook](https://github.com/divlook)! - Require Node.js `^24 || >=26`, removing support for Node 20, Node 22, and Node 25. Upgrade your Node runtime to Node 24 before installing this major OMS release; for example, run `nvm install 24` and `nvm use 24` before updating OMS.
+  
+  Node 24 is the development, release, bundle, and required CI baseline. Node 26 and later are permitted, but not every future runtime is verified; the latest-runtime CI diagnostic remains separate and non-gating.
+  
+  Upgrade the Changesets release tools to their current stable generation. Maintainer version preparation now requires pending Changesets: `npm run version` fails with exit code 1 for an empty release plan instead of succeeding without changes. Stable publication and the opt-in, HEAD-derived beta flow are unchanged.
+
+### Minor Changes
+
+- [#92](https://github.com/divlook/oh-my-space/pull/92) [`79c0af4`](https://github.com/divlook/oh-my-space/commit/79c0af444fddf7169a6186857a9f0a8a1e5698dd) Thanks [@divlook](https://github.com/divlook)! - Add `oms branch clean [alias] [--base <ref>]` for confirmed cleanup of merged local branches in one source repository. Use the repository-specific local comparison base or an explicit cached remote-tracking branch without refreshing refs or bypassing protected baselines. Exclude protected and occupied branches, revalidate each confirmed tip, and delete with expected-commit transactions. Report partial results, configuration-cleanup failures, and shell-safe recovery commands while preserving remote refs and recorded commits. Document retained preparation effects, shallow-history limits, and unsupported external concurrent mutation.
+  
+  Resolve the cached origin default by its full ref so local branches such as `origin/release` do not prevent cleanup from using the `release` baseline.
+
+### Patch Changes
+
+- [#93](https://github.com/divlook/oh-my-space/pull/93) [`b647e61`](https://github.com/divlook/oh-my-space/commit/b647e61446bf9bcb99da4b46478b3a08052e4d3d) Thanks [@divlook](https://github.com/divlook)! - Reduce repeated Git pointer inspection in JSON status by reusing each selected repository's observations within one invocation. Subsequent invocations still read fresh state; output fields and command behavior are unchanged.
+  
+  Avoid healthy-tree working-file inspection during doctor inventory while preserving complete discovery, broken-link and foreign-directory diagnostics, and tree listing/removal safeguards.
+  
+  Limit managed-tree working-file inspection to selected aliases in JSON and text status. Unfiltered status and tree listing still report the complete inventory and all dirty states.
+  
+  Skip unrelated tree working-file checks when detecting duplicate task trees. Healthy, broken, and foreign duplicates still refuse before preparation; normal creation retains its existing Git safeguards.
+  
+  Skip tree working-file checks in unsync's inventory guard. Healthy, broken, and foreign tree entries still block deletion, including with `--force`; topology transactions and recovery behavior are unchanged.
+
+- [#89](https://github.com/divlook/oh-my-space/pull/89) [`bdebc40`](https://github.com/divlook/oh-my-space/commit/bdebc40c0921697caec35564492e155ef287beb4) Thanks [@divlook](https://github.com/divlook)! - Keep file-local declarations private to reduce the internal module interface without changing CLI behavior. Simplify guarded prompt handling with per-kind result types while preserving queued-response validation, cancellation, and select defaults. Consolidate npm dist-tag parsing while retaining separate stable-update and stable/beta compatibility validation policies.
+
 ## 1.2.0
 
 ### Minor Changes
