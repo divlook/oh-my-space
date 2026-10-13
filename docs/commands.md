@@ -106,7 +106,11 @@ oms branch clean api                      # use the configured local comparison 
 oms branch clean api --base origin/develop # use a cached remote-tracking base
 ```
 
-OMS initializes existing registrations without offering new registration. Initialization, fetched data, baseline branch creation or attachment, and tracking settings remain after decline. The plan shows full refs and commit IDs, candidates, exclusion reasons, preparation effects, and concurrency restrictions before a confirmation that defaults to No. Decline or cancellation exits `1`; candidates without an interactive terminal are preserved with exit `1`. No candidates exits `0` without prompting.
+Use `oms branch clean --help` for a quick reference with examples and essential base, confirmation, and initialization guidance. The rules below and [Merged branch cleanup safety](how-oms-works.md#merged-branch-cleanup-safety) cover detailed safety, concurrency, exit codes, and recovery.
+
+OMS initializes existing registrations without offering new registration. Initialization, fetched data, baseline branch creation or attachment, and tracking settings remain after decline. When candidates exist, the plan shows full refs and commit IDs, candidates, exclusion reasons, actual preparation effects, and concurrency restrictions before a confirmation that defaults to No. Already initialized sources receive no routine preparation notice. Decline or cancellation exits `1`; candidates without an interactive terminal are preserved with exit `1`.
+
+After successful inspection, no candidates exits `0` without prompting. An already initialized source without exceptional diagnostics prints only an alias-specific no-op summary, not the base, branch inventory, or deletion-concurrency warning. Actual initialization effects and applicable safety or shallow-history diagnostics remain visible. A no-op does not mean working files are clean or all topic branches were merged; inspection failures still refuse cleanup.
 
 Only proven ancestry in the comparison base qualifies a branch. Extra commits and non-ancestor squash or rebase results remain. The current branch, local comparison base, all protected baselines, and branches checked out in any worktree are excluded. Shallow repositories allow proven ancestors but preserve unproven history; deepen or repair it explicitly before rerunning. Unsafe source operations, detached HEAD away from the recorded commit, inconsistent registration, and unreliable inspection refuse cleanup. A staged pointer is not the recorded commit.
 

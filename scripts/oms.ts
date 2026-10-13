@@ -243,7 +243,7 @@ branchCommand
   .description("Confirm deletion of merged local branches in one source repository.")
   .argument("[alias]", "declared source alias (omit to pick interactively)")
   .option("--base <ref>", "existing local or remote-tracking comparison branch")
-  .addHelpText("after", `${branchCleanHelp}${workspaceContextHelp}`)
+  .addHelpText("after", branchCleanHelp)
   .action(async (alias: string | undefined, options: { base?: string }) => {
     await exitWith(runBranchClean(alias, options));
   });
