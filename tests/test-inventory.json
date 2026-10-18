@@ -7096,6 +7096,72 @@
       "processBoundaryRationale": null
     },
     {
+      "id": "tests/integration/stable-release.test.ts::npm release completes metadata independently of publisher messages and propagates process failures",
+      "name": "npm release completes metadata independently of publisher messages and propagates process failures",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/stable-release.test.ts::stable finalization completes annotated tag-only state and preserves matching release prose on rerun",
+      "name": "stable finalization completes annotated tag-only state and preserves matching release prose on rerun",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/stable-release.test.ts::stable finalization derives current and historical publication identity from npm and committed notes",
+      "name": "stable finalization derives current and historical publication identity from npm and committed notes",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/stable-release.test.ts::stable finalization leaves conflicting metadata and non-404 read failures untouched",
+      "name": "stable finalization leaves conflicting metadata and non-404 read failures untouched",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/stable-release.test.ts::stable finalization refuses unverifiable identities and missing release evidence before writes",
+      "name": "stable finalization refuses unverifiable identities and missing release evidence before writes",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/stable-release.test.ts::stable finalization retains a valid tag after release creation failure and resumes without duplicate writes",
+      "name": "stable finalization retains a valid tag after release creation failure and resumes without duplicate writes",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
       "id": "tests/integration/status-json.test.ts::status JSON keeps its schema and canonical workspace path through a symlinked cwd",
       "name": "status JSON keeps its schema and canonical workspace path through a symlinked cwd",
       "source": "tests/integration/status-json.test.ts",

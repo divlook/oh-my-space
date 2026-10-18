@@ -165,4 +165,4 @@ Follow [Release channels](release-channels.md) for the authoritative maintainer 
 
 `prepack` runs the project's package validation before publication.
 Stable and beta channels have different publication and rollback flows.
-The [Release channels](release-channels.md) guide covers beta dry runs, dist-tag checks, stable promotion, and rollback.
+The [Release channels](release-channels.md) guide covers beta dry runs, dist-tag checks, stable promotion, and rollback, plus the GitHub CLI contents-write prerequisite, npm `gitHead`/remote-tag/Release completion checks, and metadata-only recovery after partial stable-release failure.
