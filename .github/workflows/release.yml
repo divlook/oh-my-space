@@ -19,6 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -37,7 +38,7 @@ jobs:
         with:
           version: npm run version
           publish: npm run release
-          createGithubReleases: true
+          createGithubReleases: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"

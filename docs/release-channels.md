@@ -103,6 +103,13 @@ The short hash creates a new prerelease version without a manual sequence number
 ## Stable promotion
 
 Promote a tested beta through publication of a stable SemVer version to `latest`.
+
+Stable completion requires npm publication, a remote `v<version>` tag at the published npm `gitHead`, and a published, non-prerelease GitHub Release for that tag.
+Use the GitHub CLI (`gh`) authenticated to `github.com` with contents-write access to `divlook/oh-my-space`.
+For a local release, authenticate with `gh auth login` or supply a token through `GH_TOKEN` or `GITHUB_TOKEN`.
+Use a full-history checkout with the published source commit and an up-to-date `origin/main` ref available locally.
+The release workflow supplies full checkout history and its contents-write token; its test, package, and npm OIDC/provenance gates remain in place.
+
 Do not retag the beta version as stable.
 Confirm that pending Changesets describe the intended stable release before running `npm run version`.
 This command applies the release intent to package metadata and the changelog, consumes the Changesets, and refreshes the lockfile; it does not publish.
@@ -118,6 +125,77 @@ npm view oh-my-space dist-tags
 
 Check that `latest` points to the intended stable version.
 Check that `latest` does not point to a prerelease such as `1.0.0-beta.sha-a1b2c3d`.
+
+`npm run release` runs `changeset publish` first and finalizes GitHub metadata only if publication succeeds.
+The finalizer also runs when Changesets successfully reports that the version is already published.
+It does not parse Changesets publication messages.
+The finalizer, not Changesets Action's built-in GitHub Release creation, owns stable remote metadata.
+
+### Stable completion checks
+
+Set `VERSION` to the exact stable version being checked:
+
+```bash
+VERSION=2.0.1
+npm view oh-my-space@"$VERSION" name version gitHead --json
+npm view oh-my-space dist-tags
+git ls-remote https://github.com/divlook/oh-my-space.git \
+  "refs/tags/v${VERSION}" "refs/tags/v${VERSION}^{}"
+gh api --hostname github.com --method GET \
+  "repos/divlook/oh-my-space/releases/tags/v${VERSION}" \
+  --jq '{tag_name, draft, prerelease, html_url, body}'
+```
+
+Confirm all of the following:
+
+- npm returns `name: "oh-my-space"`, the exact requested version, and a full source commit in `gitHead`.
+- `latest` points to the intended stable version, not a prerelease.
+- The remote `v<version>` tag resolves to that exact `gitHead`. For a lightweight tag, compare the tag line; for an annotated tag, compare the peeled `^{}` line.
+- The GitHub Release has the exact tag, `draft: false`, and `prerelease: false`. Its body contains that version's changelog entry from the published source commit, not a later checkout's notes.
+
+To inspect the historical notes, set `FULLSHA` to npm's `gitHead` and run `git show "${FULLSHA}:CHANGELOG.md"`.
+Check the section headed by the exact version.
+A successful npm publish or Changesets Action status alone does not establish stable release completion.
+
+### Metadata-only recovery
+
+If npm publication succeeded but GitHub completion failed, do not republish npm or move dist-tags.
+The release command exits nonzero and identifies the incomplete phase and a metadata-only command:
+
+```bash
+node scripts/finalize-stable-release.mjs --version VERSION --commit FULLSHA
+```
+
+Replace `VERSION` with the published stable version and `FULLSHA` with its full, 40-character npm `gitHead`.
+Both options are required for explicit historical recovery.
+With neither option, the finalizer selects the current package version and derives its source commit from exact npm metadata; it does not assume that current `HEAD` is the published commit.
+
+Before writing to `divlook/oh-my-space`, the finalizer verifies the exact npm package name, version, and `gitHead`.
+It requires that commit to belong to `origin/main` history, using local `main` only if the remote-tracking ref is absent.
+It reads `package.json` and the matching nonempty `CHANGELOG.md` version section from that commit.
+Missing evidence, prerelease versions, mismatched identities, unavailable authentication, and API errors stop completion rather than selecting another commit.
+Resolve the reported evidence or access failure before repeating the metadata-only command.
+
+The finalizer inspects both remote tag and Release before any write, creates only missing metadata, and verifies the resulting remote state.
+Matching lightweight or annotated tags are preserved, as are matching published stable Releases and their existing bodies.
+It never moves or deletes a conflicting tag, overwrites release notes, or converts an existing draft/prerelease Release.
+A conflict requires maintainer investigation, not a forced rerun.
+Historical recovery does not force the recovered Release to become GitHub's latest.
+
+If tag creation succeeds but Release creation fails, the valid tag remains.
+Repeat the same metadata-only command after resolving the failure; completion resumes without duplicate Releases or rewriting matching metadata.
+The operation does not change package files, publish npm packages, change dist-tags, or delete completed metadata.
+
+The two historical recoveries use these published source commits, oldest first:
+
+```bash
+node scripts/finalize-stable-release.mjs --version 2.0.0 --commit b2a86e8876ac76ffc8e4daed8146f82fe93613d1
+node scripts/finalize-stable-release.mjs --version 2.0.1 --commit 58af8b34c6d2801ea9900e8ff4275d3c2e70c1d6
+```
+
+Inspect remote state immediately before each recovery and repeat the stable completion checks afterward for each version.
+For these historical versions, compare npm versions and dist-tags before and after recovery using `npm view oh-my-space versions --json` and `npm view oh-my-space dist-tags --json`; neither should change because of recovery.
+Do not require `latest` to move back to a historical version.
 
 ## Rollback
 

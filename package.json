@@ -61,7 +61,7 @@
     "prepack": "node scripts/prepack.mjs",
     "changeset": "changeset",
     "version": "changeset version && npm install --package-lock-only --ignore-scripts",
-    "release": "changeset publish",
+    "release": "changeset publish && node scripts/finalize-stable-release.mjs",
     "release:beta": "node scripts/publish-beta.mjs"
   },
   "devDependencies": {
