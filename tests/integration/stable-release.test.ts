@@ -32,11 +32,14 @@ const fail = (status, message = 'fixture failure') => { console.error('gh: ' + m
 const git = (...args) => cp.execFileSync('git', ['--git-dir', config.remote, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const output = (value) => console.log(JSON.stringify(value));
 if (binary === 'npm') {
-  record({ binary, args });
   if (args[0] !== 'view' || args[1] !== 'oh-my-space@' + config.requestVersion) throw new Error('Unexpected npm request: ' + args.join(' '));
-  const lookups = fs.readFileSync(path.join(directory, 'calls.jsonl'), 'utf8').trim().split('\\n').filter((line) => JSON.parse(line).binary === 'npm').length;
-  const missing = config.npmNotFound && (lookups <= config.npmNotFound || !args.includes('--prefer-online'));
-  const errorCode = missing ? 'E404' : config.npmErrorCode;
+  const lookups = fs.readFileSync(path.join(directory, 'calls.jsonl'), 'utf8').trim().split('\\n').filter((line) => line && JSON.parse(line).binary === 'npm').length + 1;
+  const elapsed = Number(fs.readFileSync(path.join(directory, 'elapsed-ms'), 'utf8'));
+  const missing = (config.npmVisibleAfterMs !== undefined && elapsed < config.npmVisibleAfterMs)
+    || (config.npmNotFound && (lookups <= config.npmNotFound || !args.includes('--prefer-online')));
+  const errorCode = config.npmErrorAfterMs !== undefined && elapsed >= config.npmErrorAfterMs
+    ? 'E403' : missing ? 'E404' : config.npmErrorCode;
+  record({ binary, args, elapsed, errorCode });
   if (errorCode) {
     console.error('npm error code ' + errorCode);
     if (config.npmErrorOutput !== 'stderr') output({ error: { code: errorCode, summary: 'Registry metadata not available' } });
@@ -147,15 +150,24 @@ function fixture(options: FixtureOptions = {}) {
   configure({});
   writeFileSync(join(state, "releases.json"), "{}");
   writeFileSync(join(state, "calls.jsonl"), "");
+  writeFileSync(join(state, "elapsed-ms"), "0");
   const fastTimers = join(state, "fast-timers.mjs");
-  if (options.fastRetries) writeFileSync(fastTimers, "globalThis.setTimeout = (callback, _delay, ...args) => setImmediate(callback, ...args);\n");
+  if (options.fastRetries) {
+    writeFileSync(fastTimers, `import { readFileSync, writeFileSync } from "node:fs";
+const clock = ${JSON.stringify(join(state, "elapsed-ms"))};
+if (process.argv[1]?.endsWith("/finalize-stable-release.mjs")) globalThis.setTimeout = (callback, delay, ...args) => {
+  writeFileSync(clock, String(Number(readFileSync(clock, "utf8")) + delay));
+  return setImmediate(callback, ...args);
+};
+`);
+    env.NODE_OPTIONS = `--import=${fastTimers}`;
+  }
   const calls = () => readFileSync(join(state, "calls.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
   const writes = () => calls().filter((call) => call.binary === "gh" && call.method !== "GET");
   const releases = () => JSON.parse(readFileSync(join(state, "releases.json"), "utf8"));
   const setRelease = (body: Record<string, unknown>) => writeFileSync(join(state, "releases.json"), JSON.stringify({ [tag]: { id: 1, tag_name: tag, draft: false, prerelease: false, body: "Maintainer-curated notes.", ...body } }));
   const remoteTag = () => execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", `refs/tags/${tag}^{commit}`], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const run = (args: string[] = []) => spawnSync(process.execPath, [
-    ...(options.fastRetries ? ["--import", fastTimers] : []),
     join(root, "scripts", "finalize-stable-release.mjs"),
     ...args,
   ], { cwd: root, env, encoding: "utf8", timeout: options.fastRetries ? 10_000 : undefined });
@@ -176,6 +188,8 @@ interface ApiCall {
   binary: string;
   method?: string;
   endpoint: string;
+  elapsed?: number;
+  errorCode?: string;
 }
 
 interface Release {
@@ -268,7 +282,6 @@ test("stable finalization waits for newly published npm metadata before GitHub w
 
 test("stable finalization bounds visibility retries and rejects other registry failures without writes", () => {
   for (const scenario of [
-    { config: { npmNotFound: 99 }, attempts: 6 },
     { config: { npmErrorCode: "E401" }, attempts: 1 },
     { config: { npmErrorCode: "E403" }, attempts: 1 },
     { config: { npmErrorCode: "E500" }, attempts: 1 },
@@ -282,6 +295,51 @@ test("stable finalization bounds visibility retries and rejects other registry f
     assert.deepEqual(f.writes(), []);
     assert.deepEqual(f.releases(), {});
     assert.throws(() => f.remoteTag());
+  }
+});
+
+test("stable release automatically completes after metadata visibility exceeds 31 seconds without republishing", () => {
+  assert.ok(realNpm);
+  const f = fixture({ fastRetries: true });
+  f.configure({ npmVisibleAfterMs: 180_000 });
+  const result = spawnSync(realNpm, ["run", "release"], { cwd: f.root, env: f.env, encoding: "utf8", timeout: 10_000 });
+  success(result);
+  complete(f);
+  const calls = f.calls();
+  assert.equal(calls.filter((call) => call.binary === "changeset").length, 1);
+  const queries = calls.filter((call) => call.binary === "npm");
+  assert.ok(queries.length <= 10);
+  assert.ok(queries.some((call) => call.errorCode === "E404" && call.elapsed! < 180_000));
+  const elapsed = Number(readFileSync(join(f.root, ".fixture", "elapsed-ms"), "utf8"));
+  assert.ok(elapsed >= 180_000 && elapsed <= 361_000);
+  assert.equal(calls.findIndex((call) => call.binary === "gh"), calls.findLastIndex((call) => call.binary === "npm") + 1);
+  const before = f.writes().length;
+  success(f.recover());
+  assert.equal(f.writes().length, before);
+});
+
+test("stable finalization stops on late auth failure and exhausts invisible metadata truthfully", () => {
+  for (const authFailure of [true, false]) {
+    const f = fixture({ fastRetries: true });
+    f.configure({ npmVisibleAfterMs: 400_000, ...(authFailure ? { npmErrorAfterMs: 60_000 } : {}) });
+    const result = f.run();
+    failure(result);
+    assert.match(result.stderr, /Metadata-only recovery:/);
+    const elapsed = Number(readFileSync(join(f.root, ".fixture", "elapsed-ms"), "utf8"));
+    const queries = f.calls().filter((call) => call.binary === "npm");
+    if (authFailure) {
+      const failureIndex = queries.findIndex((call) => call.errorCode === "E403");
+      assert.ok(failureIndex > 0);
+      assert.equal(failureIndex, queries.length - 1);
+      assert.equal(elapsed, queries[failureIndex].elapsed);
+      assert.ok(elapsed >= 60_000 && elapsed <= 361_000);
+    } else {
+      assert.equal(elapsed, 361_000);
+      assert.equal(queries.length, 10);
+    }
+    assert.equal(f.calls().filter((call) => call.binary === "gh").length, 0);
+    assert.deepEqual(f.writes(), []);
+    assert.match(result.stderr, authFailure ? /E403/ : /E404/);
   }
 });
 

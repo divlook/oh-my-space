@@ -132,11 +132,12 @@ It does not parse Changesets publication messages.
 The finalizer, not Changesets Action's built-in GitHub Release creation, owns stable remote metadata.
 
 The finalizer uses `npm view --prefer-online` to revalidate publication metadata instead of relying on a fresh local cache entry.
-If npm reports `E404`, it makes up to six queries, waiting 1, 2, 4, 8, and 16 seconds between them.
-Those waits total 31 seconds, excluding request time.
+If npm reports `E404`, it makes up to ten queries, waiting 1, 2, 4, 8, 16, 30, 60, 120, and 120 seconds between them.
+Those waits total 361 seconds, excluding request time; metadata-only polling continues automatically beyond the initial 31-second visibility window.
 Other command errors, malformed metadata, and package/version/commit mismatches fail without this retry.
 GitHub metadata writes begin only after publication identity and source history are verified.
-If visibility retries are exhausted, use the metadata-only recovery below after npm exposes the published version; do not republish it.
+Recovery never republishes npm or changes dist-tags. Successful finalization returns success to the original release command.
+If visibility retries are exhausted, the command fails and provides the metadata-only recovery below; do not republish it.
 
 ### Stable completion checks
 

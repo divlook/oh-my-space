@@ -7096,8 +7096,30 @@
       "processBoundaryRationale": null
     },
     {
+      "id": "tests/integration/stable-release.test.ts::stable finalization stops on late auth failure and exhausts invisible metadata truthfully",
+      "name": "stable finalization stops on late auth failure and exhausts invisible metadata truthfully",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
       "id": "tests/integration/stable-release.test.ts::stable finalization waits for newly published npm metadata before GitHub writes",
       "name": "stable finalization waits for newly published npm metadata before GitHub writes",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/stable-release.test.ts::stable release automatically completes after metadata visibility exceeds 31 seconds without republishing",
+      "name": "stable release automatically completes after metadata visibility exceeds 31 seconds without republishing",
       "source": "tests/integration/stable-release.test.ts",
       "layer": "integration",
       "owners": [

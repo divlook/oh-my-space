@@ -7,7 +7,7 @@ import { PACKAGE_NAME } from "./lib/package-info.js";
 const repository = "divlook/oh-my-space";
 const registry = "https://registry.npmjs.org";
 const apiRoot = `repos/${repository}`;
-const publicationRetryDelaysMs = [1000, 2000, 4000, 8000, 16000];
+const publicationRetryDelaysMs = [1000, 2000, 4000, 8000, 16000, 30000, 60000, 120000, 120000];
 let phase = "input validation";
 let version;
 let commit;
