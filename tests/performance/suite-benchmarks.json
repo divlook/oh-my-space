@@ -68,6 +68,40 @@
       "varianceMs2": 156478105,
       "maxMs": 166384,
       "gating": true
+    },
+    {
+      "label": "operation-marker-batching-node24",
+      "measuredAt": "2026-11-07T06:00:53.919Z",
+      "runtime": "v24.21.0",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        116765,
+        141125,
+        139420
+      ],
+      "medianMs": 139420,
+      "varianceMs2": 123285072,
+      "maxMs": 141125,
+      "gating": true
+    },
+    {
+      "label": "git-inspection-batching-node24",
+      "measuredAt": "2026-11-07T06:21:47.384Z",
+      "runtime": "v24.21.0",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        165302,
+        162731,
+        176075
+      ],
+      "medianMs": 165302,
+      "varianceMs2": 33414434,
+      "maxMs": 176075,
+      "gating": true
     }
   ]
 }

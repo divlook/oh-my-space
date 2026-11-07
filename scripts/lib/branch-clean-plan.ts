@@ -41,14 +41,11 @@ function captureContext(root: string, alias: string): Context {
   if (!new RegExp(`^160000 [0-9a-f]{40,64} 0\\t${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\0$`).test(index.stdout)) {
     throw new Error(`Selected registration is inconsistent; run "oms sync ${alias}" first.`);
   }
-  const keyPattern = `^submodule\\.${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`;
+  const keyPrefix = `submodule.${path}.`;
   const snapshots: string[] = [];
   for (const args of [["--blob", "HEAD:.gitmodules"], ["--blob", ":.gitmodules"], ["--file", ".gitmodules"], ["--local"]]) {
-    checked(root, ["config", ...args, "--list"], "Cannot inspect selected registration configuration");
-    const result = runGit(root, ["config", ...args, "--null", "--get-regexp", keyPattern]);
-    const absentLocal = args[0] === "--local" && result.exitCode === 1 && !result.stderr.trim();
-    if ((!result.success && !absentLocal) || result.stderr.trim()) throw new Error("Selected registration information could not be inspected; repair registration with oms sync, then retry.");
-    const entries = result.stdout.split("\0").filter(Boolean).sort();
+    const result = checked(root, ["config", ...args, "--null", "--list"], "Cannot inspect selected registration configuration");
+    const entries = result.stdout.split("\0").filter((entry) => entry.startsWith(keyPrefix)).sort();
     if (args[0] !== "--local" && !entries.includes(`submodule.${path}.path\n${path}`)) throw new Error("Selected registration path changed or is inconsistent; run oms sync first.");
     snapshots.push(JSON.stringify(entries));
   }

@@ -119,6 +119,13 @@ The benchmark scripts update these files. Preserve reviewed historical measureme
 Acceptance budgets remain a three-run local median of at most 110 seconds, no local run above 135 seconds, and a cache-miss Node 24 CI Test step of at most 55 seconds.
 Use `--gating` with at least three runs for local Node 24 acceptance, or `--ci-gating` for the Node 24 CI budget.
 
+`operation-inspection.json` records compiled-library Git call counts for operation-marker checks and confirmed cleanup.
+`scripts/lib/git-operation-state.ts` resolves all requested marker paths with one Git invocation per inspection, then checks each marker independently.
+Each inspection still resolves paths afresh, including every cleanup candidate revalidation; it does not cache operation state across mutations or confirmation.
+Git emits newline-delimited paths, so Git directories containing newlines retain individual path lookups.
+Baseline inspection similarly parses each collected `.gitmodules` source once with Git, preserving duplicate-value checks and separate working-tree, index, and HEAD observations.
+Cleanup registration snapshots also validate and collect each configuration source in one Git query, without removing per-candidate revalidation.
+
 ### Workspace inspection measurements
 
 `status-inspection.json` records production-bundle Git calls, outputs, and three-run median/range timings separately from suite timings. JSON status now collects each selected alias's pointer state once per invocation; later invocations read it again. The A measurements halve root pointer HEAD/index/conflict reads without removing root or source working-file reads.
