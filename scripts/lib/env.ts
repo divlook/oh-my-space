@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { DOCS_REPO_BLOB_BASE } from "./constants.js";
 import type { SkillReference } from "./skill-metadata.js";
 
-/** Absolute path of this module's file; the single source for import.meta.url across the CLI. */
 export const moduleFilePath = fileURLToPath(import.meta.url);
 
 export const packageRoot = resolve(dirname(moduleFilePath), "..");
@@ -53,7 +52,6 @@ export function readPackageVersion(): string {
   return pkg?.version ?? "0.0.0";
 }
 
-/** The commit baked in at build time, or null when unavailable (dev/no-git build). */
 function readBuildCommit(): string | null {
   const info = readJson<{ commit?: string | null }>(
     join(dirname(moduleFilePath), "build-info.json"),
@@ -61,7 +59,6 @@ function readBuildCommit(): string | null {
   return info?.commit ?? null;
 }
 
-/** Complete published skill references baked in at build time, or null when unavailable. */
 export function readSkillReferences(): Record<string, SkillReference> | null {
   const mocked = testEnv("OMS_TEST_SKILL_REFERENCES");
   if (mocked !== undefined) {
@@ -75,7 +72,6 @@ export function readSkillReferences(): Record<string, SkillReference> | null {
   return info?.skills ?? null;
 }
 
-/** Clickable GitHub permalink for a repo doc, pinned to the build commit; falls back to the version tag. */
 export function docUrl(relPath: string): string {
   const ref = readBuildCommit() ?? `v${readPackageVersion()}`;
   return `${DOCS_REPO_BLOB_BASE}/${ref}/${relPath}`;

@@ -1,12 +1,10 @@
 import { execFileSync, spawn } from "node:child_process";
-import { once } from "node:events";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import getReleasePlan from "@changesets/get-release-plan";
 import { selectBetaBaseVersion } from "./lib/beta-release-plan.js";
 import { PACKAGE_NAME } from "./lib/package-info.js";
+import { betaReleaseEnvironment, temporaryBetaMetadata } from "./verification/beta-metadata.mjs";
 
-const PACKAGE_JSON = "package.json";
-const PACKAGE_LOCK = "package-lock.json";
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
@@ -17,20 +15,18 @@ if (args.publish && args.allowDirty) {
   fail("--allow-dirty is only supported for dry-run verification and cannot be combined with --publish.");
 }
 
-const packageJsonOriginal = readFileSync(PACKAGE_JSON, "utf8");
-const packageLockOriginal = readFileSync(PACKAGE_LOCK, "utf8");
-const packageJson = JSON.parse(packageJsonOriginal);
+const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 let baseVersion;
 try {
   baseVersion = selectBetaBaseVersion(await getReleasePlan(process.cwd()), packageJson.version);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
-let shouldRestore = false;
 let activeChild;
+let interrupted;
 
-process.once("SIGINT", () => restoreAndExit("SIGINT", 130));
-process.once("SIGTERM", () => restoreAndExit("SIGTERM", 143));
+process.once("SIGINT", () => interrupt("SIGINT", 130));
+process.once("SIGTERM", () => interrupt("SIGTERM", 143));
 
 console.log(`Changesets stable target: ${baseVersion}`);
 if (!args.allowDirty && gitStatus().length > 0) {
@@ -45,24 +41,22 @@ console.log(`Preparing ${PACKAGE_NAME}@${betaVersion}`);
 console.log(`Source commit: ${commit}`);
 console.log(`Mode: ${args.publish ? "publish" : "dry-run"}`);
 
+const metadata = temporaryBetaMetadata(betaVersion);
 try {
-  writePackageVersions(betaVersion);
-  shouldRestore = true;
-  if (args.publish) {
-    await run("npm", ["publish", "--tag", "beta"]);
-    await run("npm", ["view", PACKAGE_NAME, "dist-tags"]);
-  } else {
-    await run("npm", ["pack", "--dry-run"]);
-    console.log("Dry-run complete. Re-run with --publish to publish this beta version.");
-  }
+  await metadata.run(async () => {
+    if (args.publish) {
+      await run("npm", ["publish", "--tag", "beta"]);
+      await run("npm", ["view", PACKAGE_NAME, "dist-tags"]);
+    } else {
+      await run("npm", ["pack", "--dry-run"]);
+      console.log("Dry-run complete. Re-run with --publish to publish this beta version.");
+    }
+  });
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-} finally {
-  restorePackageFiles();
+  process.exitCode = interrupted?.code ?? 1;
 }
 
-/** Parses supported CLI flags. */
 function parseArgs(argv) {
   const parsed = { publish: false, allowDirty: false, help: false };
   for (const arg of argv) {
@@ -75,68 +69,46 @@ function parseArgs(argv) {
 }
 
 
-/** Runs a command inheriting stdio and exits on failure. */
 async function run(command, args) {
-  const child = spawn(command, args, {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-    env: { ...process.env, OMS_BETA_SOURCE_VERSION: packageJson.version },
+  if (interrupted) throw new Error(`Interrupted by ${interrupted.signal}`);
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: "inherit",
+      shell: process.platform === "win32",
+      env: betaReleaseEnvironment(metadata.sourceVersion),
+    });
+    activeChild = child;
+    let spawnError;
+    child.on("error", (error) => { spawnError = error; });
+    child.on("close", (status, signal) => {
+      activeChild = undefined;
+      if (spawnError) return reject(spawnError);
+      if (status === 0 && !interrupted) return resolve();
+      const detail = interrupted ? `signal ${interrupted.signal}` : status === null ? `signal ${signal ?? "unknown"}` : `exit ${status}`;
+      reject(new Error(`${command} ${args.join(" ")} failed with ${detail}`));
+    });
   });
-  activeChild = child;
-  try {
-    const [status, signal] = await once(child, "exit");
-    if (status === 0) return;
-    const detail = status === null ? `signal ${signal ?? "unknown"}` : `exit ${status}`;
-    throw new Error(`${command} ${args.join(" ")} failed with ${detail}`);
-  } finally {
-    activeChild = undefined;
-  }
 }
 
-/** Writes the temporary beta version to package metadata. */
-function writePackageVersions(version) {
-  const nextPackageJson = JSON.parse(packageJsonOriginal);
-  const nextPackageLock = JSON.parse(packageLockOriginal);
-  nextPackageJson.version = version;
-  nextPackageLock.version = version;
-  if (nextPackageLock.packages?.[""]) nextPackageLock.packages[""].version = version;
-  writeFileSync(PACKAGE_JSON, `${JSON.stringify(nextPackageJson, null, 2)}\n`);
-  writeFileSync(PACKAGE_LOCK, `${JSON.stringify(nextPackageLock, null, 2)}\n`);
-}
-
-/** Restores package metadata after the temporary publish version is no longer needed. */
-function restorePackageFiles() {
-  if (!shouldRestore) return;
-  writeFileSync(PACKAGE_JSON, packageJsonOriginal);
-  writeFileSync(PACKAGE_LOCK, packageLockOriginal);
-  shouldRestore = false;
-}
-
-/** Restores package metadata before exiting from a signal. */
-function restoreAndExit(signal, code) {
-  restorePackageFiles();
+function interrupt(signal, code) {
+  interrupted = { signal, code };
   activeChild?.kill(signal);
-  process.exit(code);
 }
 
-/** Runs a git command and returns trimmed stdout. */
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
 
-/** Returns porcelain status output. */
 function gitStatus() {
   return git("status", "--porcelain");
 }
 
 
-/** Prints an error and exits. */
 function fail(message) {
   console.error(message);
   process.exit(1);
 }
 
-/** Prints command usage. */
 function printHelp() {
   console.log(`Usage: npm run release:beta -- [--publish] [--allow-dirty]
 

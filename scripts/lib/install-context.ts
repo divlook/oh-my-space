@@ -2,18 +2,26 @@ import { existsSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { PACKAGE_NAME } from "./constants.js";
 import { moduleFilePath, normalizePath, packageRoot, readJson, runtimePlatform, testEnv } from "./env.js";
-import type { InstallContext, PackageManager, RuntimeEvidence, UpdateCommand } from "./types.js";
+import { formatCommand, packageInstallCommand, type PackageManager, type UpdateCommand } from "./package-install.js";
 
-export function formatCommand(command: UpdateCommand): string {
-  return [command.executable, ...command.args].join(" ");
-}
+export type InstallContext = {
+  label: string;
+  guidance: string[];
+  warnings: string[];
+} & (
+  | { kind: "global"; manager: PackageManager; updateCommand: UpdateCommand }
+  | { kind: "project" | "ephemeral" | "development" | "unknown"; manager?: never; updateCommand?: never }
+);
 
-export function globalUpdateCommand(manager: PackageManager): UpdateCommand {
-  if (manager === "npm") return { executable: "npm", args: ["install", "-g", `${PACKAGE_NAME}@latest`] };
-  if (manager === "pnpm") return { executable: "pnpm", args: ["add", "-g", `${PACKAGE_NAME}@latest`] };
-  if (manager === "yarn") return { executable: "yarn", args: ["global", "add", `${PACKAGE_NAME}@latest`] };
-  return { executable: "bun", args: ["add", "-g", `${PACKAGE_NAME}@latest`] };
-}
+export type RuntimeEvidence = {
+  packageRoot: string;
+  realPackageRoot: string;
+  runningBin: string;
+  realRunningBin: string;
+  pathBin: string | null;
+  realPathBin: string | null;
+  packageName: string | null;
+};
 
 function safeRealpath(path: string): string {
   try {
@@ -93,12 +101,6 @@ function collectRuntimeEvidence(): RuntimeEvidence {
   };
 }
 
-function commandForProject(manager: PackageManager, dev: boolean): string {
-  if (manager === "npm") return `npm install ${dev ? "--save-dev " : ""}${PACKAGE_NAME}@latest`;
-  if (manager === "pnpm") return `pnpm add ${dev ? "-D " : ""}${PACKAGE_NAME}@latest`;
-  if (manager === "yarn") return `yarn add ${dev ? "--dev " : ""}${PACKAGE_NAME}@latest`;
-  return `bun add ${dev ? "-d " : ""}${PACKAGE_NAME}@latest`;
-}
 
 function inferProjectManager(projectRoot: string, pkg: { packageManager?: string }): PackageManager {
   const declared = pkg.packageManager?.split("@")[0];
@@ -111,16 +113,16 @@ function inferProjectManager(projectRoot: string, pkg: { packageManager?: string
 
 function projectGuidance(packageRootPath: string): string[] {
   const projectRoot = findPackageRoot(dirname(packageRootPath));
-  if (!projectRoot) return [`npm install --save-dev ${PACKAGE_NAME}@latest`];
+  if (!projectRoot) return [formatCommand(packageInstallCommand("npm", { scope: "project", dev: true }))];
   const pkg = readJson<{
     packageManager?: string;
     dependencies?: Record<string, unknown>;
     devDependencies?: Record<string, unknown>;
   }>(join(projectRoot, "package.json"));
-  if (!pkg) return [`npm install --save-dev ${PACKAGE_NAME}@latest`];
+  if (!pkg) return [formatCommand(packageInstallCommand("npm", { scope: "project", dev: true }))];
   const manager = inferProjectManager(projectRoot, pkg);
   const dev = !(pkg.dependencies && PACKAGE_NAME in pkg.dependencies);
-  return [commandForProject(manager, dev)];
+  return [formatCommand(packageInstallCommand(manager, { scope: "project", dev }))];
 }
 
 function pathParts(path: string): string[] {
@@ -210,6 +212,10 @@ function globalManagerFromPaths(evidence: RuntimeEvidence): PackageManager | nul
   return managers.size === 1 ? [...managers][0] : null;
 }
 
+function fallbackInstallGuidance(): string[] {
+  return [formatCommand(packageInstallCommand("npm")), formatCommand(packageInstallCommand("pnpm"))];
+}
+
 export function detectInstallContext(): InstallContext {
   const mocked = testEnv("OMS_TEST_INSTALL_CONTEXT");
   if (mocked !== undefined) return JSON.parse(mocked) as InstallContext;
@@ -220,7 +226,7 @@ export function detectInstallContext(): InstallContext {
     return {
       kind: "unknown",
       label: `unknown install (package root is not ${PACKAGE_NAME})`,
-      guidance: [`npm install -g ${PACKAGE_NAME}@latest`, `pnpm add -g ${PACKAGE_NAME}@latest`],
+      guidance: fallbackInstallGuidance(),
       warnings,
     };
   }
@@ -234,7 +240,7 @@ export function detectInstallContext(): InstallContext {
     return {
       kind: "ephemeral",
       label: "temporary runner install",
-      guidance: [`Run ${PACKAGE_NAME} with @latest, or install it globally with npm install -g ${PACKAGE_NAME}@latest.`],
+      guidance: [`Run ${PACKAGE_NAME} with @latest, or install it globally with ${formatCommand(packageInstallCommand("npm"))}.`],
       warnings,
     };
   }
@@ -251,7 +257,7 @@ export function detectInstallContext(): InstallContext {
   if (normalizePath(evidence.realPackageRoot).includes(`/node_modules/${PACKAGE_NAME}`)) {
     const manager = globalManagerFromPaths(evidence);
     if (manager && isPackageRootNamed(evidence.realPackageRoot)) {
-      const updateCommand = globalUpdateCommand(manager);
+      const updateCommand = packageInstallCommand(manager);
       return {
         kind: "global",
         label: `global ${manager} install`,
@@ -265,7 +271,7 @@ export function detectInstallContext(): InstallContext {
       return {
         kind: "unknown",
         label: "unknown install context",
-        guidance: [`npm install -g ${PACKAGE_NAME}@latest`, `pnpm add -g ${PACKAGE_NAME}@latest`],
+        guidance: fallbackInstallGuidance(),
         warnings,
       };
     }
@@ -280,7 +286,15 @@ export function detectInstallContext(): InstallContext {
   return {
     kind: "unknown",
     label: "unknown install context",
-    guidance: [`npm install -g ${PACKAGE_NAME}@latest`, `pnpm add -g ${PACKAGE_NAME}@latest`],
+    guidance: fallbackInstallGuidance(),
     warnings,
   };
+}
+
+export function installGuidanceManager(context: InstallContext): PackageManager | null {
+  return context.kind === "global" ? context.manager : null;
+}
+
+export function automaticUpdateCommand(context: InstallContext) {
+  return context.kind === "global" ? context.updateCommand : null;
 }

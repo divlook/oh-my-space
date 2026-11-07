@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { discoverTestContracts, validateTestInventory } from "../../scripts/test-inventory-lib.mjs";
+import { validateTestInventory } from "../../scripts/test-inventory-lib.mjs";
 
 const contract = {
   id: "tests/example.test.js::example contract",
@@ -80,9 +80,3 @@ test("inventory validation requires ordered positive local and CI performance bu
   assert.match(error, /Local maximum performance budget is below the local median budget/);
 });
 
-test("discovery reconciles every preparation contract to exactly one stable shard", () => {
-  const root = process.cwd();
-  const preparation = discoverTestContracts(root).filter((entry: typeof contract) => entry.source === "tests/cli-preparation.contracts.js");
-  assert.equal(new Set(preparation.map((entry: typeof contract) => entry.id)).size, preparation.length);
-  assert.ok(preparation.every((entry: typeof contract) => entry.owners.length === 1));
-});

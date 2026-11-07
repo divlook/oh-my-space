@@ -8,15 +8,20 @@ import {
   runSub,
 } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
-import { pickBranch, resolveInitializedAlias } from "./prompts.js";
+import { pickBranch, selectRepoAlias } from "./prompts.js";
+import { prepareAlias } from "./alias-preparation.js";
 import type { CheckoutOptions } from "./types.js";
-import { refuseInsideManagedTree } from "./tree-ops.js";
+import { refuseInsideManagedTree } from "./tree-context.js";
 
-/**
- * LOCAL branch management: switch the submodule to an existing local branch or create a new one.
- * No remote is consulted — creating a brand-new branch needs no remote precondition and sets no
- * upstream (that is checkout's job). Omitting alias and/or branch prompts for them interactively.
- */
+async function switchExisting(repoRoot: string, alias: string, target: string): Promise<number> {
+  log.step(`${alias}: git switch ${target}`);
+  const result = runSub(repoRoot, alias, ["switch", target], true);
+  if (!result.success) return 2;
+  log.success(`${alias}: on ${target}`);
+  return 0;
+}
+
+/** Local creation does not fetch or configure upstream tracking. */
 export async function runSwitch(
   alias: string | undefined,
   branch: string | undefined,
@@ -27,8 +32,10 @@ export async function runSwitch(
   const { repos, repoRoot } = loaded;
   if (refuseInsideManagedTree(repoRoot)) return 1;
 
-  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "branch switch");
+  const repo = await selectRepoAlias(repos, alias, "branch switch");
   if (!repo) return 1;
+  const preparation = await prepareAlias(repoRoot, repo, { command: "branch switch", topologyOffer: true });
+  if (!preparation.ok) return 1;
   const dir = aliasDir(repoRoot, repo.alias);
 
   let target = branch;
@@ -38,15 +45,8 @@ export async function runSwitch(
     target = picked;
   }
 
-  if (localBranchExists(dir, target)) {
-    log.step(`${repo.alias}: git switch ${target}`);
-    const r = runSub(repoRoot, repo.alias, ["switch", target], true);
-    if (!r.success) return 2;
-    log.success(`${repo.alias}: on ${target}`);
-    return 0;
-  }
+  if (localBranchExists(dir, target)) return switchExisting(repoRoot, repo.alias, target);
 
-  // Brand-new local branch: no remote precondition, no upstream tracking (use "oms branch checkout" for that).
   const args = ["switch", "-c", target, ...(options.from ? [options.from] : [])];
   log.step(`${repo.alias}: git ${args.join(" ")}`);
   const r = runSub(repoRoot, repo.alias, args, true);
@@ -55,19 +55,17 @@ export async function runSwitch(
   return 0;
 }
 
-/**
- * REMOTE branch exploration: fetch origin, then check out a remote branch as a local tracking
- * branch (or switch to an existing local counterpart). Omitting alias and/or branch prompts for
- * them interactively. Creating brand-new local branches is "oms branch switch"'s job.
- */
+/** Remote exploration refreshes origin even when an existing local counterpart is selected. */
 export async function runCheckout(alias: string | undefined, branch: string | undefined): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
   if (refuseInsideManagedTree(repoRoot)) return 1;
 
-  const repo = await resolveInitializedAlias(repos, repoRoot, alias, "branch checkout");
+  const repo = await selectRepoAlias(repos, alias, "branch checkout");
   if (!repo) return 1;
+  const preparation = await prepareAlias(repoRoot, repo, { command: "branch checkout", topologyOffer: true });
+  if (!preparation.ok) return 1;
   const dir = aliasDir(repoRoot, repo.alias);
 
   log.step(`${repo.alias}: git fetch origin --prune`);
@@ -81,13 +79,7 @@ export async function runCheckout(alias: string | undefined, branch: string | un
     target = picked;
   }
 
-  if (localBranchExists(dir, target)) {
-    log.step(`${repo.alias}: git switch ${target}`);
-    const r = runSub(repoRoot, repo.alias, ["switch", target], true);
-    if (!r.success) return 2;
-    log.success(`${repo.alias}: on ${target}`);
-    return 0;
-  }
+  if (localBranchExists(dir, target)) return switchExisting(repoRoot, repo.alias, target);
   if (remoteBranchExists(dir, target)) {
     log.step(`${repo.alias}: git switch -c ${target} origin/${target}`);
     const r = runSub(repoRoot, repo.alias, ["switch", "-c", target, `origin/${target}`], true);

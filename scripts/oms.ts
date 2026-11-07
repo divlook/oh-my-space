@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { log } from "@clack/prompts";
+import { cancel, log } from "@clack/prompts";
 import { DATA_DIRNAME, MANIFEST_FILENAME } from "./lib/constants.js";
 import { readPackageVersion } from "./lib/env.js";
-import { assertPromptQueueDrained } from "./lib/prompt-adapter.js";
+import { assertPromptQueueDrained, canPrompt, guardedSelect, isCancel } from "./lib/prompt-adapter.js";
 import { runAgentInstall, runAgentUninstall } from "./lib/agent.js";
-import { runBranch, runBranchDelete } from "./lib/branch-delete.js";
+import { runBranchDelete } from "./lib/branch-delete.js";
 import { runBranchClean } from "./lib/branch-clean.js";
 import { runBranchList } from "./lib/branch-list.js";
 import { runCheckout, runSwitch } from "./lib/branch-ops.js";
-import { runCommit, runRecord } from "./lib/commit.js";
+import { runCommit } from "./lib/commit.js";
+import { runRecord } from "./lib/record.js";
 import { runDoctor } from "./lib/doctor.js";
 import { runExec } from "./lib/exec.js";
 import {
@@ -41,15 +42,17 @@ import {
 import { runInit } from "./lib/init.js";
 import { runManage } from "./lib/manage-ops.js";
 import { runSync, runUnsync } from "./lib/repo-ops.js";
-import { runSkills, skillsForwardedArgs } from "./lib/skills.js";
+import { runSkills } from "./lib/skills.js";
 import { runStatus } from "./lib/status.js";
 import { runTreeAdd, runTreeList, runTreeRemove } from "./lib/tree-ops.js";
 import { runUpdate } from "./lib/update.js";
+import { findWorkspaceRoot } from "./lib/workspace-discovery.js";
+import { refuseInsideManagedTree } from "./lib/tree-context.js";
+import { loadForSubmodules } from "./lib/manifest.js";
 import type {
   AgentOptions,
   CheckoutOptions,
   CommitOptions,
-  PushOptions,
   RemoteOptions,
   SourcesOptions,
   StatusOptions,
@@ -59,11 +62,26 @@ import type {
 } from "./lib/types.js";
 
 type SkillsOptions = { install?: boolean };
+type PushCliOptions = SourcesOptions & RemoteOptions & { commit?: boolean; record?: boolean };
+
+async function runPush(aliases: string[], options: PushCliOptions): Promise<number> {
+  if (options.commit || options.record) {
+    const loaded = loadForSubmodules();
+    if (!loaded || refuseInsideManagedTree(loaded.repoRoot)) return 1;
+    const flag = options.record ? "--record" : "--commit";
+    const pushExample = aliases.length > 0 ? `oms push ${aliases.join(" ")}` : "oms push <alias>";
+    const recordExample = aliases.length > 0 ? `oms record ${aliases[0]}` : "oms record <alias>";
+    log.error(
+      `"oms push ${flag}" is not supported. Push the submodule branch with "${pushExample}", then commit the existing root pointer update with "${recordExample}".`,
+    );
+    return 1;
+  }
+  return runManage("push", aliases, options);
+}
 
 async function exitWith(action: Promise<number>): Promise<void> {
   try {
     const code = await action;
-    // A guarded test queue must be fully consumed; leftover responses fail closed (exit 1).
     assertPromptQueueDrained();
     process.exit(code);
   } catch (e) {
@@ -72,28 +90,7 @@ async function exitWith(action: Promise<number>): Promise<void> {
   }
 }
 
-const commandNames = new Set([
-  "init",
-  "doctor",
-  "exec",
-  "sync",
-  "status",
-  "commit",
-  "record",
-  "branch",
-  "fetch",
-  "pull",
-  "push",
-  "tree",
-  "unsync",
-  "agent",
-  "skills",
-  "update",
-  "help",
-]);
-
 const collectRepeatable = (value: string, acc: string[]): string[] => [...acc, value];
-// Only exec owns a raw child-command boundary; Commander never sees child flags.
 const execSeparator = process.argv[2] === "exec" ? process.argv.indexOf("--", 3) : -1;
 const execCommand = execSeparator === -1 ? [] : process.argv.slice(execSeparator + 1);
 const cliArgs = execSeparator === -1 ? process.argv : process.argv.slice(0, execSeparator);
@@ -188,10 +185,10 @@ const branchCommand = program
   .description("Inspect, switch, checkout, delete, or clean source branches (interactive action selector).")
   .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async () => {
-    await exitWith(runBranch(branchCommand));
+    await exitWith(selectBranchAction(branchCommand));
   });
 
-branchCommand
+const branchSwitchCommand = branchCommand
   .command("switch")
   .description(
     "Prepare one declared source, then switch to or create a LOCAL branch (no remote required).",
@@ -204,7 +201,7 @@ branchCommand
     await exitWith(runSwitch(alias, branch, options));
   });
 
-branchCommand
+const branchCheckoutCommand = branchCommand
   .command("checkout")
   .description(
     "Prepare one declared source, fetch origin, then check out a REMOTE branch as a local tracking branch.",
@@ -216,7 +213,7 @@ branchCommand
     await exitWith(runCheckout(alias, branch));
   });
 
-branchCommand
+const branchListCommand = branchCommand
   .command("list")
   .description("Prepare one declared source, refresh declared remotes, and list local and remote branches.")
   .argument("[alias]", "declared source alias (the sole alias is selected automatically)")
@@ -225,7 +222,7 @@ branchCommand
     await exitWith(runBranchList(alias));
   });
 
-branchCommand
+const branchDeleteCommand = branchCommand
   .command("delete")
   .description(
     "Prepare one declared source, then delete a LOCAL branch (never a remote branch or root topology).",
@@ -238,7 +235,7 @@ branchCommand
     await exitWith(runBranchDelete(alias, branch, options));
   });
 
-branchCommand
+const branchCleanCommand = branchCommand
   .command("clean")
   .description("Confirm deletion of merged local branches in one source repository.")
   .argument("[alias]", "declared source alias (omit to pick interactively)")
@@ -247,6 +244,31 @@ branchCommand
   .action(async (alias: string | undefined, options: { base?: string }) => {
     await exitWith(runBranchClean(alias, options));
   });
+
+async function selectBranchAction(command: Command): Promise<number> {
+  const repoRoot = findWorkspaceRoot();
+  if (repoRoot !== null && refuseInsideManagedTree(repoRoot)) return 1;
+  if (!canPrompt()) {
+    command.outputHelp();
+    return 1;
+  }
+  const actions = [
+    { command: branchListCommand, label: "list branches in a submodule", run: () => runBranchList(undefined) },
+    { command: branchSwitchCommand, label: "switch to or create a local branch in a submodule", run: () => runSwitch(undefined, undefined, {}) },
+    { command: branchCheckoutCommand, label: "check out a remote branch in a submodule", run: () => runCheckout(undefined, undefined) },
+    { command: branchDeleteCommand, label: "delete a local branch in a submodule", run: () => runBranchDelete(undefined, undefined, {}) },
+    { command: branchCleanCommand, label: "clean merged local branches in a source repository", run: () => runBranchClean(undefined, {}) },
+  ];
+  const choice = await guardedSelect<string>({
+    message: "Select a branch action",
+    options: actions.map(({ command, label }) => ({ value: command.name(), label })),
+  });
+  if (isCancel(choice)) {
+    cancel("Cancelled.");
+    return 1;
+  }
+  return actions.find(({ command }) => command.name() === choice)?.run() ?? 1;
+}
 
 const treeCommand = program
   .command("tree")
@@ -318,8 +340,8 @@ program
   .option("--record", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRepeatable, [])
   .addHelpText("after", `${pushHelp}${workspaceContextHelp}${exitHelp}`)
-  .action(async (aliases: string[], options: SourcesOptions & PushOptions & RemoteOptions) => {
-    await exitWith(runManage("push", aliases, options));
+  .action(async (aliases: string[], options: PushCliOptions) => {
+    await exitWith(runPush(aliases, options));
   });
 
 program
@@ -368,7 +390,8 @@ program
   .argument("[args...]", "extra arguments forwarded to \"npx skills add\" with --install")
   .addHelpText("after", `${skillsHelp}${exitHelp}`)
   .action(async (_args: string[], options: SkillsOptions) => {
-    await exitWith(runSkills(Boolean(options.install), skillsForwardedArgs()));
+    const forwardedArgs = process.argv.slice(3).filter((arg) => arg !== "--install");
+    await exitWith(runSkills(Boolean(options.install), forwardedArgs));
   });
 
 program
@@ -382,6 +405,7 @@ program
   });
 
 const requestedCommand = process.argv[2];
+const commandNames = new Set([...program.commands.map((command) => command.name()), "help"]);
 if (requestedCommand && !requestedCommand.startsWith("-") && !commandNames.has(requestedCommand)) {
   console.error(`error: unknown command '${requestedCommand}'`);
   process.exit(1);

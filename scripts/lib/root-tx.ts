@@ -17,22 +17,19 @@ import {
 import { dirname, join } from "node:path";
 import { productionGitRunner, runGit, submodulePath, type RawGitRunner } from "./git.js";
 import { isTestMode } from "./env.js";
-import { reconcileGitmodules, type AliasMetadataPlan } from "./gitmodules-reconcile.js";
+import type { AliasMetadataPlan } from "./gitmodules-reconcile.js";
+import { transformManagedGitmodules } from "./managed-gitmodules.js";
 import type { GitResult } from "./types.js";
 
 /**
- * Durable, crash-safe finalization of OMS root changes (topology + reconciled metadata) through an
- * owner-only temporary index, an fsynced intent marker, and an atomically installed replacement real
- * index. Every root-mutating command runs {@link recoveryPreflight} first so an interrupted commit is
- * completed or safely blocked before new mutation.
+ * Root finalization preserves a durable intent marker and recovery index after HEAD advances.
+ * Every root-mutating command runs recoveryPreflight before starting new mutation.
  */
 
-/** Absolute Git directory of the root repository. */
 function gitDir(repoRoot: string): string {
   return runGit(repoRoot, ["rev-parse", "--absolute-git-dir"]).stdout.trim();
 }
 
-/** OMS finalization state directory (owner-only) inside the Git directory. */
 function omsStateDir(repoRoot: string): string {
   const dir = join(gitDir(repoRoot), "oms");
   if (pathExists(dir)) {
@@ -112,7 +109,6 @@ function realIndexPath(repoRoot: string): string {
   return rel.startsWith("/") ? rel : join(repoRoot, rel);
 }
 
-/** SHA-256 of a file's bytes, or null when the file is absent. */
 function hashFile(path: string): string | null {
   try {
     return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -121,7 +117,6 @@ function hashFile(path: string): string | null {
   }
 }
 
-/** Write content owner-only and fsync both the file and its directory. */
 function writeFsync(path: string, content: string | Buffer): void {
   const tempPath = `${path}.tmp`;
   try {
@@ -172,7 +167,6 @@ function cleanupFinalizationArtifacts(repoRoot: string, marker: FinalizeMarker):
   return removeIfPresent(markerPath(repoRoot));
 }
 
-/** The persisted intent marker for an in-flight or completed finalization. */
 type FinalizeMarker = {
   state: "prepared" | "committed";
   originalHead: string;
@@ -253,26 +247,13 @@ function synthesizeGitmodules(
   const tmp = join(omsStateDir(repoRoot), `synth-${process.pid}-${Date.now()}`);
   writeFileSync(tmp, seed, { mode: 0o600 });
   try {
-    for (const plan of addPlans) {
-      if (!runGit(repoRoot, ["config", "--file", tmp, `submodule.${plan.path}.path`, plan.path]).success) return null;
-      if (!runGit(repoRoot, ["config", "--file", tmp, `submodule.${plan.path}.url`, plan.url]).success) return null;
-      if (plan.branch !== null) {
-        if (!runGit(repoRoot, ["config", "--file", tmp, `submodule.${plan.path}.branch`, plan.branch]).success) return null;
-      } else if (runGit(repoRoot, ["config", "--file", tmp, "--get", `submodule.${plan.path}.branch`]).success) {
-        if (!runGit(repoRoot, ["config", "--file", tmp, "--unset", `submodule.${plan.path}.branch`]).success) return null;
-      }
-    }
-    for (const alias of removeAliases) {
-      const removed = runGit(repoRoot, ["config", "--file", tmp, "--remove-section", `submodule.${submodulePath(alias)}`]);
-      if (!removed.success && removed.exitCode !== 5) return null;
-    }
+    if (!transformManagedGitmodules(repoRoot, tmp, addPlans, { writePaths: true, removeAliases })) return null;
     return readFileSync(tmp, "utf8");
   } finally {
     removeIfPresent(tmp);
   }
 }
 
-/** Hash-object a buffer into the object store and return its OID. */
 function hashObject(repoRoot: string, content: Buffer, runner: RawGitRunner = productionGitRunner): string | null {
   const proc = runner(repoRoot, ["hash-object", "-w", "--stdin"], content);
   const oid = proc.stdout.trim();
@@ -285,7 +266,6 @@ function runGitEnv(cwd: string, args: string[], env: NodeJS.ProcessEnv): GitResu
 
 type FinalizeInput = {
   repoRoot: string;
-  kind: "add" | "remove";
   /** Aliases finalized as pending-add topology (gitlink staged from the submodule worktree HEAD). */
   addAliases: string[];
   /** Aliases finalized as pending-removal topology (gitlink and section removed). */
@@ -295,8 +275,8 @@ type FinalizeInput = {
   message: string;
   /** Exact working-tree oms.yaml bytes to stage, or null to keep HEAD's version. */
   omsYamlBytes: Buffer | null;
-  /** Raw Git boundary for deterministic transaction tests. */
-  gitRunner?: RawGitRunner;
+  /** Controls only object-format inspection and blob writes, not transaction/recovery execution. */
+  objectGitRunner?: RawGitRunner;
 };
 
 type FinalizeResult =
@@ -310,8 +290,8 @@ type FinalizeResult =
  */
 export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   const { repoRoot } = input;
-  const gitRunner = input.gitRunner ?? productionGitRunner;
-  const objectFormat = runGit(repoRoot, ["rev-parse", "--show-object-format"], false, undefined, gitRunner);
+  const objectGitRunner = input.objectGitRunner ?? productionGitRunner;
+  const objectFormat = runGit(repoRoot, ["rev-parse", "--show-object-format"], false, undefined, objectGitRunner);
   if (!objectFormat.success || objectFormat.stdout.trim() !== "sha1") {
     return { ok: false, exitCode: 2, reason: "OMS root finalization currently requires Git SHA-1 object format" };
   }
@@ -323,7 +303,6 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   const head = currentHead(repoRoot);
   if (!head) return { ok: false, exitCode: 2, reason: "could not resolve root HEAD" };
 
-  // Build the commit tree in an owner-only temp index seeded from HEAD.
   const env = { ...process.env, GIT_INDEX_FILE: tempIndex };
   removeIfPresent(tempIndex);
   if (!runGitEnv(repoRoot, ["read-tree", head], env).success) {
@@ -344,7 +323,7 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   };
 
   if (synthesized.trim().length > 0 || input.addAliases.length > 0) {
-    const blob = hashObject(repoRoot, Buffer.from(synthesized), gitRunner);
+    const blob = hashObject(repoRoot, Buffer.from(synthesized), objectGitRunner);
     if (!blob) return fail("could not write synthesized .gitmodules");
     if (!runGitEnv(repoRoot, ["update-index", "--add", "--cacheinfo", `100644,${blob},.gitmodules`], env).success) {
       return fail("could not stage synthesized .gitmodules");
@@ -371,7 +350,7 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   }
 
   if (input.omsYamlBytes !== null) {
-    const blob = hashObject(repoRoot, input.omsYamlBytes, gitRunner);
+    const blob = hashObject(repoRoot, input.omsYamlBytes, objectGitRunner);
     if (!blob) return fail("could not write oms.yaml blob");
     if (!runGitEnv(repoRoot, ["update-index", "--add", "--cacheinfo", `100644,${blob},oms.yaml`], env).success) {
       return fail("could not stage oms.yaml");
@@ -392,7 +371,6 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   if (!changed.success) return fail("could not resolve the commit's changed paths");
   committedPaths = changed.stdout.split("\n").map((path) => path.trim()).filter(Boolean);
 
-  // The commit object exists but HEAD has not moved; the real index is still byte-for-byte intact.
   const originalIndexHash = hashFile(realIndex);
   if (!originalIndexHash) return fail("could not hash the real index");
 
@@ -696,5 +674,3 @@ function installCommitted(
   return { ok: false, reason: "could not verify and install the recovery index; inspect state and retry" };
 }
 
-export { reconcileGitmodules };
-export type { AliasMetadataPlan };

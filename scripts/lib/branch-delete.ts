@@ -1,9 +1,7 @@
 import { cancel, log } from "@clack/prompts";
-import type { Command } from "commander";
 import {
   aliasDir,
   currentBranch,
-  findWorkspaceRoot,
   listLocalBranches,
   localBranchExists,
   localBranchOid,
@@ -14,64 +12,21 @@ import {
   submodulePath,
 } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
-import { submoduleOperationInProgress } from "./status.js";
+import { submoduleOperationInProgress } from "./git-operation-state.js";
 import { checkDeleteSourceSafety as checkSubmodulePreconditions } from "./source-safety.js";
 import { resolveBaselines, type ProtectedReason } from "./branch-baseline.js";
 import { canPrompt, guardedConfirm, guardedSelect, isCancel } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
 import { prepareAlias } from "./alias-preparation.js";
-import { runBranchList } from "./branch-list.js";
-import { runBranchClean } from "./branch-clean.js";
-import { runCheckout, runSwitch } from "./branch-ops.js";
-import { refuseInsideManagedTree } from "./tree-ops.js";
+import { refuseInsideManagedTree } from "./tree-context.js";
+import { shellQuote as shq } from "./shell.js";
 
 type BranchDeleteOptions = { force?: boolean };
 
-/** Quote a dynamic argument for safe reuse in a POSIX shell command line. */
-function shq(arg: string): string {
-  return `'${arg.replace(/'/g, "'\\''")}'`;
-}
-
-/**
- * Bare `oms branch`: present the branch action selector interactively, or print help and exit 1 in
- * a non-interactive shell (the `oms agent` group pattern).
- */
-export async function runBranch(command: Command): Promise<number> {
-  const repoRoot = findWorkspaceRoot();
-  if (repoRoot !== null && refuseInsideManagedTree(repoRoot)) return 1;
-  if (!canPrompt()) {
-    command.outputHelp();
-    return 1;
-  }
-  const action = await guardedSelect<string>({
-    message: "Select a branch action",
-    options: [
-      { value: "list", label: "list branches in a submodule" },
-      { value: "switch", label: "switch to or create a local branch in a submodule" },
-      { value: "checkout", label: "check out a remote branch in a submodule" },
-      { value: "delete", label: "delete a local branch in a submodule" },
-      { value: "clean", label: "clean merged local branches in a source repository" },
-    ],
-  });
-  if (isCancel(action)) {
-    cancel("Cancelled.");
-    return 1;
-  }
-  if (action === "list") return runBranchList(undefined);
-  if (action === "switch") return runSwitch(undefined, undefined, {});
-  if (action === "checkout") return runCheckout(undefined, undefined);
-  if (action === "delete") return runBranchDelete(undefined, undefined, {});
-  if (action === "clean") return runBranchClean(undefined, {});
-  return 1;
-}
-
 type AliasResult = { kind: "repo"; repo: Repo } | { kind: "error"; code: number };
 
-// Deleting a branch presupposes a deletable local branch, which a fresh registration cannot have,
-// so this command refuses an unregistered alias instead of offering to create root topology.
 const PREPARE = { command: "branch delete", topologyOffer: false } as const;
 
-/** Resolve the single alias to operate on: explicit (with auto-init), or an interactive picker. */
 async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: string | undefined): Promise<AliasResult> {
   if (aliasArg) {
     const repo = repos.find((r) => r.alias === aliasArg);
@@ -109,27 +64,26 @@ async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: str
   return repo ? { kind: "repo", repo } : { kind: "error", code: 1 };
 }
 
+type BranchProtection = { reason: string; current: boolean };
 
-/** Collapse per-branch protection reasons; a branch that is both current and baseline shows both. */
-function buildProtectedMap(reasons: ProtectedReason[]): Map<string, string> {
+function buildProtectedMap(reasons: ProtectedReason[], current: string | null): Map<string, BranchProtection> {
   const grouped = new Map<string, string[]>();
   for (const { branch, reason } of reasons) {
     const list = grouped.get(branch) ?? [];
     if (!list.includes(reason)) list.push(reason);
     grouped.set(branch, list);
   }
-  return new Map([...grouped.entries()].map(([branch, list]) => [branch, list.join(", ")]));
+  return new Map([...grouped.entries()].map(([branch, list]) => [branch, { reason: list.join(", "), current: branch === current }]));
 }
 
 type TargetResult = { kind: "branch"; branch: string } | { kind: "error"; code: number } | { kind: "noop" };
 
-/** Resolve the target local branch: explicit (validated), or an interactive selector over local branches. */
 async function resolveTargetBranch(
   repo: Repo,
   dir: string,
   branchArg: string | undefined,
   localBranches: string[],
-  protectedMap: Map<string, string>,
+  protectedMap: Map<string, BranchProtection>,
 ): Promise<TargetResult> {
   if (branchArg) {
     if (!localBranchExists(dir, branchArg)) {
@@ -140,10 +94,10 @@ async function resolveTargetBranch(
       log.error(message);
       return { kind: "error", code: 1 };
     }
-    const reason = protectedMap.get(branchArg);
-    if (reason) {
-      const hint = reason.includes("current branch") ? " Switch to another branch first." : "";
-      log.error(`${repo.alias}: "${branchArg}" is protected (${reason}) and cannot be deleted.${hint}`);
+    const protection = protectedMap.get(branchArg);
+    if (protection) {
+      const hint = protection.current ? " Switch to another branch first." : "";
+      log.error(`${repo.alias}: "${branchArg}" is protected (${protection.reason}) and cannot be deleted.${hint}`);
       return { kind: "error", code: 1 };
     }
     return { kind: "branch", branch: branchArg };
@@ -151,7 +105,7 @@ async function resolveTargetBranch(
 
   const deletable = localBranches.filter((b) => !protectedMap.has(b));
   if (deletable.length === 0) {
-    const summary = [...protectedMap.entries()].map(([b, r]) => `${b} (${r})`).join(", ");
+    const summary = [...protectedMap.entries()].map(([branch, protection]) => `${branch} (${protection.reason})`).join(", ");
     log.info(`${repo.alias}: no deletable local branches. Protected: ${summary || "none"}.`);
     return { kind: "noop" };
   }
@@ -162,8 +116,8 @@ async function resolveTargetBranch(
   const choice = await guardedSelect<string>({
     message: `${repo.alias}: select a local branch to delete`,
     options: localBranches.map((b) => {
-      const reason = protectedMap.get(b);
-      return reason ? { value: b, label: b, hint: reason, disabled: true } : { value: b, label: b };
+      const protection = protectedMap.get(b);
+      return protection ? { value: b, label: b, hint: protection.reason, disabled: true } : { value: b, label: b };
     }),
   });
   if (isCancel(choice)) {
@@ -172,13 +126,12 @@ async function resolveTargetBranch(
   }
   const picked = choice as string;
   if (protectedMap.has(picked)) {
-    log.error(`${repo.alias}: "${picked}" is protected (${protectedMap.get(picked)}) and cannot be deleted.`);
+    log.error(`${repo.alias}: "${picked}" is protected (${protectedMap.get(picked)!.reason}) and cannot be deleted.`);
     return { kind: "error", code: 1 };
   }
   return { kind: "branch", branch: picked };
 }
 
-/** Re-resolve protected baselines and Git-operation markers (and optionally the OID) just before deletion. */
 function revalidateSafety(
   repoRoot: string,
   repo: Repo,
@@ -208,13 +161,28 @@ function revalidateSafety(
   return { ok: true };
 }
 
-/** Print the full OID and a POSIX-shell-safe recreation command before a force deletion. */
 function printForceRecovery(alias: string, branch: string, fullOid: string): void {
   log.warn(`${alias}: force-deleting "${branch}" at ${fullOid}; unmerged local commits may be lost.`);
   log.info(`Recreate it with: git -C ${shq(submodulePath(alias))} branch ${shq(branch)} ${fullOid}`);
 }
 
-/** Run the safe or forced Git deletion, offering one force retry after a safe-deletion failure. */
+function forceDeleteBranch(repoRoot: string, repo: Repo, branch: string, fullOid: string, priorShort: string): number {
+  const safety = revalidateSafety(repoRoot, repo, branch, fullOid, true);
+  if (!safety.ok) {
+    log.error(safety.reason);
+    return 2;
+  }
+  const alias = repo.alias;
+  printForceRecovery(alias, branch, fullOid);
+  const result = runSub(repoRoot, alias, ["branch", "-D", "--", branch], true);
+  if (!result.success) {
+    log.error(`${alias}: git branch -D "${branch}" failed (exit ${result.exitCode}).`);
+    return 2;
+  }
+  log.success(`${alias}: force-deleted local branch ${branch} (was ${priorShort}).`);
+  return 0;
+}
+
 async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: string, force: boolean): Promise<number> {
   const alias = repo.alias;
   const fullOid = localBranchOid(dir, branch);
@@ -224,24 +192,8 @@ async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: s
   }
   const priorShort = shortOid(dir, fullOid);
 
-  // Explicit force: revalidate safety + OID, disclose recovery, then delete directly with -D.
-  if (force) {
-    const safety = revalidateSafety(repoRoot, repo, branch, fullOid, true);
-    if (!safety.ok) {
-      log.error(safety.reason);
-      return 2;
-    }
-    printForceRecovery(alias, branch, fullOid);
-    const r = runSub(repoRoot, alias, ["branch", "-D", "--", branch], true);
-    if (!r.success) {
-      log.error(`${alias}: git branch -D "${branch}" failed (exit ${r.exitCode}).`);
-      return 2;
-    }
-    log.success(`${alias}: force-deleted local branch ${branch} (was ${priorShort}).`);
-    return 0;
-  }
+  if (force) return forceDeleteBranch(repoRoot, repo, branch, fullOid, priorShort);
 
-  // Safe delete: revalidate protected baselines + markers (no OID check), then -d.
   const safety = revalidateSafety(repoRoot, repo, branch, fullOid, false);
   if (!safety.ok) {
     log.error(safety.reason);
@@ -253,13 +205,11 @@ async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: s
     return 0;
   }
 
-  // Safe delete failed. A branch that vanished concurrently is the requested end state (success no-op).
   if (!localBranchExists(dir, branch)) {
     log.success(`${alias}: local branch "${branch}" no longer exists (deleted concurrently).`);
     return 0;
   }
 
-  // Offer one force retry (default No); non-interactive prints an exact, shell-safe retry command.
   if (!canPrompt()) {
     log.error(
       `${alias}: safe deletion failed (see the Git error above). To force-delete (discarding unmerged commits), run: oms branch delete ${shq(alias)} ${shq(branch)} --force`,
@@ -275,25 +225,9 @@ async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: s
     return 2;
   }
 
-  const safety2 = revalidateSafety(repoRoot, repo, branch, fullOid, true);
-  if (!safety2.ok) {
-    log.error(safety2.reason);
-    return 2;
-  }
-  printForceRecovery(alias, branch, fullOid);
-  const forced = runSub(repoRoot, alias, ["branch", "-D", "--", branch], true);
-  if (!forced.success) {
-    log.error(`${alias}: git branch -D "${branch}" failed (exit ${forced.exitCode}).`);
-    return 2;
-  }
-  log.success(`${alias}: force-deleted local branch ${branch} (was ${priorShort}).`);
-  return 0;
+  return forceDeleteBranch(repoRoot, repo, branch, fullOid, priorShort);
 }
 
-/**
- * Delete one LOCAL branch inside one initialized (or auto-initializable registered) submodule. Never
- * touches a remote ref or the root gitlink. Protects the current branch and every resolved baseline.
- */
 export async function runBranchDelete(
   aliasArg: string | undefined,
   branchArg: string | undefined,
@@ -326,7 +260,7 @@ export async function runBranchDelete(
   const cur = currentBranch(dir);
   if (cur) protectedReasons.push({ branch: cur, reason: "current branch" });
   protectedReasons.push(...baseline.protectedReasons);
-  const protectedMap = buildProtectedMap(protectedReasons);
+  const protectedMap = buildProtectedMap(protectedReasons, cur);
 
   const localBranches = [...listLocalBranches(dir)].sort();
   const target = await resolveTargetBranch(repo, dir, branchArg, localBranches, protectedMap);

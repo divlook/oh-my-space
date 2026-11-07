@@ -5,8 +5,8 @@ import { loadForSubmodules } from "./manifest.js";
 import { exitFromResults, printSummary } from "./operation-results.js";
 import { resolveRemotes, selectRepos } from "./prompts.js";
 import { printRootFollowups } from "./status.js";
-import type { ManageCommand, OperationResult, PushOptions, RemoteOptions, Repo, SourcesOptions } from "./types.js";
-import { refuseInsideManagedTree } from "./tree-ops.js";
+import type { ManageCommand, OperationResult, RemoteOptions, Repo, SourcesOptions } from "./types.js";
+import { refuseInsideManagedTree } from "./tree-context.js";
 
 function fetchRepo(repo: Repo, repoRoot: string, remotes: string[]): OperationResult {
   for (const remote of remotes) {
@@ -35,7 +35,6 @@ function pullRepo(repo: Repo, repoRoot: string, remote: string, branch: string):
     log.error(`${repo.alias}/${branch}: pull from ${remote} failed (exit ${r.exitCode})`);
     return "failed";
   }
-  // Pull synchronizes only the submodule branch; the root gitlink is never staged or committed.
   log.success(`${repo.alias}/${branch}: pulled from ${remote}`);
   return "pulled";
 }
@@ -54,7 +53,6 @@ function pushRepo(repo: Repo, repoRoot: string, remotes: string[], branch: strin
       return "failed";
     }
   }
-  // Push synchronizes only the submodule branch; the root gitlink is never staged or committed.
   log.success(`${repo.alias}/${branch}: pushed to ${remotes.join(", ")}`);
   return "pushed";
 }
@@ -62,23 +60,13 @@ function pushRepo(repo: Repo, repoRoot: string, remotes: string[], branch: strin
 export async function runManage(
   command: ManageCommand,
   aliases: string[],
-  options: SourcesOptions & PushOptions & RemoteOptions,
+  options: SourcesOptions & RemoteOptions,
 ): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
   if (refuseInsideManagedTree(repoRoot)) return 1;
 
-  // Reject the removed push pointer shortcuts before any push runs, with migration guidance.
-  if (command === "push" && (options.commit || options.record)) {
-    const flag = options.record ? "--record" : "--commit";
-    const pushExample = aliases.length > 0 ? `oms push ${aliases.join(" ")}` : "oms push <alias>";
-    const recordExample = aliases.length > 0 ? `oms record ${aliases[0]}` : "oms record <alias>";
-    log.error(
-      `"oms push ${flag}" is not supported. Push the submodule branch with "${pushExample}", then commit the existing root pointer update with "${recordExample}".`,
-    );
-    return 1;
-  }
 
   const picked = await selectRepos(repos, aliases, options, command);
   if (!picked || picked.length === 0) return 1;
@@ -90,34 +78,32 @@ export async function runManage(
   });
   if (prepared.cancelled) return 1;
 
-  // Preparation failures remain per-alias operation failures; a user-chosen skip is reported without
-  // failing the invocation. Later aliases still run when one preparation or Git operation fails.
-  const results: OperationResult[] = [
-    ...prepared.failed.map((): OperationResult => "failed"),
-    ...prepared.skipped.map((): OperationResult => "skipped"),
-  ];
-  for (const repo of prepared.ready) {
+  const outcomes = new Map<string, OperationResult>();
+  const ready = picked.filter((repo) => prepared.outcomes.get(repo.alias) === "ready");
+  for (const [alias, outcome] of prepared.outcomes) {
+    if (outcome !== "ready") outcomes.set(alias, outcome);
+  }
+  for (const repo of ready) {
     const remotes = await resolveRemotes(repo, options.remote, command);
     if (!remotes || remotes.length === 0) {
-      results.push("failed");
+      outcomes.set(repo.alias, "failed");
       continue;
     }
     if (command === "fetch") {
-      results.push(fetchRepo(repo, repoRoot, remotes));
+      outcomes.set(repo.alias, fetchRepo(repo, repoRoot, remotes));
       continue;
     }
     const attached = await resolveDetachedHead(repoRoot, repo, command);
     if (!attached.ok) {
-      results.push("failed");
+      outcomes.set(repo.alias, "failed");
       continue;
     }
     const branch = currentBranch(aliasDir(repoRoot, repo.alias))!;
-    if (command === "pull") results.push(pullRepo(repo, repoRoot, remotes[0], branch));
-    else results.push(pushRepo(repo, repoRoot, remotes, branch));
+    if (command === "pull") outcomes.set(repo.alias, pullRepo(repo, repoRoot, remotes[0], branch));
+    else outcomes.set(repo.alias, pushRepo(repo, repoRoot, remotes, branch));
   }
-  // Pull and push can move root pointers; hint once for the whole run so a wide selection that moved
-  // several pointers does not print one "oms record <alias>" line per alias.
-  if (command !== "fetch") printRootFollowups(repoRoot, prepared.ready.map((r) => r.alias));
+  if (command !== "fetch") printRootFollowups(repoRoot, ready.map((r) => r.alias));
+  const results = picked.map((repo) => outcomes.get(repo.alias)!);
   if (results.length > 1 || options.all) printSummary(results);
   return exitFromResults(results);
 }

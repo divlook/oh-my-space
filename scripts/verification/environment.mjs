@@ -3,7 +3,7 @@ import { arch, release, type } from "node:os";
 
 const EMPTY_GIT_CONFIG = process.platform === "win32" ? "NUL" : "/dev/null";
 
-/** Creates the deterministic environment inherited by canonical test processes. */
+/** Canonical test defaults; inherited fault-injection and fixture overrides remain available. */
 export function normalizedTestEnvironment(overrides = {}) {
   const env = { ...process.env };
   for (const key of [
@@ -50,7 +50,6 @@ export function normalizedTestEnvironment(overrides = {}) {
   return Object.assign(env, overrides);
 }
 
-/** Collects the exact runtime identity bound to a local verification record. */
 export function collectEnvironmentIdentity({ cwd = process.cwd(), env = normalizedTestEnvironment() } = {}) {
   const gitVersion = execFileSync("git", ["--version"], { cwd, env, encoding: "utf8" }).trim();
   return {

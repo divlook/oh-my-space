@@ -1,39 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  appendLocalExcludeEntry,
-  checkTaskName,
-  insideManagedTree,
-  listManagedTrees,
-  managedTreePathKey,
-  parseWorktreePorcelain,
-  taskNameViolation,
-  type PorcelainWorktreeEntry,
-} from "../../scripts/lib/tree-ops.js";
-import type { GitResult } from "../../scripts/lib/types.js";
-import type { RawGitRunner } from "../../scripts/lib/git.js";
-import type { Repo } from "../../scripts/lib/types.js";
+import { checkTaskName, taskNameViolation } from "../../scripts/lib/tree-ops.js";
+import { managedTreePathKey, parseWorktreePorcelain, type PorcelainWorktreeEntry } from "../../scripts/lib/tree-inventory.js";
+import { insideManagedTree } from "../../scripts/lib/tree-context.js";
+import { appendLocalExcludeEntry } from "../../scripts/lib/tree-exclude.js";
 
-function queuedRunner(results: GitResult[], calls: Array<{ cwd: string; args: string[] }> = []): RawGitRunner {
-  return (cwd, args) => {
-    calls.push({ cwd, args });
-    const result = results.shift();
-    assert.ok(result, `unexpected Git call: ${args.join(" ")}`);
-    return result;
-  };
-}
 
-const ok = (stdout = ""): GitResult => ({ exitCode: 0, success: true, stdout, stderr: "" });
-const failed = (stderr = "failure"): GitResult => ({ exitCode: 1, success: false, stdout: "", stderr });
-
-const repo = (alias: string): Repo => ({
-  alias,
-  remotes: { origin: `https://example.com/org/${alias}.git` },
-  branch: "main",
-});
 
 test("tree-ops parses healthy, detached, and prunable porcelain shapes from the spike", () => {
   const porcelain = [
@@ -93,132 +65,6 @@ test("tree-ops extracts the alias/task key suffix-based, so moved roots still ma
   assert.equal(managedTreePathKey("/repo/.oms-tree/api/fix-auth/extra"), null);
 });
 
-test("tree-ops classifies the filesystem ∪ porcelain union with foreign directories and undeclared aliases", () => {
-  const root = mkdtempSync(join(tmpdir(), "oms-tree-unit-"));
-  try {
-    // Filesystem layout: api/fix-auth (a registered worktree, mocked porcelain), api/stray
-    // (no porcelain entry → foreign), legacy/task (porcelain reports it, but the alias is no
-    // longer declared → still listed through the tree-referenced gitdir probe).
-    mkdirSync(join(root, ".oms-tree/api/fix-auth"), { recursive: true });
-    mkdirSync(join(root, ".oms-tree/api/stray"), { recursive: true });
-    mkdirSync(join(root, ".oms-tree/legacy/task"), { recursive: true });
-    // The declared alias's gitdir must be locatable for its probe to run.
-    mkdirSync(join(root, "oms/api"), { recursive: true });
-    writeFileSync(join(root, "oms/api/.git"), "gitdir: /repo/.git/modules/oms/api\n");
-    // The legacy tree's .git link references a gitdir the inventory must probe even though the
-    // alias is undeclared.
-    writeFileSync(join(root, ".oms-tree/legacy/task/.git"), "gitdir: /repo/.git/modules/oms/legacy/worktrees/task\n");
-
-    const declaredPorcelain = [
-      "worktree /repo/.git/modules/oms/api",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/main",
-      "",
-      "worktree /repo/.oms-tree/api/fix-auth",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/fix-auth",
-      "",
-    ].join("\n");
-    const legacyPorcelain = [
-      "worktree /repo/.git/modules/oms/legacy",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/main",
-      "",
-      "worktree /repo/.oms-tree/legacy/task",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/task",
-      "",
-    ].join("\n");
-    // Probe order: the declared alias's gitdir (api) first, then the tree-referenced gitdir
-    // (legacy), then one status probe per healthy tree in sorted order (fix-auth, task).
-    const runner = queuedRunner([ok(declaredPorcelain), ok(legacyPorcelain), ok(""), ok("")]);
-
-    const trees = listManagedTrees(root, [repo("api")], { dirtyAliases: "all" }, runner);
-    const byPath = new Map(trees.map((tree) => [tree.path, tree]));
-
-    const fixAuth = byPath.get(".oms-tree/api/fix-auth");
-    assert.ok(fixAuth);
-    assert.equal(fixAuth.state, "healthy");
-    assert.equal(fixAuth.branch, "fix-auth");
-    assert.equal(fixAuth.head, "b795c70");
-    assert.equal(fixAuth.dirty, false);
-
-    const stray = byPath.get(".oms-tree/api/stray");
-    assert.ok(stray);
-    assert.equal(stray.state, "foreign");
-    assert.equal(stray.error, "not a registered worktree of any submodule");
-
-    // An undeclared alias's tree stays listed — manifest edits cannot orphan it.
-    const legacy = byPath.get(".oms-tree/legacy/task");
-    assert.ok(legacy);
-    assert.equal(legacy.state, "healthy");
-    assert.equal(legacy.branch, "task");
-
-    assert.equal(trees.length, 3);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("tree-ops dirty derivation is untracked-inclusive and broken entries keep null fields", () => {
-  const root = mkdtempSync(join(tmpdir(), "oms-tree-unit-"));
-  try {
-    mkdirSync(join(root, ".oms-tree/api/clean"), { recursive: true });
-    mkdirSync(join(root, ".oms-tree/api/dirty"), { recursive: true });
-    writeFileSync(join(root, ".oms-tree/api/dirty/.git"), "gitdir: /repo/.git/modules/oms/api/worktrees/dirty\n");
-    mkdirSync(join(root, "oms/api"), { recursive: true });
-    writeFileSync(join(root, "oms/api/.git"), "gitdir: /repo/.git/modules/oms/api\n");
-
-    const porcelain = [
-      "worktree /repo/.git/modules/oms/api",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/main",
-      "",
-      "worktree /repo/.oms-tree/api/clean",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/clean",
-      "prunable gitdir file points to non-existent location",
-      "",
-      "worktree /repo/.oms-tree/api/dirty",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/dirty",
-      "",
-    ].join("\n");
-    // Second probe is the tree-referenced gitdir (the dirty tree's own link); it reports the
-    // dirty tree healthy. The clean entry is prunable in the first report and stays prunable.
-    const dirtyPorcelain = [
-      "worktree /repo/.git/modules/oms/api/worktrees/dirty",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/dirty",
-      "",
-      "worktree /repo/.oms-tree/api/dirty",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/dirty",
-      "",
-    ].join("\n");
-    // Dirty probes run per healthy tree in sorted order: dirty first, then... only "dirty" is
-    // healthy (clean is prunable in every report), so one status probe. Untracked output ⇒ dirty.
-    const runner = queuedRunner([ok(porcelain), ok(dirtyPorcelain), ok("?? untracked.txt\n")]);
-
-    const trees = listManagedTrees(root, [repo("api")], { dirtyAliases: "all" }, runner);
-    const byTask = new Map(trees.map((tree) => [tree.task, tree]));
-
-    const clean = byTask.get("clean");
-    assert.ok(clean);
-    assert.equal(clean.state, "broken");
-    assert.equal(clean.error, "worktree link is broken: gitdir file points to non-existent location");
-    assert.equal(clean.branch, null);
-    assert.equal(clean.head, null);
-    assert.equal(clean.dirty, null);
-
-    const dirty = byTask.get("dirty");
-    assert.ok(dirty);
-    assert.equal(dirty.state, "healthy");
-    assert.equal(dirty.dirty, true, "an untracked file must count as dirty");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
 
 test("tree-ops task-name validation enforces the no-separator rule before check-ref-format", () => {
   assert.equal(taskNameViolation("fix-auth"), null);
@@ -227,16 +73,14 @@ test("tree-ops task-name validation enforces the no-separator rule before check-
   assert.equal(taskNameViolation(".."), 'task names must not be "." or ".."');
   assert.equal(taskNameViolation("-bad"), 'task names must not start with "-"');
 
-  // The structural rule rejects before any Git call runs.
-  const structuralCalls: Array<{ cwd: string; args: string[] }> = [];
+  let called = false;
   assert.equal(
-    checkTaskName("/repo", "feat/x", queuedRunner([failed("must not run")], structuralCalls)),
+    checkTaskName("/repo", "feat/x", () => { called = true; throw new Error("must not run"); }),
     'task names must not contain "/" (one branch-name segment, e.g. "fix-auth")',
   );
-  assert.deepEqual(structuralCalls, []);
-
-  assert.equal(checkTaskName("/repo", "a..b", queuedRunner([failed()])), '"a..b" is not a valid branch name');
-  assert.equal(checkTaskName("/repo", "ok-name_v1.2", queuedRunner([ok()])), null);
+  assert.equal(called, false);
+  assert.equal(checkTaskName("/repo", "a..b", () => ({ success: false, exitCode: 1, stdout: "", stderr: "invalid ref" })), '"a..b" is not a valid branch name');
+  assert.equal(checkTaskName("/repo", "ok-name_v1.2", () => ({ success: true, exitCode: 0, stdout: "", stderr: "" })), null);
 });
 
 test("tree-ops exclude-entry decision is idempotent across both spellings", () => {

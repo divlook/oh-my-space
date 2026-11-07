@@ -1,7 +1,6 @@
 import semver from "semver";
 import { PACKAGE_NAME } from "./package-info.js";
 
-/** Selects the single forward stable target for oh-my-space from a Changesets release plan. */
 export function selectBetaBaseVersion(releasePlan, currentVersion) {
   const releases = releasePlan?.releases;
   if (!Array.isArray(releases)) {

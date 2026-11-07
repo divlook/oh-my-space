@@ -11,7 +11,6 @@ The current directory must be outside a Git work tree or be its root top-level. 
 an existing Git work tree before changing any file, including with --force.
 `;
 
-// Per-command help: each new or changed command states its purpose, scope boundary, and an example.
 export const statusHelp = `
 Machine-readable mode prints exactly one JSON object on stdout. The schemaVersion 1 payload has eight
 top-level keys: schemaVersion, toolVersion, workspaceRoot, currentAlias, root, repos, trees, and errors.

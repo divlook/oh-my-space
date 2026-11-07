@@ -1,7 +1,6 @@
 import semver from "semver";
 import { isScalar, parseDocument } from "yaml";
 
-/** Standard human-readable compatibility sentence derived from an OMS semver range. */
 export function skillCompatibilitySentence(omsVersion) {
   return `Requires oh-my-space ${omsVersion}.`;
 }
@@ -11,7 +10,6 @@ function parseFrontmatter(raw) {
 }
 
 
-/** Parses independently verifiable version fields from skill frontmatter. */
 export function parseSkillMetadata(raw) {
   let document;
   try {
@@ -34,7 +32,6 @@ export function parseSkillMetadata(raw) {
   };
 }
 
-/** Validates the complete published-skill compatibility contract and returns its build reference. */
 export function validatePublishedSkillMetadata(raw, skillPath) {
   let document;
   try {

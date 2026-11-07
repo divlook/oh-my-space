@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
+import { parseArgs } from "node:util";
 
 const root = resolve(import.meta.dirname, "..");
 const inventory = JSON.parse(readFileSync(resolve(root, "tests/test-inventory.json"), "utf8"));
@@ -71,18 +72,24 @@ if (options.gating || options.ciGating) {
 }
 
 function parseOptions(args, layers) {
-  const value = (name, fallback) => {
-    const index = args.indexOf(name);
-    return index >= 0 ? args[index + 1] : fallback;
-  };
-  const node = value("--node", process.execPath);
-  const runs = Number.parseInt(value("--runs", "1"), 10);
-  const integration = Number.parseInt(value("--integration", String(layers.integration.concurrency)), 10);
-  const blackbox = Number.parseInt(value("--blackbox", String(layers.blackbox.concurrency)), 10);
-  const label = value("--label", "manual");
-  const gating = args.includes("--gating");
-  const ciGating = args.includes("--ci-gating");
-  if (!node || !label || !Number.isInteger(runs) || runs < 1 || !Number.isInteger(integration) || integration < 1 || !Number.isInteger(blackbox) || blackbox < 1) {
+  const { values } = parseArgs({
+    args,
+    options: {
+      node: { type: "string", default: process.execPath },
+      runs: { type: "string", default: "1" },
+      integration: { type: "string", default: String(layers.integration.concurrency) },
+      blackbox: { type: "string", default: String(layers.blackbox.concurrency) },
+      label: { type: "string", default: "manual" },
+      gating: { type: "boolean", default: false },
+      "ci-gating": { type: "boolean", default: false },
+    },
+  });
+  const { node, label, gating } = values;
+  const runs = Number(values.runs);
+  const integration = Number(values.integration);
+  const blackbox = Number(values.blackbox);
+  const ciGating = values["ci-gating"];
+  if (gating && ciGating || !node || !label || !Number.isSafeInteger(runs) || runs < 1 || !Number.isSafeInteger(integration) || integration < 1 || !Number.isSafeInteger(blackbox) || blackbox < 1) {
     console.error("Usage: node scripts/benchmark-test-suite.mjs [--node <executable>] [--runs N] [--integration N] [--blackbox N] [--label name] [--gating | --ci-gating]");
     process.exit(2);
   }

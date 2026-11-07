@@ -1,17 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateSources } from "../../scripts/lib/manifest.js";
-import { exitFromResults } from "../../scripts/lib/operation-results.js";
 import {
   inferAliasFromCwd,
-  isDirtyCounts,
   pendingAddTopology,
   pendingRemovalTopology,
   partialRemovalTopology,
   recordVerdict,
   rootFollowupHint,
   type GitlinkState,
-} from "../../scripts/lib/status.js";
+} from "../../scripts/lib/workspace-state.js";
 
 const oid = "a".repeat(40);
 
@@ -70,13 +68,9 @@ test("status topology and record decisions distinguish add, removal, split, no-o
   assert.equal(rootFollowupHint("api", { ...moved, conflict: true }), null);
 });
 
-test("status path inference, dirty counts, and operation result exits are deterministic", () => {
+test("status path inference respects alias path segment boundaries", () => {
   const repos = [{ alias: "api", remotes: { origin: "x" } }, { alias: "api-extra", remotes: { origin: "y" } }];
   assert.equal(inferAliasFromCwd("/workspace", repos, "/workspace/oms/api/src"), "api");
   assert.equal(inferAliasFromCwd("/workspace", repos, "/workspace/oms/api-extra"), "api-extra");
   assert.equal(inferAliasFromCwd("/workspace", repos.slice(0, 1), "/workspace/oms/api-extra"), null);
-  assert.equal(isDirtyCounts({ staged: 0, unstaged: 0, untracked: 0 }), false);
-  assert.equal(isDirtyCounts({ staged: 0, unstaged: 1, untracked: 0 }), true);
-  assert.equal(exitFromResults(["added", "pulled"]), 0);
-  assert.equal(exitFromResults(["added", "failed"]), 2);
 });

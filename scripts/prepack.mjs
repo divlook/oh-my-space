@@ -32,11 +32,11 @@ if (reusable) {
 } else {
   const reason = forced ? "OMS_FORCE_TEST=1" : record ? "verification inputs changed" : "no valid verification record";
   console.log(`Running canonical tests (${reason}).`);
-  run("npm", ["test"], false);
+  run("npm", ["test"]);
 }
 
 try {
-  run("npm", ["run", "build"], true);
+  run("npm", ["run", "build"]);
   verifyArtifact(current.root);
 } catch (error) {
   const latest = readVerificationRecord(current.root);
@@ -44,7 +44,7 @@ try {
   throw error;
 }
 
-function run(command, args, artifactPhase) {
+function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: current.root,
     env,
@@ -53,9 +53,7 @@ function run(command, args, artifactPhase) {
   });
   if (result.status === 0) return;
   const detail = result.status === null ? `signal ${result.signal ?? "unknown"}` : `exit ${result.status}`;
-  const error = new Error(`${command} ${args.join(" ")} failed with ${detail}`);
-  if (artifactPhase) error.artifactPhase = true;
-  throw error;
+  throw new Error(`${command} ${args.join(" ")} failed with ${detail}`);
 }
 
 function verifyArtifact(root) {

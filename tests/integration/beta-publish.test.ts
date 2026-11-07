@@ -43,6 +43,18 @@ function fixture() {
   writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "oh-my-space", version: "1.2.3", type: "module" }, null, 2)}\n`);
   writeFileSync(join(root, "package-lock.json"), `${JSON.stringify({ name: "oh-my-space", version: "1.2.3", lockfileVersion: 3, packages: { "": { name: "oh-my-space", version: "1.2.3" } } }, null, 2)}\n`);
 
+  const signalChild = join(bin, "signal-child.cjs");
+  writeFileSync(signalChild, `
+const fs = require("node:fs");
+process.on("SIGTERM", () => {
+  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+  fs.writeFileSync(${JSON.stringify(join(captureDir, "signal-versions"))}, JSON.stringify([pkg.version, lock.version, lock.packages[""].version]));
+  process.exit(0);
+});
+console.log("OMS_SIGNAL_READY");
+fs.watch("package.json", () => {});
+`);
   const npm = join(bin, "npm");
   writeFileSync(npm, `#!/bin/sh
 printf '%s\\n' "$*" >> ${JSON.stringify(calls)}
@@ -56,7 +68,7 @@ if [ "$1" = "test" ]; then exit 97; fi
 if [ "$1" = "pack" ] || [ "$1" = "publish" ]; then
   ${JSON.stringify(process.execPath)} ${JSON.stringify(prepack)} || exit $?
   ${JSON.stringify(process.execPath)} -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("package.json")); const l=JSON.parse(fs.readFileSync("package-lock.json")); fs.appendFileSync(process.argv[1], JSON.stringify([p.version,l.version,l.packages[""].version])+"\\n")' ${JSON.stringify(versions)}
-  if [ "$OMS_TEST_NPM_SLEEP" = "1" ]; then echo OMS_SIGNAL_READY; exec sleep 30; fi
+  if [ "$OMS_TEST_NPM_SLEEP" = "1" ]; then exec ${JSON.stringify(process.execPath)} ${JSON.stringify(signalChild)}; fi
   if [ "$OMS_TEST_NPM_FAIL" = "1" ]; then exit 42; fi
   exit 0
 fi
@@ -85,10 +97,8 @@ function packageVersions(root: string): [string, string, string] {
   return [packageJson.version, packageLock.version, packageLock.packages[""].version];
 }
 
-test("beta dry-run and publish reuse stable verification, rebuild exact beta artifacts, restore metadata, and retain registry retries", async () => {
+test("beta dry-run and publish reuse stable verification and rebuild exact beta artifacts before restoring metadata", () => {
   const { root, env, calls, versions } = fixture();
-  const stableRecord = readVerificationRecord(root);
-  assert.ok(stableRecord);
   const shortHead = execFileSync("git", ["-C", root, "rev-parse", "--short=7", "HEAD"], { env, encoding: "utf8" }).trim();
   const expectedBeta = `2.0.0-beta.sha-${shortHead}`;
 
@@ -106,24 +116,50 @@ test("beta dry-run and publish reuse stable verification, rebuild exact beta art
     [expectedBeta, expectedBeta, expectedBeta],
   ]);
   assert.doesNotMatch(readFileSync(calls, "utf8"), /^test$/m);
+});
+
+test("beta publication failure restores metadata and retains stable verification for retry", () => {
+  const { root, env } = fixture();
+  const stableRecord = readVerificationRecord(root);
+  assert.ok(stableRecord);
 
   const registryFailure = runPublisher(root, { ...env, OMS_TEST_NPM_FAIL: "1" }, ["--publish"]);
   assert.notEqual(registryFailure.status, 0);
   assert.deepEqual(packageVersions(root), ["1.2.3", "1.2.3", "1.2.3"]);
   assert.deepEqual(readVerificationRecord(root), stableRecord);
+});
+
+test("beta cancellation keeps temporary metadata alive until the active publisher closes", { timeout: 20_000 }, async (t) => {
+  const { root, env } = fixture();
+  const stableRecord = readVerificationRecord(root);
+  assert.ok(stableRecord);
+  const shortHead = execFileSync("git", ["-C", root, "rev-parse", "--short=7", "HEAD"], { env, encoding: "utf8" }).trim();
+  const expectedBeta = `2.0.0-beta.sha-${shortHead}`;
 
   const child = spawn(process.execPath, [publisher, "--allow-dirty"], {
     cwd: root,
     env: { ...env, OMS_TEST_NPM_SLEEP: "1" },
     stdio: ["ignore", "pipe", "ignore"],
   });
-  child.stdout.setEncoding("utf8");
-  for await (const line of createInterface({ input: child.stdout })) {
-    if (line === "OMS_SIGNAL_READY") break;
+  const closed = once(child, "close");
+  const abort = () => { child.kill("SIGKILL"); };
+  t.signal.addEventListener("abort", abort, { once: true });
+  try {
+    child.stdout.setEncoding("utf8");
+    let ready = false;
+    for await (const line of createInterface({ input: child.stdout })) {
+      if (line === "OMS_SIGNAL_READY") { ready = true; break; }
+    }
+    assert.equal(ready, true, "publisher must reach its metadata-consuming child");
+    child.kill("SIGTERM");
+    const [exit] = await closed;
+    assert.equal(exit, 143);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, ".captures", "signal-versions"), "utf8")), [expectedBeta, expectedBeta, expectedBeta]);
+    assert.deepEqual(packageVersions(root), ["1.2.3", "1.2.3", "1.2.3"]);
+    assert.deepEqual(readVerificationRecord(root), stableRecord);
+  } finally {
+    t.signal.removeEventListener("abort", abort);
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await closed;
   }
-  child.kill("SIGTERM");
-  const [exit] = await once(child, "exit");
-  assert.equal(exit, 143);
-  assert.deepEqual(packageVersions(root), ["1.2.3", "1.2.3", "1.2.3"]);
-  assert.deepEqual(readVerificationRecord(root), stableRecord);
 });

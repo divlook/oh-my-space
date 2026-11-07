@@ -1,12 +1,10 @@
-import { cancel, log, multiselect, select } from "@clack/prompts";
+import { cancel, log } from "@clack/prompts";
 import { dim, pad, uniqueAliases } from "./env.js";
 import { aliasDir, isDirty, submoduleInitialized } from "./git.js";
-import { prepareAlias } from "./alias-preparation.js";
 import { canPrompt, guardedMultiselect, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
-import { gitlinkState, inferAliasFromCwd, recordVerdict } from "./status.js";
+import { gitlinkState, inferAliasFromCwd, recordVerdict } from "./workspace-state.js";
 import type { ManageCommand, Repo, SourcesOptions } from "./types.js";
 
-/** Names of a repo's non-origin remotes, in declared order (origin is shown via its URL column). */
 function extraRemoteNames(repo: Repo): string[] {
   return Object.keys(repo.remotes).filter((name) => name !== "origin");
 }
@@ -46,13 +44,8 @@ export async function selectInteractive(repos: Repo[], actionLabel: string): Pro
     .filter((r): r is Repo => r !== undefined);
 }
 
-/**
- * Resolve and prepare a single alias for a per-repo branch command. Every declared repo is a valid
- * candidate because preparation can initialize or offer to register it before branch work starts.
- */
-export async function resolveInitializedAlias(
+export async function selectRepoAlias(
   repos: Repo[],
-  repoRoot: string,
   alias: string | undefined,
   actionLabel: string,
 ): Promise<Repo | null> {
@@ -92,11 +85,9 @@ export async function resolveInitializedAlias(
     if (!repo) return null;
   }
 
-  const prepared = await prepareAlias(repoRoot, repo, { command: actionLabel, topologyOffer: true });
-  return prepared.ok ? repo : null;
+  return repo;
 }
 
-/** Sentinel chosen in pickBranch to create a new branch instead of selecting an existing one. */
 const CREATE_NEW_BRANCH = "\0create-new-branch";
 
 /**
@@ -173,10 +164,10 @@ export async function resolveRemotes(
 
   // No explicit remote: a lone origin needs no prompt, and a non-interactive shell defaults to origin.
   if (declared.length === 1) return declared;
-  if (!process.stdin.isTTY) return ["origin"];
+  if (!canPrompt()) return ["origin"];
 
   if (command === "pull") {
-    const choice = await select({
+    const choice = await guardedSelect<string>({
       message: `${repo.alias}: select a remote to ${command}`,
       options: declared.map((name) => ({ value: name, label: name, hint: repo.remotes[name] })),
       initialValue: "origin",
@@ -188,7 +179,7 @@ export async function resolveRemotes(
     return [choice as string];
   }
 
-  const choice = await multiselect({
+  const choice = await guardedMultiselect<string>({
     message: `${repo.alias}: select remote(s) to ${command} (space to toggle, enter to confirm)`,
     options: declared.map((name) => ({ value: name, label: name, hint: repo.remotes[name] })),
     initialValues: ["origin"],
@@ -237,33 +228,20 @@ type AliasResolution =
   | { kind: "noop" }
   | { kind: "error" };
 
-/**
- * Aliases a command can act on right now: commit wants dirty submodules, record wants pointers it can
- * actually record. `pin === "moved"` alone is not enough for record — a staged/worktree split also
- * reports `moved`, so the record filter composes `pin` with the shared record verdict rather than
- * re-deriving recordability and drifting from what `oms record` enforces.
- */
 function commandCandidates(repos: Repo[], repoRoot: string, command: "commit" | "record"): string[] {
-  return repos
-    .filter((r) => {
-      if (command === "commit") {
-        return submoduleInitialized(repoRoot, r.alias) && isDirty(aliasDir(repoRoot, r.alias));
-      }
-      // pin covers conflicted/missing/uninitialized; the verdict covers split and unmoved pointers.
-      const state = gitlinkState(repoRoot, r.alias);
-      return state.pin === "moved" && recordVerdict(state, r.alias).kind === "recordable";
-    })
-    .map((r) => r.alias);
+  return repos.filter((repo) => {
+    if (command === "commit") return submoduleInitialized(repoRoot, repo.alias) && isDirty(aliasDir(repoRoot, repo.alias));
+    const state = gitlinkState(repoRoot, repo.alias);
+    return state.pin === "moved" && recordVerdict(state, repo.alias).kind === "recordable";
+  }).map((repo) => repo.alias);
 }
 
-/** Wording for the empty-candidate no-op and the sole-candidate auto-selection. */
 function candidateLabels(command: "commit" | "record"): { empty: string; sole: string } {
   return command === "commit"
     ? { empty: "Nothing to commit in any submodule.", sole: "dirty submodule" }
     : { empty: "Nothing to record for any submodule.", sole: "moved pointer" };
 }
 
-/** Validate explicitly named aliases against the manifest, preserving the shared error wording. */
 function knownAliases(repos: Repo[], aliases: string[]): string[] | null {
   const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
   if (unknown.length > 0) {
@@ -275,17 +253,12 @@ function knownAliases(repos: Repo[], aliases: string[]): string[] | null {
   return uniqueAliases(aliases);
 }
 
-/**
- * Resolve a single alias for commit: explicit argument, then current-path inference, then an
- * interactive candidate list, then a non-interactive alias-required failure. Interactive zero
- * candidates is a no-op exit 0; one candidate auto-selects; several show a picker.
- */
-export async function resolveCommandAlias(
+export async function resolveCommitAlias(
   repos: Repo[],
   repoRoot: string,
   alias: string | undefined,
-  command: "commit" | "record",
 ): Promise<AliasResolution> {
+  const command = "commit";
   if (alias) {
     if (!repos.some((r) => r.alias === alias)) {
       log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
@@ -334,11 +307,6 @@ type AliasSetResolution =
   | { kind: "noop" }
   | { kind: "error" };
 
-/**
- * Resolve the alias set for record: `--all` or an explicit list first, then current-path inference,
- * then an interactive multi-select of moved pointers, then a non-interactive selection-required
- * failure. `explicit` marks a selection the user named, whose per-alias failures must not be skipped.
- */
 export async function resolveRecordAliases(
   repos: Repo[],
   repoRoot: string,
@@ -358,8 +326,6 @@ export async function resolveRecordAliases(
   const inferred = inferAliasFromCwd(repoRoot, repos);
   if (inferred) return { kind: "aliases", aliases: [inferred], explicit: true };
 
-  // Same ordering as resolveCommandAlias: the candidate count decides, and stdin only matters once
-  // more than one materially different choice exists.
   const candidates = commandCandidates(repos, repoRoot, "record");
   const labels = candidateLabels("record");
 
@@ -387,6 +353,5 @@ export async function resolveRecordAliases(
     cancel("Cancelled.");
     return { kind: "error" };
   }
-  // Candidates are filtered by the shared record verdict, so a chosen alias is already recordable.
   return { kind: "aliases", aliases: choice, explicit: false };
 }

@@ -1,36 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { cancel, isCancel, log, select } from "@clack/prompts";
+import { cancel, log } from "@clack/prompts";
 import semver from "semver";
-import { REGISTRY_TIMEOUT_MS, REGISTRY_URL } from "./constants.js";
+import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
 import { readPackageVersion, runtimePlatform, testEnv } from "./env.js";
-import { findWorkspaceRoot } from "./git.js";
-import { detectInstallContext, formatCommand } from "./install-context.js";
+import { findWorkspaceRoot } from "./workspace-discovery.js";
+import { automaticUpdateCommand, detectInstallContext, installGuidanceManager } from "./install-context.js";
+import { formatCommand } from "./package-install.js";
+import { fetchRegistryJson } from "./registry.js";
 import { channelInstallCommand, latestFromRegistryJson } from "./package-channels.js";
 import { omsSkillsInstalled, reportSkillFindings } from "./skills.js";
-import type { InstallContext, PackageManager, UpdateCommand, UpdateOptions } from "./types.js";
+import type { UpdateOptions } from "./types.js";
+import type { InstallContext } from "./install-context.js";
+import type { UpdateCommand } from "./package-install.js";
 
-async function fetchLatestPackageVersion(): Promise<string> {
-  const mocked = testEnv("OMS_TEST_REGISTRY_RESPONSE");
-  if (mocked !== undefined) return latestFromRegistryJson(JSON.parse(mocked));
-  const failure = testEnv("OMS_TEST_REGISTRY_FAILURE");
-  if (failure) throw new Error(failure);
-
-  let response: Response;
-  try {
-    response = await fetch(REGISTRY_URL, { signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) });
-  } catch (e) {
-    throw new Error(`Could not reach npm registry: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  if (!response.ok) {
-    throw new Error(`npm registry request failed with HTTP ${response.status}`);
-  }
-  try {
-    return latestFromRegistryJson(await response.json());
-  } catch (e) {
-    if (e instanceof Error) throw e;
-    throw new Error(`Could not parse npm registry response: ${String(e)}`);
-  }
-}
 
 export function compareVersions(currentVersion: string, latestVersion: string): number {
   const current = semver.valid(currentVersion);
@@ -64,12 +46,8 @@ function printGuidance(context: InstallContext): void {
 }
 
 
-function prereleaseGuidanceManager(context: InstallContext): PackageManager | null {
-  return context.manager ?? context.updateCommand?.executable ?? null;
-}
-
 function printPrereleaseGuidance(context: InstallContext): void {
-  const manager = prereleaseGuidanceManager(context);
+  const manager = installGuidanceManager(context);
   log.info("Prerelease channel guidance:");
   if (manager) {
     log.message(`  Stay on beta manually: ${channelInstallCommand(manager, "beta")}`);
@@ -127,7 +105,7 @@ function verifyPostUpdate(latestVersion: string): void {
 }
 
 async function confirmUpdate(command: UpdateCommand): Promise<boolean | null> {
-  const choice = await select({
+  const choice = await guardedSelect({
     message: `Run ${formatCommand(command)}?`,
     options: [
       { value: "yes", label: "Yes, update oms" },
@@ -145,14 +123,14 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
   let latestVersion: string;
   const currentVersion = readPackageVersion();
   try {
-    latestVersion = await fetchLatestPackageVersion();
+    latestVersion = latestFromRegistryJson(await fetchRegistryJson());
     const comparison = compareVersions(currentVersion, latestVersion);
     const prerelease = isPrereleaseVersion(currentVersion);
     printUpdateHeader(currentVersion, latestVersion);
     if (prerelease) printPrereleaseStatus(currentVersion, latestVersion);
     if (comparison === 0) {
       if (prerelease) printPrereleaseGuidance(detectInstallContext());
-      // This binary is current, so its baked skill references and runtime version are authoritative.
+      // Only the current binary's baked references describe this runtime.
       await reportSkillFindings(findWorkspaceRoot());
       log.success("oms is up to date.");
       return 0;
@@ -181,15 +159,15 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
     return 0;
   }
 
-  if (context.kind !== "global" || !context.updateCommand) {
+  const command = automaticUpdateCommand(context);
+  if (!command) {
     log.info("Automatic update is only supported for confident global installs.");
     printGuidance(context);
     return 0;
   }
 
-  const command = context.updateCommand;
   if (!options.yes) {
-    if (!process.stdin.isTTY) {
+    if (!canPrompt()) {
       log.info(`Non-interactive shell detected. Re-run with --yes to execute: ${formatCommand(command)}`);
       return 0;
     }
@@ -212,8 +190,7 @@ export async function runUpdate(options: UpdateOptions): Promise<number> {
   }
   verifyPostUpdate(latestVersion);
   log.success("Update command completed.");
-  // The newly installed CLI is not loaded in this process, so its skill versions are unknown here.
-  // Point at doctor, which the new binary answers exactly, rather than guessing.
+  // The new binary, not this process, owns the post-update skill references.
   if (omsSkillsInstalled(findWorkspaceRoot())) {
     log.info('oms skills are installed. Run "oms doctor" to check whether they need updating for this version.');
   }

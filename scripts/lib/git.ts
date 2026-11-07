@@ -1,26 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { DATA_DIRNAME, MANIFEST_FILENAME, MIN_GIT_MAJOR, MIN_GIT_MINOR } from "./constants.js";
-import type { GitResult, WorkspaceOptions } from "./types.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { DATA_DIRNAME, MIN_GIT_MAJOR, MIN_GIT_MINOR } from "./constants.js";
+import type { GitResult } from "./types.js";
 export type RawGitRunner = (cwd: string, args: string[], input?: Buffer | null) => GitResult;
 
-/** Production raw Git boundary used by orchestration and injectable tests. */
-export const productionGitRunner: RawGitRunner = (cwd, args, input) => {
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "buffer",
-    ...(input === null ? { stdio: ["inherit", "pipe", "pipe"] } : { input }),
-  });
-  return {
-    exitCode: result.status,
-    success: result.status === 0,
-    stdout: result.stdout ? result.stdout.toString("utf8") : "",
-    stderr: result.stderr ? result.stderr.toString("utf8") : "",
-  };
-};
-
-function environmentGitRunner(env: NodeJS.ProcessEnv): RawGitRunner {
+function environmentGitRunner(env?: NodeJS.ProcessEnv): RawGitRunner {
   return (cwd, args, input) => {
     const result = spawnSync("git", args, {
       cwd,
@@ -37,7 +22,15 @@ function environmentGitRunner(env: NodeJS.ProcessEnv): RawGitRunner {
   };
 }
 
-/** Remove credentials from URLs while retaining useful host, path, and failure context. */
+export const productionGitRunner: RawGitRunner = environmentGitRunner();
+
+export const redactingGitRunner: RawGitRunner = (cwd, args, input) => {
+  const result = productionGitRunner(cwd, args, input);
+  return input === null
+    ? { ...result, stdout: redactSensitiveUrls(result.stdout), stderr: redactSensitiveUrls(result.stderr) }
+    : result;
+};
+
 export function redactSensitiveUrls(value: string): string {
   return value
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi, "$1[redacted]@")
@@ -53,15 +46,13 @@ export function runGit(
 ): GitResult {
   const result = runner(cwd, args, inheritOutput ? null : undefined);
   if (inheritOutput) {
-    const redactOutput = process.env.OMS_REDACT_GIT_DIAGNOSTICS === "1";
-    if (result.stdout) process.stdout.write(redactOutput ? redactSensitiveUrls(result.stdout) : result.stdout);
-    if (result.stderr) process.stderr.write(redactOutput ? redactSensitiveUrls(result.stderr) : result.stderr);
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
     return { ...result, stdout: "", stderr: "" };
   }
   return result;
 }
 
-/** Run git inside the submodule working tree at oms/<alias>/. */
 export function runSub(
   repoRoot: string,
   alias: string,
@@ -84,61 +75,6 @@ export function isGitVersionSupported(v: { major: number; minor: number }): bool
   return v.minor >= MIN_GIT_MINOR;
 }
 
-type WorkspaceManifestResolution =
-  | { kind: "found"; manifestPath: string; repoRoot: string }
-  | { kind: "missing" }
-  | { kind: "invalid"; manifestPath: string; reason: string };
-
-/** Locate the authoritative nearest manifest without skipping invalid candidates. */
-export function resolveWorkspaceManifest(options: WorkspaceOptions = {}): WorkspaceManifestResolution {
-  let current = resolve(options.cwd ?? process.cwd());
-  while (true) {
-    const manifestPath = join(current, MANIFEST_FILENAME);
-    let entry;
-    try {
-      entry = lstatSync(manifestPath);
-    } catch (error) {
-      const code = error instanceof Error && "code" in error ? error.code : undefined;
-      if (code === "ENOENT") {
-        const parent = dirname(current);
-        if (parent === current) return { kind: "missing" };
-        current = parent;
-        continue;
-      }
-      return {
-        kind: "invalid",
-        manifestPath,
-        reason: error instanceof Error ? error.message : String(error),
-      };
-    }
-    try {
-      if (entry.isFile() || (entry.isSymbolicLink() && statSync(manifestPath).isFile())) {
-        return { kind: "found", manifestPath, repoRoot: current };
-      }
-    } catch {
-      return {
-        kind: "invalid",
-        manifestPath,
-        reason: "it is a broken symbolic link or does not resolve to a regular file",
-      };
-    }
-    return {
-      kind: "invalid",
-      manifestPath,
-      reason: "it is not a regular file or a symbolic link to a regular file",
-    };
-  }
-}
-
-export function findWorkspaceRoot(options: WorkspaceOptions = {}): string | null {
-  const resolution = resolveWorkspaceManifest(options);
-  if (resolution.kind === "found") return resolution.repoRoot;
-  if (resolution.kind === "missing") return null;
-  throw new Error(
-    `Found ${MANIFEST_FILENAME} at ${resolution.manifestPath}, but ${resolution.reason}. ` +
-      "Replace that entry with a regular file; OMS will not fall back to an ancestor manifest.",
-  );
-}
 
 export function aliasDir(repoRoot: string, alias: string): string {
   return join(repoRoot, DATA_DIRNAME, alias);
@@ -149,48 +85,7 @@ export function submodulePath(alias: string): string {
   return `${DATA_DIRNAME}/${alias}`;
 }
 
-export type WorkspaceGitIdentity =
-  | { kind: "match"; gitTopLevel: string }
-  | { kind: "mismatch"; gitTopLevel: string }
-  | { kind: "no-work-tree" }
-  | { kind: "indeterminate"; reason: string };
 
-/** Compare a workspace directory with Git's enclosing top-level using canonical paths. */
-export function inspectWorkspaceGitIdentity(workspaceRoot: string): WorkspaceGitIdentity {
-  const topLevel = runGit(workspaceRoot, ["rev-parse", "--show-toplevel"], false, {
-    ...process.env,
-    LANG: "C",
-    LC_ALL: "C",
-  });
-  if (!topLevel.success) {
-    const diagnostic = topLevel.stderr.trim();
-    if (/not a git repository|not a git work tree/i.test(diagnostic)) return { kind: "no-work-tree" };
-    return {
-      kind: "indeterminate",
-      reason: diagnostic || "Git did not return a repository top-level",
-    };
-  }
-
-  const gitTopLevel = process.platform === "win32"
-    ? topLevel.stdout.replace(/\r?\n$/, "")
-    : topLevel.stdout.replace(/\n$/, "");
-  if (!gitTopLevel) {
-    return { kind: "indeterminate", reason: "Git returned an empty repository top-level" };
-  }
-
-  try {
-    return realpathSync(workspaceRoot) === realpathSync(gitTopLevel)
-      ? { kind: "match", gitTopLevel }
-      : { kind: "mismatch", gitTopLevel };
-  } catch (error) {
-    return {
-      kind: "indeterminate",
-      reason: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-/** Every submodule path registered in .gitmodules (empty when the file is absent or registers none). */
 export function registeredSubmodulePaths(repoRoot: string): string[] {
   if (!existsSync(join(repoRoot, ".gitmodules"))) return [];
 
@@ -209,12 +104,10 @@ export function registeredSubmodulePaths(repoRoot: string): string[] {
     .filter((p): p is string => Boolean(p));
 }
 
-/** True when .gitmodules registers a submodule at the given path (sources/<alias> or oms/<alias>). */
 export function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
   return registeredSubmodulePaths(repoRoot).includes(sourcePath);
 }
 
-/** True when .gitmodules still registers at least one submodule. */
 export function hasRegisteredSubmodules(repoRoot: string): boolean {
   return registeredSubmodulePaths(repoRoot).length > 0;
 }
@@ -224,7 +117,7 @@ export function submoduleInitialized(repoRoot: string, alias: string): boolean {
   return existsSync(join(aliasDir(repoRoot, alias), ".git"));
 }
 
-/** Short branch name, or null when HEAD is detached. */
+/** Detached HEAD and failed inspection both return null for legacy callers. */
 export function currentBranch(dir: string, runner: RawGitRunner = productionGitRunner): string | null {
   const r = runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"], false, undefined, runner);
   if (!r.success) return null;
@@ -232,9 +125,14 @@ export function currentBranch(dir: string, runner: RawGitRunner = productionGitR
   return b && b !== "HEAD" ? b : null;
 }
 
+function abbreviatedOid(dir: string, rev: string, runner: RawGitRunner, requireNonempty: boolean): string {
+  const result = runGit(dir, ["rev-parse", "--short", rev], false, undefined, runner);
+  const oid = result.stdout.trim();
+  return result.success && (!requireNonempty || oid.length > 0) ? oid : "???????";
+}
+
 export function shortSha(dir: string, runner: RawGitRunner = productionGitRunner): string {
-  const r = runGit(dir, ["rev-parse", "--short", "HEAD"], false, undefined, runner);
-  return r.success ? r.stdout.trim() : "???????";
+  return abbreviatedOid(dir, "HEAD", runner, false);
 }
 
 export function localBranchExists(dir: string, branch: string, runner: RawGitRunner = productionGitRunner): boolean {
@@ -250,8 +148,7 @@ export function localBranchOid(dir: string, branch: string, runner: RawGitRunner
 
 /** Abbreviated OID for an arbitrary revision, or a sentinel when it cannot be read. */
 export function shortOid(dir: string, rev: string, runner: RawGitRunner = productionGitRunner): string {
-  const r = runGit(dir, ["rev-parse", "--short", rev], false, undefined, runner);
-  return r.success && r.stdout.trim().length > 0 ? r.stdout.trim() : "???????";
+  return abbreviatedOid(dir, rev, runner, true);
 }
 
 /** Branch name that origin/HEAD points to (e.g. "main"), or null when the default is unset or dangling. */
@@ -276,7 +173,6 @@ export function listLocalBranches(dir: string, runner: RawGitRunner = production
   return r.stdout.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
-/** Decision-relevant state for one local branch. */
 export type LocalBranchInfo = {
   name: string;
   upstream: string | null;
@@ -284,7 +180,6 @@ export type LocalBranchInfo = {
   behind: number | null;
 };
 
-/** Enumerate local refs and each branch's exact configured upstream and divergence. */
 export function inspectLocalBranches(
   dir: string,
   runner: RawGitRunner = productionGitRunner,
@@ -354,4 +249,9 @@ export function listRemoteBranches(dir: string, runner: RawGitRunner = productio
 export function isDirty(dir: string, runner: RawGitRunner = productionGitRunner): boolean {
   const r = runGit(dir, ["status", "--porcelain"], false, undefined, runner);
   return r.success && r.stdout.trim().length > 0;
+}
+
+export function stagedRootPaths(repoRoot: string): string[] {
+  const result = runGit(repoRoot, ["diff", "--cached", "--name-only", "-z"]);
+  return result.success ? result.stdout.split("\0").filter((path) => path.length > 0) : [];
 }

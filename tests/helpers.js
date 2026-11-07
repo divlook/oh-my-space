@@ -3,21 +3,18 @@ import {
   chmodSync,
   cpSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import assert from "node:assert/strict";
 import semver from "semver";
 import { normalizedTestEnvironment } from "../scripts/verification/environment.mjs";
 
-const workerRoot = mkdtempSync(join(tmpdir(), "oms-tests-"));
+let workerRoot;
 const retainFixtures = process.env.OMS_TEST_RETAIN_FIXTURES === "1";
 
 function copyFixture(template, prefix) {
@@ -28,10 +25,12 @@ function copyFixture(template, prefix) {
 }
 
 function tempFixture(prefix) {
+  workerRoot ??= mkdtempSync(join(tmpdir(), "oms-tests-"));
   return mkdtempSync(join(workerRoot, prefix));
 }
 
 process.on("exit", () => {
+  if (!workerRoot) return;
   if (retainFixtures) {
     process.stderr.write("Fixtures retained at " + workerRoot + "\n");
     return;
@@ -54,12 +53,9 @@ function run(args, options = {}) {
   });
 }
 
-// Read the version under test so release bumps do not invalidate these fixtures.
 const currentVersion = JSON.parse(readFileSync(resolve("package.json"), "utf8")).version;
-// A registry latest strictly newer than the installed version.
 const newerVersion = semver.inc(currentVersion, "patch");
 
-// Escapes dots so embedded version strings match literally.
 function versionPattern(text) {
   return new RegExp(text.replaceAll(".", "\\."));
 }
@@ -88,6 +84,7 @@ function installContext(kind, extra = {}) {
     label: `${kind} test install`,
     guidance: [`guidance for ${kind}`],
     warnings: [],
+    ...(kind === "global" ? { manager: extra.updateCommand?.executable } : {}),
     ...extra,
   });
 }
@@ -154,16 +151,12 @@ function getApiWorkspaceTemplate() {
 
   apiWorkspaceTemplate = initGitWorkspace();
   writeSources(apiWorkspaceTemplate, sourceFor("api", getUpstreamTemplate()));
-  // --no-commit pins the fixture's shape: the topology commit is hand-authored below so this template
-  // keeps its own subject and commit count. Tests that assert on sync's own commit create their own
-  // workspace; a shared fixture must not change shape when sync's default does.
   assert.equal(run(["sync", "api", "--no-commit"], { cwd: apiWorkspaceTemplate }).status, 0);
   git(apiWorkspaceTemplate, "add", "-A");
   git(apiWorkspaceTemplate, "commit", "-m", "add api submodule");
   return apiWorkspaceTemplate;
 }
 
-/** Build immutable fixture templates once for reuse by parallel test owners. */
 function prepareSharedFixtures() {
   return {
     upstream: getUpstreamTemplate(),
@@ -172,10 +165,6 @@ function prepareSharedFixtures() {
   };
 }
 
-/**
- * Create a bare upstream + a seed repo that pushes branches into it.
- * Returns the bare repo path. Optionally creates additional branches.
- */
 function initBareUpstream({ branches = ["main"] } = {}) {
   const bare = copyFixture(getUpstreamTemplate(), "oms-source-");
   for (const b of branches) {
@@ -185,7 +174,6 @@ function initBareUpstream({ branches = ["main"] } = {}) {
   return bare;
 }
 
-/** A git workspace (parent repo) with an initial commit — the host for submodules. */
 function initGitWorkspace() {
   return copyFixture(getWorkspaceTemplate(), "oms-test-");
 }
@@ -194,7 +182,6 @@ function gitOut(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", env: testEnv }).trim();
 }
 
-/** An empty bare repo — a valid push target that shares no history with the seeded origin. */
 function initEmptyBare() {
   const bare = tempFixture("oms-source-");
   execFileSync("git", ["init", "--bare", "-b", "main", bare], { stdio: "ignore", env: testEnv });
@@ -227,7 +214,6 @@ function gitTopLevelStubEnv(mode) {
   return { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` };
 }
 
-/** A workspace with `api` synced and its initial gitlink recorded in the root HEAD. */
 function workspaceWithApi() {
   const bare = initBareUpstream();
   const cwd = copyFixture(getApiWorkspaceTemplate(), "oms-test-");
@@ -241,14 +227,12 @@ function workspaceWithApi() {
   return { cwd, bare, wt };
 }
 
-/** Parse the JSON object a `status --json` run wrote to stdout, asserting a clean exit. */
 function statusJson(cwd, args = [], expectStatus = 0) {
   const result = run(["status", "--json", ...args], { cwd });
   assert.equal(result.status, expectStatus, result.stdout + result.stderr);
   return JSON.parse(result.stdout);
 }
 
-/** A workspace with `api` recorded, then advanced by one submodule commit (pointer moved, unrecorded). */
 function workspaceWithMovedApi() {
   const { cwd, bare } = workspaceWithApi();
   const wt = join(cwd, "oms", "api");
@@ -257,7 +241,6 @@ function workspaceWithMovedApi() {
   git(wt, "commit", "-m", "work");
   return { cwd, bare, wt };
 }
-/** A fresh root clone pinned at A while the configured baseline has advanced to B. */
 function workspaceCloneWithDriftedBaseline(alias = "api") {
   const bare = initBareUpstream();
   const source = initGitWorkspace();
@@ -279,7 +262,6 @@ function workspaceCloneWithDriftedBaseline(alias = "api") {
   return { alias, bare, cwd, pin, tip, wt: join(cwd, "oms", alias) };
 }
 
-/** A multi-repo oms.yaml mapping each alias to its own bare origin. */
 function sourcesFor(entries) {
   const body = entries
     .map(({ alias, bare }) => `  - alias: ${alias}\n    remotes:\n      origin: file://${bare}\n    branch: main`)
@@ -287,7 +269,6 @@ function sourcesFor(entries) {
   return `repos:\n${body}\n`;
 }
 
-/** Count submodule.*.path entries remaining in .gitmodules (0 when the file is gone). */
 function gitmodulesSectionCount(cwd) {
   const path = join(cwd, ".gitmodules");
   if (!existsSync(path)) return 0;

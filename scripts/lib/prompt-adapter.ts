@@ -15,10 +15,8 @@ import { isTestMode } from "./env.js";
 
 const ENV_NAME = "OMS_TEST_PROMPT_RESPONSES";
 
-/** Sentinel returned by guarded prompts when an injected `{"type":"cancel"}` entry is consumed. */
 const PROMPT_CANCEL: unique symbol = Symbol("oms:prompt-cancel");
 
-/** True for both clack's native cancel symbol and OMS's injected cancel sentinel. */
 export function isCancel(value: unknown): value is symbol {
   return clackIsCancel(value) || value === PROMPT_CANCEL;
 }
@@ -104,13 +102,11 @@ function ensureInit(): void {
   }
 }
 
-/** True when a response queue is configured; interactive flows use it in place of TTY detection. */
 export function promptQueueActive(): boolean {
   ensureInit();
   return active;
 }
 
-/** True when either a terminal or the deterministic response queue can answer a prompt. */
 export function canPrompt(): boolean {
   return Boolean(process.stdin.isTTY) || promptQueueActive();
 }
@@ -128,7 +124,6 @@ type ConsumedConfirm = ConsumedValue<boolean>;
 type ConsumedText = ConsumedValue<string>;
 type Consumed = ConsumedSelect | ConsumedMultiselect | ConsumedConfirm | ConsumedText;
 
-/** Consume the next queued response for a prompt of the given kind, or defer to a real prompt. */
 function consume(kind: "select"): ConsumedSelect;
 function consume(kind: "multiselect"): ConsumedMultiselect;
 function consume(kind: "confirm"): ConsumedConfirm;
@@ -168,7 +163,6 @@ export function assertPromptQueueDrained(): void {
   }
 }
 
-/** A select prompt guarded by the response queue; returns the value or a cancel symbol. */
 export async function guardedSelect<Value>(
   options: Parameters<typeof clackSelect<Value>>[0],
 ): Promise<Value | symbol> {
@@ -186,7 +180,6 @@ export async function guardedSelect<Value>(
   return clackSelect<Value>(options);
 }
 
-/** A multi-select prompt guarded by the response queue; returns the values or a cancel symbol. */
 export async function guardedMultiselect<Value>(
   options: Parameters<typeof clackMultiselect<Value>>[0],
 ): Promise<Value[] | symbol> {
@@ -197,7 +190,6 @@ export async function guardedMultiselect<Value>(
   return clackMultiselect<Value>(options);
 }
 
-/** A confirm prompt guarded by the response queue; returns the boolean or a cancel symbol. */
 export async function guardedConfirm(
   options: Parameters<typeof clackConfirm>[0],
 ): Promise<boolean | symbol> {
@@ -208,7 +200,6 @@ export async function guardedConfirm(
   return clackConfirm(options);
 }
 
-/** A text prompt guarded by the response queue; returns the value or a cancel symbol. */
 export async function guardedText(
   options: Parameters<typeof clackText>[0],
 ): Promise<string | symbol> {

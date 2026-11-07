@@ -2,20 +2,18 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { cancel, log } from "@clack/prompts";
 import { DATA_DIRNAME, MANIFEST_FILENAME } from "./constants.js";
-import { findWorkspaceRoot } from "./git.js";
+import { findWorkspaceRoot } from "./workspace-discovery.js";
 import type { AgentOptions, AgentTarget } from "./types.js";
 import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
 
 const OMS_MARKER_START = "<!-- OMS START -->";
 const OMS_MARKER_END = "<!-- OMS END -->";
 
-/** Canonical scope-guardrail kernel, single-sourced into the marker block and each published SKILL.md. */
 const OMS_SCOPE_GUARDRAIL = `- Run \`oms status --json\` before Git work involving \`oms/\` to identify the main project and each source repository.
 - Treat each \`oms/<alias>/\` directory as a separate Git repository.
 - Use \`oms\` commands for workflows in \`oms/<alias>/\`.
 - Create main-project commits for existing pointer updates only when the user explicitly runs \`oms record <alias>\`.`;
 
-/** Concise, durable agent rules; detailed usage is deferred to CLI help. The marker's own --help line stays outside the kernel constant. */
 const OMS_INSTRUCTION_BLOCK = `${OMS_MARKER_START}
 ## OMS Workspace Rules
 
@@ -38,7 +36,6 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
-/** Classify the OMS marker state of a file: missing, exactly one valid block, or malformed. */
 export function analyzeManagedBlock(content: string): ManagedBlockState {
   const starts = countOccurrences(content, OMS_MARKER_START);
   const ends = countOccurrences(content, OMS_MARKER_END);
@@ -58,19 +55,17 @@ export function analyzeManagedBlock(content: string): ManagedBlockState {
   };
 }
 
-/** Collapse trailing newlines to exactly one. */
 function normalizeTrailingNewline(content: string): string {
   return `${content.replace(/\n+$/, "")}\n`;
 }
 
-/** Compute the post-install content for a target file: create, append after two blank lines, or replace. */
 export function installManagedBlock(existing: string | null): string {
   if (existing === null || existing.trim() === "") return `${OMS_INSTRUCTION_BLOCK}\n`;
   const state = analyzeManagedBlock(existing);
+  if (state.kind === "malformed") throw new Error(state.reason);
   if (state.kind === "valid") {
     return normalizeTrailingNewline(`${state.before}${OMS_INSTRUCTION_BLOCK}${state.after}`);
   }
-  // Non-empty file with no block: append after two blank lines, preserving existing content.
   return `${existing.replace(/\n+$/, "")}\n\n\n${OMS_INSTRUCTION_BLOCK}\n`;
 }
 
@@ -84,7 +79,6 @@ function agentTargetFiles(repoRoot: string, target: AgentTarget): AgentFile[] {
   }));
 }
 
-/** Resolve the install/uninstall target: explicit --target, interactive prompt, or non-interactive failure. */
 async function resolveAgentTarget(target: string | undefined): Promise<AgentTarget | null> {
   if (target !== undefined) {
     if (target !== "agents" && target !== "claude" && target !== "both") {
@@ -112,17 +106,20 @@ async function resolveAgentTarget(target: string | undefined): Promise<AgentTarg
   return choice;
 }
 
-/** Validate that no selected file has malformed markers before any write (atomic pre-write check). */
-function validateAgentFiles(files: AgentFile[], action: string): boolean {
-  for (const file of files) {
-    if (!existsSync(file.path)) continue;
-    const state = analyzeManagedBlock(readFileSync(file.path, "utf8"));
-    if (state.kind === "malformed") {
-      log.error(`${file.rel}: ${state.reason}. Fix the OMS markers, then retry. No files were ${action}.`);
-      return false;
+type AgentEdit = AgentFile & { content: string | null; state: ManagedBlockState };
+
+function planAgentEdits(files: AgentFile[]): AgentEdit[] | null {
+  const edits = files.map((file) => {
+    const content = existsSync(file.path) ? readFileSync(file.path, "utf8") : null;
+    return { ...file, content, state: analyzeManagedBlock(content ?? "") };
+  });
+  for (const edit of edits) {
+    if (edit.state.kind === "malformed") {
+      log.error(`${edit.rel}: ${edit.state.reason}. Fix the OMS markers, then retry. No files were modified.`);
+      return null;
     }
   }
-  return true;
+  return edits;
 }
 
 export async function runAgentInstall(options: AgentOptions): Promise<number> {
@@ -135,12 +132,12 @@ export async function runAgentInstall(options: AgentOptions): Promise<number> {
   if (!target) return 1;
   const files = agentTargetFiles(repoRoot, target);
 
-  if (!validateAgentFiles(files, "modified")) return 1;
+  const edits = planAgentEdits(files);
+  if (!edits) return 1;
 
   mkdirSync(join(repoRoot, DATA_DIRNAME), { recursive: true });
-  for (const file of files) {
-    const existing = existsSync(file.path) ? readFileSync(file.path, "utf8") : null;
-    writeFileSync(file.path, installManagedBlock(existing));
+  for (const file of edits) {
+    writeFileSync(file.path, installManagedBlock(file.content));
     log.success(`${file.rel}: OMS instructions installed.`);
   }
   log.info("OMS instruction files are not staged; review and commit them yourself.");
@@ -157,16 +154,12 @@ export async function runAgentUninstall(options: AgentOptions): Promise<number> 
   if (!target) return 1;
   const files = agentTargetFiles(repoRoot, target);
 
-  if (!validateAgentFiles(files, "modified")) return 1;
+  const edits = planAgentEdits(files);
+  if (!edits) return 1;
 
-  for (const file of files) {
-    if (!existsSync(file.path)) {
-      log.info(`${file.rel}: no OMS block found.`);
-      continue;
-    }
-    const state = analyzeManagedBlock(readFileSync(file.path, "utf8"));
+  for (const file of edits) {
+    const state = file.state;
     if (state.kind !== "valid") {
-      // missing here; malformed was already rejected by the pre-write validation above.
       log.info(`${file.rel}: no OMS block found.`);
       continue;
     }

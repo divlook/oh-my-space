@@ -14,31 +14,27 @@ if (process.argv.includes("--write")) {
     process.exit(1);
   }
   const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));
+  const previous = existsSync(inventoryPath) ? JSON.parse(readFileSync(inventoryPath, "utf8")) : null;
+  const previousContracts = new Map((previous?.contracts ?? []).map((contract) => [contract.id, contract]));
   const contracts = discovered.map((contract) => ({
     ...contract,
-    boundary: boundaryFor(contract),
-    processBoundaryRationale: contract.layer === "blackbox" ? rationaleFor(contract) : null,
+    boundary: previousContracts.get(contract.id)?.boundary ?? boundaryFor(contract),
+    processBoundaryRationale: contract.layer === "blackbox"
+      ? previousContracts.get(contract.id)?.processBoundaryRationale ?? "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+      : null,
   }));
-  const previous = existsSync(inventoryPath) ? JSON.parse(readFileSync(inventoryPath, "utf8")) : null;
-  const initialBaselineContracts = contracts.map((contract) => {
-    const preparation = contract.source === "tests/cli-preparation.contracts.js";
-    const source = preparation ? "tests/cli-preparation.test.js" : contract.source;
-    const id = `${source}::${contract.name}`;
-    const owner = preparation ? "tests/cli-preparation.test.js" : contract.owners[0];
-    return {
-      id,
-      name: contract.name,
-      source,
-      owner,
-      layer: contract.layer,
-      boundary: contract.boundary,
-      measuredOwnerDurationMs: preparation ? 47800 : evidence.owners[owner]?.durationMs,
-    };
-  });
+  const initialBaselineContracts = contracts.map((contract) => ({
+    id: contract.id,
+    name: contract.name,
+    source: contract.source,
+    owner: contract.owners[0],
+    layer: contract.layer,
+    boundary: contract.boundary,
+    measuredOwnerDurationMs: evidence.owners[contract.owners[0]]?.durationMs,
+  }));
   const baseline = previous?.baseline ?? {
     capturedRuntime: evidence.runtime,
     capturedOwnerDurationsAt: evidence.measuredAt,
-    preparationHistoricalOwnerDurationMs: 47800,
     contracts: initialBaselineContracts,
   };
   const overrides = existsSync(migrationOverridesPath) ? JSON.parse(readFileSync(migrationOverridesPath, "utf8")) : {};
@@ -94,24 +90,11 @@ if (errors.length > 0) {
   for (const error of errors) console.error(`- ${error}`);
   process.exit(1);
 }
-console.log(`Validated ${discovered.length} test contracts and deterministic shard ownership.`);
+console.log(`Validated ${discovered.length} test contracts and source-file ownership.`);
 
 function boundaryFor(contract) {
   if (contract.layer === "unit") return "in-process-decision";
   if (contract.layer === "integration") return "owned-filesystem-or-process";
-  if (/help|exposed|unknown command/i.test(contract.name)) return "production-bundle-wiring";
-  if (/recover|preserv|conflict|detached|failure|failed|reject|refuse|atomic|rollback/i.test(contract.name)) {
-    return "process-integrity-or-recovery";
-  }
   return "production-cli-journey";
 }
 
-function rationaleFor(contract) {
-  if (boundaryFor(contract) === "production-bundle-wiring") {
-    return "Runs the production bundle to prove public command routing and rendered CLI wiring.";
-  }
-  if (boundaryFor(contract) === "process-integrity-or-recovery") {
-    return "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior.";
-  }
-  return "Exercises an independently owned end-to-end workspace journey through the production CLI bundle.";
-}

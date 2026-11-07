@@ -18,8 +18,6 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-// This executable owns only the external process boundary. Git refs are real
-// objects in the fixture's bare remote; release bodies survive separate runs.
 const fakeApi = `#!/usr/bin/env node
 const fs = require('node:fs');
 const cp = require('node:child_process');
