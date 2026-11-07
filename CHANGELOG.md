@@ -1,5 +1,13 @@
 # oh-my-space
 
+## 2.0.2
+
+### Patch Changes
+
+- [#96](https://github.com/divlook/oh-my-space/pull/96) [`1a8341b`](https://github.com/divlook/oh-my-space/commit/1a8341bb6d3e0b231e99f6733cc745fe858bae1c) Thanks [@divlook](https://github.com/divlook)! - Complete stable releases with a verified remote version tag and published GitHub Release after npm publication. Preserve matching release metadata, refuse conflicting identities, and support metadata-only recovery without republishing packages or changing npm dist-tags.
+
+- [#98](https://github.com/divlook/oh-my-space/pull/98) [`9d3185a`](https://github.com/divlook/oh-my-space/commit/9d3185a50b46a9bc317d5701d6b1d959d3f7bf75) Thanks [@divlook](https://github.com/divlook)! - Refactor workspace inspection, synchronization, branch safety, and installation tooling into modules with explicit ownership while preserving command behavior and Git recovery contracts. Replace implicit test sharding with source-file ownership and remove redundant, implementation-coupled checks.
+
 ## 2.0.1
 
 ### Patch Changes
