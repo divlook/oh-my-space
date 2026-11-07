@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 2.0.4
+
+### Patch Changes
+
+- [#103](https://github.com/divlook/oh-my-space/pull/103) [`954f68f`](https://github.com/divlook/oh-my-space/commit/954f68fa6724c4a1f64dc43cd8ef3b671076a8fb) Thanks [@divlook](https://github.com/divlook)! - Automatically recover stable release completion when published npm metadata remains temporarily unavailable beyond 31 seconds, without republishing or changing dist-tags. Retry only metadata E404 responses within a bounded polling window and preserve publication identity checks and actionable failure guidance.
+
 ## 2.0.3
 
 ### Patch Changes
