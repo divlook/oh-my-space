@@ -1,0 +1,152 @@
+{
+  "formatVersion": 1,
+  "purpose": "Non-gating local fixture construction evidence; no complete-suite or CI timing claim.",
+  "recordedAt": "2026-11-07T06:52:29.747Z",
+  "basisCommit": "35a2e35ec940a5fd5569c669c3eee3a90ca23bf1",
+  "runtime": {
+    "node": "v24.21.0",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "method": "Shared seeds prepared first; three interleaved repetitions of each constructor. Counters observe parent-process setup CLI invocations and direct git submodule add calls, not Git subprocesses inside a CLI child. Host load uncontrolled.",
+  "harnessSha256": "0f18ad741f46b9d0fc71e6f7cc32d2adf31cb0e503aeca931d62eb11f15a76de",
+  "replacedSetup": {
+    "syncOwners": {
+      "bootstrapCliSyncCalls": 12,
+      "bootstrapManualCommitPairs": 5
+    },
+    "branchListOwner": {
+      "directSubmoduleAddCalls": 10
+    }
+  },
+  "samples": [
+    {
+      "constructor": "cli",
+      "repetition": 0,
+      "durationMs": 2823,
+      "setupCliInvocations": 1,
+      "directSubmoduleAddCalls": 0
+    },
+    {
+      "constructor": "manual",
+      "repetition": 0,
+      "durationMs": 1358,
+      "setupCliInvocations": 1,
+      "directSubmoduleAddCalls": 0
+    },
+    {
+      "constructor": "submodule",
+      "repetition": 0,
+      "durationMs": 412,
+      "setupCliInvocations": 0,
+      "directSubmoduleAddCalls": 1
+    },
+    {
+      "constructor": "copy",
+      "repetition": 0,
+      "durationMs": 251,
+      "setupCliInvocations": 0,
+      "directSubmoduleAddCalls": 0
+    },
+    {
+      "constructor": "cli",
+      "repetition": 1,
+      "durationMs": 2804,
+      "setupCliInvocations": 1,
+      "directSubmoduleAddCalls": 0
+    },
+    {
+      "constructor": "manual",
+      "repetition": 1,
+      "durationMs": 961,
+      "setupCliInvocations": 1,
+      "directSubmoduleAddCalls": 0
+    },
+    {
+      "constructor": "submodule",
+      "repetition": 1,
+      "durationMs": 322,
+      "setupCliInvocations": 0,
+      "directSubmoduleAddCalls": 1
+    },
+    {
+      "constructor": "copy",
+      "repetition": 1,
+      "durationMs": 131,
+      "setupCliInvocations": 0,
+      "directSubmoduleAddCalls": 0
+    },
+    {
+      "constructor": "cli",
+      "repetition": 2,
+      "durationMs": 1498,
+      "setupCliInvocations": 1,
+      "directSubmoduleAddCalls": 0
+    },
+    {
+      "constructor": "manual",
+      "repetition": 2,
+      "durationMs": 1139,
+      "setupCliInvocations": 1,
+      "directSubmoduleAddCalls": 0
+    },
+    {
+      "constructor": "submodule",
+      "repetition": 2,
+      "durationMs": 494,
+      "setupCliInvocations": 0,
+      "directSubmoduleAddCalls": 1
+    },
+    {
+      "constructor": "copy",
+      "repetition": 2,
+      "durationMs": 274,
+      "setupCliInvocations": 0,
+      "directSubmoduleAddCalls": 0
+    }
+  ],
+  "summary": {
+    "cli": {
+      "medianMs": 2804,
+      "rangeMs": [
+        1498,
+        2823
+      ]
+    },
+    "manual": {
+      "medianMs": 1139,
+      "rangeMs": [
+        961,
+        1358
+      ]
+    },
+    "submodule": {
+      "medianMs": 412,
+      "rangeMs": [
+        322,
+        494
+      ]
+    },
+    "copy": {
+      "medianMs": 251,
+      "rangeMs": [
+        131,
+        274
+      ]
+    }
+  },
+  "verified": [
+    "Two root commits, clean root state, and identical tracked path sets.",
+    "Matching root HEAD/index gitlinks and source HEAD.",
+    "Attached main, origin/main tracking, and origin/HEAD.",
+    "Equivalent manifest after private upstream path substitution.",
+    "Private upstream URLs in root config, .gitmodules, and source origin.",
+    "Mutable submodule gitdirs remain inside their own workspace.",
+    "Pushing one copied fixture does not change another upstream."
+  ],
+  "notes": [
+    "Only test preparation changed; subject CLI commands, clone/deinit/recovery mutations, and their assertions remain.",
+    "Special cached/default/backup/empty-remote and unregistered inputs were not replaced.",
+    "Temporary comparison driver removed after measurement."
+  ]
+}

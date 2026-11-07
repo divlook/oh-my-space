@@ -1,0 +1,116 @@
+{
+  "formatVersion": 1,
+  "purpose": "Non-gating compiled-library operation, baseline, and cleanup inspection evidence; subprocess counts, not latency acceptance.",
+  "recordedAt": "2026-11-07T05:53:50.059Z",
+  "runtime": {
+    "node": "v24.21.0",
+    "git": "git version 2.54.0 (Apple Git-157)",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "baseline": {
+    "commit": "6beeb94b0e104d84aacbf297c47b76ef68a1fb38",
+    "sourceSha256": "ea80ec316bdd9df4a35df0f53460005efb050512f203b755d77f674b68e241bf",
+    "baselineConfigSourceSha256": "d4c69b556cc3a57a8e5cda9a7742c84ad9004fcbd6364f35aa1eb3fbf19d19b9",
+    "registrationSourceSha256": "bc69fb38c5e6c25822c5d7bb1413ec74a44ce87c3a464f3530142c96fe46a6fd"
+  },
+  "after": {
+    "sourceSha256": "c0db44bf1fe17debf7d4e2347283281581bbbff9f8ffbfd9eaaeb25b8bd82687",
+    "baselineConfigSourceSha256": "eefb22c4c364490f0df0411eed8bd3b0039b1a325b01af89589eaad41a990de7",
+    "registrationSourceSha256": "5efccf822422301a762c776598c9e5b59af1909d9851ff25fc520a146a67edb4"
+  },
+  "instrumentation": {
+    "method": "Temporary Node driver wraps child_process.spawnSync and calls syncBuiltinESMExports; counting starts only after isolated Git fixtures are ready.",
+    "harnessSha256": "4b39df34a361061bc7bb8cc279690e5d1db33fd3fe4dd7b14921640578052e46",
+    "configHarnessSha256": "ccff439495ffdb27b2b14f7fd9397b33944434c64838a9f45eb021620c0b1a85",
+    "cleanupHarnessSha256": "04d7e6557651685f0a58200aa155ec31ed1c2a3666d142889e66362145dc150c",
+    "removedAfterMeasurement": true
+  },
+  "samples": [
+    {
+      "scenario": "root idle operation inspection",
+      "before": {
+        "gitCalls": 6,
+        "markerPathCalls": 6
+      },
+      "after": {
+        "gitCalls": 1,
+        "markerPathCalls": 1
+      }
+    },
+    {
+      "scenario": "source idle operation inspection",
+      "before": {
+        "gitCalls": 7,
+        "markerPathCalls": 7
+      },
+      "after": {
+        "gitCalls": 1,
+        "markerPathCalls": 1
+      }
+    },
+    {
+      "scenario": "strict source idle operation inspection",
+      "before": {
+        "gitCalls": 7,
+        "markerPathCalls": 7
+      },
+      "after": {
+        "gitCalls": 1,
+        "markerPathCalls": 1
+      }
+    },
+    {
+      "scenario": "cleanup plan with two eligible branches",
+      "before": {
+        "gitCalls": 38,
+        "markerPathCalls": 7
+      },
+      "after": {
+        "gitCalls": 22,
+        "markerPathCalls": 1
+      }
+    },
+    {
+      "scenario": "cleanup execution deleting two confirmed branches",
+      "before": {
+        "gitCalls": 78,
+        "markerPathCalls": 14
+      },
+      "after": {
+        "gitCalls": 46,
+        "markerPathCalls": 2
+      }
+    }
+  ],
+  "configurationCompatibility": {
+    "scenario": "Plain valid config: one resolveBaselines and one reportBaselines call over working tree, index, and HEAD",
+    "before": { "gitCalls": 26, "configCalls": 18 },
+    "after": { "gitCalls": 14, "configCalls": 6 },
+    "equivalentCases": [
+      "plain",
+      "mixedCase",
+      "whitespace",
+      "valueless",
+      "multiline",
+      "duplicateBranch",
+      "duplicatePath",
+      "invalid",
+      "duplicateSection",
+      "unrelatedMultiline"
+    ],
+    "result": "Resolution objects, protected branches, source provenance, warnings, and refusals matched in all ten cases."
+  },
+  "registrationCompatibility": {
+    "method": "Compare sorted selected-key entries from Git config --null --get-regexp with Git config --null --list filtered by the same exact key prefix.",
+    "equivalentCases": ["plain", "valueless", "mixedCase", "multiline", "duplicate"],
+    "result": "Selected registration snapshot entries matched in all five cases."
+  },
+  "notes": [
+    "No cross-inspection cache: every operation check and cleanup candidate revalidation queries Git again.",
+    "Per-marker filesystem observations, precedence, and strict inspection failures remain enforced.",
+    "Newline-containing Git directory paths retain individual lookups because Git emits newline-delimited paths.",
+    "Each baseline metadata source is still collected independently; one Git config parse supplies its path and branch values without caching across sources or inspections.",
+    "Elapsed times are omitted: the local host load was uncontrolled; complete-suite timings are recorded separately."
+  ]
+}

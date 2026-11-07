@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 
 const [directory, concurrencyOption] = process.argv.slice(2);
 if (!directory) {
@@ -73,6 +74,7 @@ async function runOwnedFiles(files, concurrency, env) {
 
 function runOwnedFile(file, env) {
   return new Promise((resolveStatus, reject) => {
+    const started = performance.now();
     const child = spawn(process.execPath, ["--test", file], {
       stdio: ["ignore", "pipe", "pipe"],
       env,
@@ -86,7 +88,7 @@ function runOwnedFile(file, env) {
     child.on("close", (code) => {
       if (spawnError) return reject(spawnError);
       if (code === 0) {
-        console.log(`[OK] ${relative(process.cwd(), file)}`);
+        console.log(`[OK] ${relative(process.cwd(), file)} (${Math.round(performance.now() - started)}ms)`);
       } else {
         process.stdout.write(Buffer.concat(stdout));
         process.stderr.write(Buffer.concat(stderr));

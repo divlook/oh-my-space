@@ -38,10 +38,7 @@ test("sync registers a submodule on its baseline branch and tracks it in the par
 });
 
 test("switch creates a brand-new local branch without any remote precondition", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const { cwd } = workspaceWithApi();
 
   const sw = run(["branch", "switch", "api", "feature/new"], { cwd });
   const output = sw.stdout + sw.stderr;
@@ -58,10 +55,7 @@ test("switch creates a brand-new local branch without any remote precondition", 
 });
 
 test("checkout refuses a branch absent on origin and points at switch", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const { cwd } = workspaceWithApi();
 
   const co = run(["branch", "checkout", "api", "feature/new"], { cwd });
   const output = co.stdout + co.stderr;
@@ -71,12 +65,7 @@ test("checkout refuses a branch absent on origin and points at switch", () => {
 });
 
 test("push --commit is unsupported and fails before pushing", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
-  git(cwd, "add", "-A");
-  git(cwd, "commit", "-m", "add api");
+  const { bare, cwd } = workspaceWithApi();
 
   const wt = join(cwd, "oms", "api");
   writeFileSync(join(wt, "f.txt"), "x");
@@ -95,10 +84,7 @@ test("push --commit is unsupported and fails before pushing", () => {
 });
 
 test("fetch updates origin refs inside the submodule", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const { cwd } = workspaceWithApi();
 
   const result = run(["fetch", "api"], { cwd });
   const output = result.stdout + result.stderr;
@@ -348,13 +334,7 @@ test("push warns about a dirty submodule but still pushes the current HEAD", () 
 
 
 test("unsync removes the submodule, keeps oms.yaml, and re-sync works", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-
-  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
-  git(cwd, "add", "-A");
-  git(cwd, "commit", "-m", "add api");
+  const { cwd } = workspaceWithApi();
 
   const unsynced = run(["unsync", "api"], { cwd });
   assert.equal(unsynced.status, 0, unsynced.stdout + unsynced.stderr);
@@ -373,12 +353,7 @@ test("unsync removes the submodule, keeps oms.yaml, and re-sync works", () => {
 });
 
 test("a committed pointer reproduces on a fresh clone via sync", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
-  git(cwd, "add", "-A");
-  git(cwd, "commit", "-m", "add api submodule");
+  const { cwd } = workspaceWithApi();
   const pin = gitOut(cwd, "rev-parse", `:oms/api`);
 
   const clone = tempFixture("oms-clone-");

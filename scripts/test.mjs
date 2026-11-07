@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import { collectEnvironmentIdentity, normalizedTestEnvironment } from "./verification/environment.mjs";
 import { computeFingerprint } from "./verification/fingerprint.mjs";
 import {
@@ -69,6 +70,7 @@ try {
 
 function runConcurrentPhase([command, args]) {
   return new Promise((resolve) => {
+    const started = performance.now();
     const child = spawn(command, args, {
       cwd: before.root,
       env,
@@ -77,7 +79,10 @@ function runConcurrentPhase([command, args]) {
     });
     let spawnError;
     child.on("error", (error) => { spawnError = error; });
-    child.on("close", (status, signal) => resolve({ command, args, status, signal, error: spawnError }));
+    child.on("close", (status, signal) => {
+      console.log(`[PHASE] ${args.join(" ")} (${Math.round(performance.now() - started)}ms)`);
+      resolve({ command, args, status, signal, error: spawnError });
+    });
   });
 }
 

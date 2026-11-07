@@ -41,12 +41,7 @@ test("checkout switches onto an existing remote branch with tracking", () => {
 });
 
 test("push lazily creates the remote branch without staging the root pointer", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
-  git(cwd, "add", "-A");
-  git(cwd, "commit", "-m", "add api");
+  const { bare, cwd } = workspaceWithApi();
 
   assert.equal(run(["branch", "switch", "api", "feature/x"], { cwd }).status, 0);
   const wt = join(cwd, "oms", "api");
@@ -68,10 +63,7 @@ test("push lazily creates the remote branch without staging the root pointer", (
 });
 
 test("push fails clearly when detached HEAD has no local branch at its commit", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const { cwd } = workspaceWithApi();
   const dir = join(cwd, "oms", "api");
   git(dir, "commit", "--allow-empty", "-m", "detached tip");
   git(dir, "checkout", "--detach");
@@ -84,12 +76,7 @@ test("push fails clearly when detached HEAD has no local branch at its commit", 
 });
 
 test("status reports branch, pin state, and dirtiness", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
-  git(cwd, "add", "-A");
-  git(cwd, "commit", "-m", "add api submodule");
+  const { cwd } = workspaceWithApi();
 
   let result = run(["status"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);

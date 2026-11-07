@@ -21,14 +21,17 @@ type GitmodulesSource = {
   rawContent: string;
 };
 
-function readGitConfigValues(
-  repoRoot: string,
-  content: string,
-  key: string,
-): { ok: true; values: string[] } | { ok: false } {
-  const r = productionGitRunner(repoRoot, ["config", "--file", "-", "--get-all", key], Buffer.from(content));
-  if (!r.success) return r.exitCode === 1 ? { ok: true, values: [] } : { ok: false };
-  return { ok: true, values: r.stdout.split("\n").map((s) => s.trim()).filter((s) => s.length > 0) };
+function readGitConfigValues(entries: readonly string[], key: string): string[] {
+  const prefix = `${key}\n`;
+  const values: string[] = [];
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue;
+    for (const line of entry.slice(prefix.length).split("\n")) {
+      const value = line.trim();
+      if (value) values.push(value);
+    }
+  }
+  return values;
 }
 
 function countSectionHeaders(content: string, path: string): number {
@@ -103,22 +106,20 @@ type SourceObservation =
   | { ok: false; warning: string; refusal: string };
 
 function observeSource(repoRoot: string, source: GitmodulesSource, path: string): SourceObservation {
-  const problem = (message: string, repair: boolean): SourceObservation => ({
+  const problem = (message: string): SourceObservation => ({
     ok: false,
     warning: `${source.label} ${message}`,
-    refusal: `${source.label} ${message}${repair ? "; repair it, then retry" : "; retry once Git is idle"}`,
+    refusal: `${source.label} ${message}; repair it, then retry`,
   });
-  if (countSectionHeaders(source.rawContent, path) > 1) return problem(`has duplicate "${path}" submodule sections`, true);
-  if (source.rawContent.trim().length > 0 && !productionGitRunner(repoRoot, ["config", "--file", "-", "--list"], Buffer.from(source.rawContent)).success) {
-    return problem("has invalid Git config syntax", true);
-  }
-  const paths = readGitConfigValues(repoRoot, source.rawContent, `submodule.${path}.path`);
-  if (!paths.ok) return problem("path values could not be read", false);
-  if (paths.values.length > 1) return problem(`has multiple "path" values for "${path}"`, true);
-  const branches = readGitConfigValues(repoRoot, source.rawContent, `submodule.${path}.branch`);
-  if (!branches.ok) return problem("branch values could not be read", false);
-  if (branches.values.length > 1) return problem(`has multiple "branch" values for "${path}"`, true);
-  return { ok: true, source: source.label, branch: branches.values[0] ?? null };
+  if (countSectionHeaders(source.rawContent, path) > 1) return problem(`has duplicate "${path}" submodule sections`);
+  const parsed = productionGitRunner(repoRoot, ["config", "--file", "-", "--null", "--list"], Buffer.from(source.rawContent));
+  if (!parsed.success) return problem("has invalid Git config syntax");
+  const entries = parsed.stdout.split("\0");
+  const paths = readGitConfigValues(entries, `submodule.${path}.path`);
+  if (paths.length > 1) return problem(`has multiple "path" values for "${path}"`);
+  const branches = readGitConfigValues(entries, `submodule.${path}.branch`);
+  if (branches.length > 1) return problem(`has multiple "branch" values for "${path}"`);
+  return { ok: true, source: source.label, branch: branches[0] ?? null };
 }
 
 function observeMetadata(repoRoot: string, alias: string): { errors: string[]; sources: SourceObservation[] } {

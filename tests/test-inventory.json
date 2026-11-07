@@ -14,20 +14,20 @@
       "blackbox": {
         "concurrency": 8,
         "ownerOrder": [
-          "tests/cli-sync-b.test.js",
-          "tests/cli-commit-c.test.js",
-          "tests/cli-commit-b.test.js",
-          "tests/cli-sync-c.test.js",
-          "tests/cli-commit-a.test.js",
-          "tests/cli-sync-a.test.js",
-          "tests/cli-preparation-a.test.js",
           "tests/cli-branch-a.test.js",
-          "tests/cli-branch-clean.test.js",
+          "tests/cli-commit-a.test.js",
+          "tests/cli-commit-b.test.js",
+          "tests/cli-sync-a.test.js",
           "tests/cli-branch-list-a.test.js",
+          "tests/cli-sync-b.test.js",
+          "tests/cli-sync-c.test.js",
+          "tests/cli-preparation-a.test.js",
+          "tests/cli-commit-c.test.js",
+          "tests/cli-tree-a.test.js",
+          "tests/cli-branch-clean.test.js",
           "tests/cli-exec.test.js",
           "tests/cli-scaffold.test.js",
-          "tests/cli-tools.test.js",
-          "tests/cli-tree-a.test.js"
+          "tests/cli-tools.test.js"
         ]
       }
     }
@@ -6579,6 +6579,17 @@
       "processBoundaryRationale": null
     },
     {
+      "id": "tests/integration/branch-baseline.test.ts::baseline inspection preserves config value boundaries and refuses invalid metadata from every source",
+      "name": "baseline inspection preserves config value boundaries and refuses invalid metadata from every source",
+      "source": "tests/integration/branch-baseline.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-baseline.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
       "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup aborts remaining work on base selected declaration registration recorded commit or operation changes",
       "name": "cleanup aborts remaining work on base selected declaration registration recorded commit or operation changes",
       "source": "tests/integration/branch-clean-confirmation.test.ts",
@@ -6915,6 +6926,28 @@
       "layer": "integration",
       "owners": [
         "tests/integration/exec.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/git-operation-state.test.ts::operation checks detect every operation marker, preserve priority, and observe marker removal",
+      "name": "operation checks detect every operation marker, preserve priority, and observe marker removal",
+      "source": "tests/integration/git-operation-state.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/git-operation-state.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/git-operation-state.test.ts::operation checks isolate linked worktrees with newline-containing Git directory paths",
+      "name": "operation checks isolate linked worktrees with newline-containing Git directory paths",
+      "source": "tests/integration/git-operation-state.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/git-operation-state.test.ts"
       ],
       "boundary": "owned-filesystem-or-process",
       "processBoundaryRationale": null

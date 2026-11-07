@@ -47,6 +47,7 @@ if (owners.length === 0) {
 }
 const output = resolve(root, "tests/performance/owner-durations.json");
 const previous = existsSync(output) ? JSON.parse(readFileSync(output, "utf8")) : null;
+const { history = [], ...previousMeasurement } = previous ?? {};
 const measurements = Object.fromEntries(
   discoveredOwners.flatMap((owner) => previous?.owners?.[owner] ? [[owner, previous.owners[owner]]] : []),
 );
@@ -78,5 +79,6 @@ writeFileSync(output, `${JSON.stringify({
   runtime: spawnSync(node, ["--version"], { encoding: "utf8" }).stdout.trim(),
   command: `${node} --test <owner>`,
   owners: measurements,
+  history: previous ? [...history, previousMeasurement] : [],
 }, null, 2)}\n`);
 console.log(`Recorded ${owners.length} owner measurements in ${output}.`);
