@@ -39,6 +39,12 @@ for (const [command, args] of phases) {
   });
   exitOnFailure({ command, args, status: result.status, signal: result.signal, error: result.error });
 }
+try {
+  const { prepareSharedFixtures } = await import("../tests/helpers.js");
+  Object.assign(env, prepareSharedFixtures());
+} catch (error) {
+  exitOnFailure({ command: "shared Git fixture preparation", args: [], status: 1, error });
+}
 for (const outcome of await Promise.all(realGitPhases.map(runConcurrentPhase))) {
   exitOnFailure(outcome);
 }

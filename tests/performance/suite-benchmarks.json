@@ -51,6 +51,23 @@
       "varianceMs2": 96721890,
       "maxMs": 86528,
       "gating": true
+    },
+    {
+      "label": "ci-fixture-reuse-node24",
+      "measuredAt": "2026-11-07T05:22:31.287Z",
+      "runtime": "v24.21.0",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        135749,
+        151590,
+        166384
+      ],
+      "medianMs": 151590,
+      "varianceMs2": 156478105,
+      "maxMs": 166384,
+      "gating": true
     }
   ]
 }

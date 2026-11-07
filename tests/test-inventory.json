@@ -6579,34 +6579,144 @@
       "processBoundaryRationale": null
     },
     {
-      "id": "tests/integration/branch-clean.test.ts::cleanup aborts remaining work on base selected declaration registration recorded commit or operation changes",
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup aborts remaining work on base selected declaration registration recorded commit or operation changes",
       "name": "cleanup aborts remaining work on base selected declaration registration recorded commit or operation changes",
-      "source": "tests/integration/branch-clean.test.ts",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
       "layer": "integration",
       "owners": [
-        "tests/integration/branch-clean.test.ts"
+        "tests/integration/branch-clean-confirmation.test.ts"
       ],
       "boundary": "owned-filesystem-or-process",
       "processBoundaryRationale": null
     },
     {
-      "id": "tests/integration/branch-clean.test.ts::cleanup candidate-local ref and config failures retain accurate partial outcomes and recovery guidance",
-      "name": "cleanup candidate-local ref and config failures retain accurate partial outcomes and recovery guidance",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup declines cancels and refuses noninteractive candidates but succeeds without candidates",
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup declines cancels and refuses noninteractive candidates but succeeds without candidates",
       "name": "cleanup declines cancels and refuses noninteractive candidates but succeeds without candidates",
-      "source": "tests/integration/branch-clean.test.ts",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
       "layer": "integration",
       "owners": [
-        "tests/integration/branch-clean.test.ts"
+        "tests/integration/branch-clean-confirmation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup ignores unrelated root commits declarations and staged source pointer movement",
+      "name": "cleanup ignores unrelated root commits declarations and staged source pointer movement",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-confirmation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup initialization followed by no candidates reports retained preparation",
+      "name": "cleanup initialization followed by no candidates reports retained preparation",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-confirmation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup planning inspection errors fail closed instead of becoming idle detached or empty inventory",
+      "name": "cleanup planning inspection errors fail closed instead of becoming idle detached or empty inventory",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-confirmation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup preserves changed occupied symbolic and newly protected candidates and continues safe branches",
+      "name": "cleanup preserves changed occupied symbolic and newly protected candidates and continues safe branches",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-confirmation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup retains registered initialization baseline attachment and tracking after decline",
+      "name": "cleanup retains registered initialization baseline attachment and tracking after decline",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-confirmation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup shared inspection failures after confirmation abort all remaining candidates",
+      "name": "cleanup shared inspection failures after confirmation abort all remaining candidates",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-confirmation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-confirmation.test.ts::cleanup treats same-name same-OID recreation as confirmed and already absent as successful",
+      "name": "cleanup treats same-name same-OID recreation as confirmed and already absent as successful",
+      "source": "tests/integration/branch-clean-confirmation.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-confirmation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-transactions.test.ts::cleanup candidate-local ref and config failures retain accurate partial outcomes and recovery guidance",
+      "name": "cleanup candidate-local ref and config failures retain accurate partial outcomes and recovery guidance",
+      "source": "tests/integration/branch-clean-transactions.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-transactions.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-transactions.test.ts::cleanup emits executable shell-safe recreation and exact configuration repair commands",
+      "name": "cleanup emits executable shell-safe recreation and exact configuration repair commands",
+      "source": "tests/integration/branch-clean-transactions.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-transactions.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-transactions.test.ts::cleanup expected-tip and expected-base transactions reject races without force retries",
+      "name": "cleanup expected-tip and expected-base transactions reject races without force retries",
+      "source": "tests/integration/branch-clean-transactions.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-transactions.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/branch-clean-transactions.test.ts::cleanup initialization failure preserves resumable state and inconsistent registration refuses deletion",
+      "name": "cleanup initialization failure preserves resumable state and inconsistent registration refuses deletion",
+      "source": "tests/integration/branch-clean-transactions.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/branch-clean-transactions.test.ts"
       ],
       "boundary": "owned-filesystem-or-process",
       "processBoundaryRationale": null
@@ -6634,85 +6744,8 @@
       "processBoundaryRationale": null
     },
     {
-      "id": "tests/integration/branch-clean.test.ts::cleanup emits executable shell-safe recreation and exact configuration repair commands",
-      "name": "cleanup emits executable shell-safe recreation and exact configuration repair commands",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup expected-tip and expected-base transactions reject races without force retries",
-      "name": "cleanup expected-tip and expected-base transactions reject races without force retries",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup ignores unrelated root commits declarations and staged source pointer movement",
-      "name": "cleanup ignores unrelated root commits declarations and staged source pointer movement",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup initialization failure preserves resumable state and inconsistent registration refuses deletion",
-      "name": "cleanup initialization failure preserves resumable state and inconsistent registration refuses deletion",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup initialization followed by no candidates reports retained preparation",
-      "name": "cleanup initialization followed by no candidates reports retained preparation",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
       "id": "tests/integration/branch-clean.test.ts::cleanup origin default requires its local branch and explicit bases do not silently substitute",
       "name": "cleanup origin default requires its local branch and explicit bases do not silently substitute",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup planning inspection errors fail closed instead of becoming idle detached or empty inventory",
-      "name": "cleanup planning inspection errors fail closed instead of becoming idle detached or empty inventory",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup preserves changed occupied symbolic and newly protected candidates and continues safe branches",
-      "name": "cleanup preserves changed occupied symbolic and newly protected candidates and continues safe branches",
       "source": "tests/integration/branch-clean.test.ts",
       "layer": "integration",
       "owners": [
@@ -6766,41 +6799,8 @@
       "processBoundaryRationale": null
     },
     {
-      "id": "tests/integration/branch-clean.test.ts::cleanup retains registered initialization baseline attachment and tracking after decline",
-      "name": "cleanup retains registered initialization baseline attachment and tracking after decline",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
       "id": "tests/integration/branch-clean.test.ts::cleanup shallow history deletes proven ancestors and preserves unproven ancestry without fetching",
       "name": "cleanup shallow history deletes proven ancestors and preserves unproven ancestry without fetching",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup shared inspection failures after confirmation abort all remaining candidates",
-      "name": "cleanup shared inspection failures after confirmation abort all remaining candidates",
-      "source": "tests/integration/branch-clean.test.ts",
-      "layer": "integration",
-      "owners": [
-        "tests/integration/branch-clean.test.ts"
-      ],
-      "boundary": "owned-filesystem-or-process",
-      "processBoundaryRationale": null
-    },
-    {
-      "id": "tests/integration/branch-clean.test.ts::cleanup treats same-name same-OID recreation as confirmed and already absent as successful",
-      "name": "cleanup treats same-name same-OID recreation as confirmed and already absent as successful",
       "source": "tests/integration/branch-clean.test.ts",
       "layer": "integration",
       "owners": [

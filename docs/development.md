@@ -52,6 +52,10 @@ npm test
 The full gate checks types and builds once.
 It then runs the unit, integration, and black-box test layers.
 
+The integration and black-box layers share immutable bare-repository and canonical-workspace seeds prepared after the build.
+Each test receives private copies of mutable Git state, including its upstream repository and submodule remote configuration.
+Standalone layer commands prepare their own seeds; the owning process removes them only after its children finish.
+
 Pull-request CI has one required validation job, `test (development)`, on `.nvmrc` Node 24.
 It reuses verification only when the content fingerprint, resolved Node version, runner image, and architecture match exactly.
 On a cache miss, it installs dependencies, runs the complete suite, inspects the package, and records a verification marker.
@@ -84,6 +88,8 @@ Use `currentVersion` when checking the actual package version or keeping install
 Protected process-integrity/recovery and production-bundle-wiring contracts stay black-box unless an equivalent replacement retains that boundary.
 You may consolidate or remove other journeys only when observable coverage remains.
 Each executable contract lives in the `.test.js` or `.test.ts` file that owns its execution; shared fixture helpers do not register tests or choose shards.
+Branch-clean integration contracts have separate owners for baseline eligibility (`branch-clean.test.ts`), confirmation and revalidation (`branch-clean-confirmation.test.ts`), and transactional failures and recovery (`branch-clean-transactions.test.ts`).
+Their shared fixture module registers no tests, so the existing integration concurrency can schedule these owners without filtering contracts.
 Each migration must record its replacement or deletion reason in `tests/test-inventory.json`.
 That inventory also records source-file ownership, reviewed process-boundary classifications, and the enforced black-box contract cap.
 `npm run test:inventory` checks the inventory.
@@ -94,6 +100,8 @@ Keep ongoing performance measurements in `tests/performance/`, independently of 
 
 - `owner-durations.json` records test-owner timings used by `node scripts/validate-test-inventory.mjs --write`.
 - `suite-benchmarks.json` records complete-suite measurements and is uploaded by CI.
+
+The required CI job uploads its performance evidence even when the 55-second check fails; a failed check still prevents package inspection and verification-marker publication.
 
 Measure the full gate without enforcing a wall-clock budget:
 
