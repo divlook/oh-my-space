@@ -42,10 +42,7 @@ test("switch onto an existing local branch just switches", () => {
 });
 
 test("switch and checkout error without hanging when args are omitted in a non-TTY", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const { cwd } = workspaceWithApi();
 
   const noAlias = run(["branch", "switch"], { cwd });
   assert.equal(noAlias.status, 1, noAlias.stdout + noAlias.stderr);
@@ -61,10 +58,7 @@ test("switch and checkout error without hanging when args are omitted in a non-T
 });
 
 test("push --record is unsupported and fails before pushing", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const { cwd } = workspaceWithApi();
 
   const result = run(["push", "api", "--record"], { cwd });
   const output = result.stdout + result.stderr;
@@ -74,10 +68,7 @@ test("push --record is unsupported and fails before pushing", () => {
 });
 
 test("pull --ff-only succeeds on the submodule's branch", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  const { cwd } = workspaceWithApi();
 
   const result = run(["pull", "api"], { cwd });
   const output = result.stdout + result.stderr;

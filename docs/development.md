@@ -55,6 +55,7 @@ It then runs the unit, integration, and black-box test layers.
 The integration and black-box layers share immutable bare-repository and canonical-workspace seeds prepared after the build.
 Each test receives private copies of mutable Git state, including its upstream repository and submodule remote configuration.
 Standalone layer commands prepare their own seeds; the owning process removes them only after its children finish.
+Use `workspaceWithApi()` for an already registered, clean `api/main` test setup; keep real sync, clone, and deinitialization commands when that transition is the contract under test.
 
 Pull-request CI has one required validation job, `test (development)`, on `.nvmrc` Node 24.
 It reuses verification only when the content fingerprint, resolved Node version, runner image, and architecture match exactly.
@@ -98,7 +99,7 @@ That inventory also records source-file ownership, reviewed process-boundary cla
 
 Keep ongoing performance measurements in `tests/performance/`, independently of active or archived OpenSpec changes.
 
-- `owner-durations.json` records test-owner timings used by `node scripts/validate-test-inventory.mjs --write`.
+- `owner-durations.json` records current test-owner timings used by `node scripts/validate-test-inventory.mjs --write`, with earlier snapshots retained in `history`.
 - `suite-benchmarks.json` records complete-suite measurements and is uploaded by CI.
 
 The required CI job uploads its performance evidence even when the 55-second check fails; a failed check still prevents package inspection and verification-marker publication.
@@ -115,6 +116,15 @@ After building, measure a selected black-box owner:
 node scripts/benchmark-test-owners.mjs --owner tests/cli-tree-a.test.js
 ```
 
+Black-box `[OK]` lines include each child process's wall time, including startup and fixture cleanup.
+Concurrent build and real-Git layer phases also report their wall times.
+Refresh all black-box owner measurements before regenerating their execution order:
+
+```bash
+node scripts/benchmark-test-owners.mjs --owner-prefix tests/cli-
+node scripts/validate-test-inventory.mjs --write
+```
+
 The benchmark scripts update these files. Preserve reviewed historical measurements when running temporary diagnostics.
 Acceptance budgets remain a three-run local median of at most 110 seconds, no local run above 135 seconds, and a cache-miss Node 24 CI Test step of at most 55 seconds.
 Use `--gating` with at least three runs for local Node 24 acceptance, or `--ci-gating` for the Node 24 CI budget.
@@ -125,6 +135,7 @@ Each inspection still resolves paths afresh, including every cleanup candidate r
 Git emits newline-delimited paths, so Git directories containing newlines retain individual path lookups.
 Baseline inspection similarly parses each collected `.gitmodules` source once with Git, preserving duplicate-value checks and separate working-tree, index, and HEAD observations.
 Cleanup registration snapshots also validate and collect each configuration source in one Git query, without removing per-candidate revalidation.
+`fixture-setup.json` records local construction comparisons and Git-state/isolation checks for copying the existing API seed instead of repeating bootstrap sync or submodule registration.
 
 ### Workspace inspection measurements
 

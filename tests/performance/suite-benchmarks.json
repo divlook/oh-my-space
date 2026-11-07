@@ -102,6 +102,21 @@
       "varianceMs2": 33414434,
       "maxMs": 176075,
       "gating": true
+    },
+    {
+      "label": "reused-api-setups-node24",
+      "measuredAt": "2026-11-07T07:06:04.492Z",
+      "runtime": "v24.21.0",
+      "runs": 1,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        114750
+      ],
+      "medianMs": 114750,
+      "varianceMs2": 0,
+      "maxMs": 114750,
+      "gating": false
     }
   ]
 }

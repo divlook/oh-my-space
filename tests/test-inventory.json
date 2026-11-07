@@ -14,20 +14,20 @@
       "blackbox": {
         "concurrency": 8,
         "ownerOrder": [
-          "tests/cli-sync-b.test.js",
-          "tests/cli-commit-c.test.js",
-          "tests/cli-commit-b.test.js",
-          "tests/cli-sync-c.test.js",
-          "tests/cli-commit-a.test.js",
-          "tests/cli-sync-a.test.js",
-          "tests/cli-preparation-a.test.js",
           "tests/cli-branch-a.test.js",
-          "tests/cli-branch-clean.test.js",
+          "tests/cli-commit-a.test.js",
+          "tests/cli-commit-b.test.js",
+          "tests/cli-sync-a.test.js",
           "tests/cli-branch-list-a.test.js",
+          "tests/cli-sync-b.test.js",
+          "tests/cli-sync-c.test.js",
+          "tests/cli-preparation-a.test.js",
+          "tests/cli-commit-c.test.js",
+          "tests/cli-tree-a.test.js",
+          "tests/cli-branch-clean.test.js",
           "tests/cli-exec.test.js",
           "tests/cli-scaffold.test.js",
-          "tests/cli-tools.test.js",
-          "tests/cli-tree-a.test.js"
+          "tests/cli-tools.test.js"
         ]
       }
     }

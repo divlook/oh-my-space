@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { delimiter, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { testEnv, run, queueEnv, tempFixture, writeSources, git, initBareUpstream, initGitWorkspace, gitOut, initEmptyBare, sourceFor, syncedSubmodule } from "./helpers.js";
+import { testEnv, run, queueEnv, tempFixture, writeSources, git, initBareUpstream, initGitWorkspace, gitOut, initEmptyBare, sourceFor, syncedSubmodule, workspaceWithApi } from "./helpers.js";
 
 function gitFailureEnv(command, diagnostic) {
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
@@ -19,9 +19,7 @@ function gitFailureEnv(command, diagnostic) {
 }
 
 test("branch list auto-selects and initializes the sole registered alias using the manifest URL without rewriting metadata", () => {
-  const origin = initBareUpstream();
-  const cwd = initGitWorkspace();
-  const dir = syncedSubmodule(cwd, "api", origin);
+  const { cwd, wt: dir } = workspaceWithApi();
   git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.url", "https://wrong.invalid/private.git");
   const metadataBefore = readFileSync(join(cwd, ".gitmodules"), "utf8");
   assert.equal(spawnSync("git", ["-C", cwd, "submodule", "deinit", "-f", "oms/api"], { env: testEnv }).status, 0);
@@ -58,9 +56,7 @@ test("branch list rejects unknown, ambiguous, unregistered, and partial aliases 
 });
 
 test("bare branch routes list through the guarded action selector without leftover responses", () => {
-  const origin = initBareUpstream();
-  const cwd = initGitWorkspace();
-  syncedSubmodule(cwd, "api", origin);
+  const { cwd } = workspaceWithApi();
   const result = run(["branch"], {
     cwd,
     env: queueEnv([{ type: "select", value: "list" }]),
@@ -113,9 +109,7 @@ test("branch list reports fresh empty remote groups and detached HEAD", () => {
 });
 
 test("branch list degrades malformed baseline metadata instead of failing closed", () => {
-  const origin = initBareUpstream();
-  const cwd = initGitWorkspace();
-  syncedSubmodule(cwd, "api", origin);
+  const { cwd } = workspaceWithApi();
   writeFileSync(join(cwd, ".gitmodules"), '[submodule "oms/api"\n\tpath = oms/api\n');
 
   const result = run(["branch", "list", "api"], { cwd });
@@ -229,9 +223,7 @@ test("branch list treats remote configuration and ref inspection failures as una
 });
 
 test("branch list exits 2 with preserved-state repair guidance when local refs cannot be inspected", () => {
-  const origin = initBareUpstream();
-  const cwd = initGitWorkspace();
-  const dir = syncedSubmodule(cwd, "api", origin);
+  const { cwd, wt: dir } = workspaceWithApi();
   const rootHead = gitOut(cwd, "rev-parse", "HEAD");
   const branch = gitOut(dir, "branch", "--show-current");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
@@ -273,24 +265,20 @@ test("branch list refreshes an omitted origin default and distrusts cached origi
 });
 
 test("branch list allows pointer OID movement but rejects pending topology removal", () => {
-  const origin = initBareUpstream();
-  const movedCwd = initGitWorkspace();
-  const movedDir = syncedSubmodule(movedCwd, "api", origin);
+  const { cwd: movedCwd, wt: movedDir } = workspaceWithApi();
   git(movedDir, "commit", "--allow-empty", "-m", "move pointer");
   git(movedCwd, "add", "oms/api");
   const moved = run(["branch", "list", "api"], { cwd: movedCwd });
   assert.equal(moved.status, 0, moved.stdout + moved.stderr);
 
-  const removalCwd = initGitWorkspace();
-  syncedSubmodule(removalCwd, "api", origin);
+  const { cwd: removalCwd } = workspaceWithApi();
   git(removalCwd, "rm", "--cached", "oms/api");
   const removal = run(["branch", "list", "api"], { cwd: removalCwd });
   assert.equal(removal.status, 1, removal.stdout + removal.stderr);
   assert.match(removal.stdout + removal.stderr, /inconsistent|pending/);
   assert.match(removal.stdout + removal.stderr, /oms sync api/);
 
-  const conflictCwd = initGitWorkspace();
-  syncedSubmodule(conflictCwd, "api", origin);
+  const { cwd: conflictCwd } = workspaceWithApi();
   const oid = gitOut(conflictCwd, "rev-parse", "HEAD:oms/api");
   const conflict = spawnSync("git", ["update-index", "--index-info"], {
     cwd: conflictCwd,
@@ -303,8 +291,7 @@ test("branch list allows pointer OID movement but rejects pending topology remov
   assert.equal(conflicted.status, 1, conflicted.stdout + conflicted.stderr);
   assert.match(conflicted.stdout + conflicted.stderr, /inconsistent|conflict/);
 
-  const missingMetadataCwd = initGitWorkspace();
-  syncedSubmodule(missingMetadataCwd, "api", origin);
+  const { cwd: missingMetadataCwd } = workspaceWithApi();
   rmSync(join(missingMetadataCwd, ".gitmodules"));
   const missingMetadata = run(["branch", "list", "api"], { cwd: missingMetadataCwd });
   assert.equal(missingMetadata.status, 1, missingMetadata.stdout + missingMetadata.stderr);
@@ -312,9 +299,7 @@ test("branch list allows pointer OID movement but rejects pending topology remov
 });
 
 test("branch list initialization failure preserves partial state and redacts manifest credentials", () => {
-  const origin = initBareUpstream();
-  const cwd = initGitWorkspace();
-  const dir = syncedSubmodule(cwd, "api", origin);
+  const { cwd, wt: dir } = workspaceWithApi();
   assert.equal(spawnSync("git", ["-C", cwd, "submodule", "deinit", "-f", "oms/api"], { env: testEnv }).status, 0);
   rmSync(join(cwd, ".git", "modules", "oms", "api"), { recursive: true, force: true });
   writeSources(cwd, "repos:\n  - alias: api\n    remotes:\n      origin: https://secret:token@example.invalid/private.git\n    branch: main\n");
@@ -362,9 +347,7 @@ test("branch list preserves accepted sync precondition and operational exit code
 });
 
 test("branch list keeps an exhausted declared remote with no cached refs visible as unavailable", () => {
-  const origin = initBareUpstream();
-  const cwd = initGitWorkspace();
-  syncedSubmodule(cwd, "api", origin);
+  const { bare: origin, cwd } = workspaceWithApi();
   const missingRemote = join(tempFixture("missing-remote-"), "missing.git");
   writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${origin}\n      missing: file://${missingRemote}\n    branch: main\n`);
 
