@@ -1,33 +1,28 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { API } from "typescript/unstable/sync";
 import { isCallExpression, isIdentifier, isNoSubstitutionTemplateLiteral, isStringLiteral } from "typescript/unstable/ast/is";
 
-
-/** Discovers executable test contracts and their deterministic owners. */
 export function discoverTestContracts(root) {
   const testsRoot = resolve(root, "tests");
   const files = collect(testsRoot).filter(isTestSource);
-  const sources = new Map(files.map((file) => [relative(root, file), readFileSync(file, "utf8")]));
-  const wrappers = discoverWrappers(sources);
   const contracts = [];
   const api = new API({ cwd: root });
 
   try {
     const snapshot = api.updateSnapshot({ openFiles: files });
-    for (const [source] of sources) {
-      const file = resolve(root, source);
+    for (const file of files) {
+      const source = relative(root, file);
       const sourceFile = snapshot.getDefaultProjectForFile(file)?.program.getSourceFile(file);
       if (!sourceFile) throw new Error(`TypeScript did not parse test source ${source}`);
       const names = extractContractNames(sourceFile);
-      for (const [ordinal, name] of names.entries()) {
-        const owners = ownersFor(source, name, ordinal, wrappers);
+      for (const name of names) {
         contracts.push({
           id: `${source}::${name}`,
           name,
           source,
           layer: layerFor(source),
-          owners,
+          owners: [source],
         });
       }
     }
@@ -38,7 +33,6 @@ export function discoverTestContracts(root) {
   return contracts.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-/** Validates discovered contracts against the committed ownership inventory. */
 export function validateTestInventory(inventory, discovered) {
   const errors = [];
   const declaredById = uniqueById(inventory.contracts ?? [], "declared", errors);
@@ -115,7 +109,6 @@ export function validateTestInventory(inventory, discovered) {
   return errors;
 }
 
-/** Extracts literal node:test contract names in declaration order. */
 export function extractContractNames(source) {
   const names = [];
   visit(source);
@@ -146,48 +139,7 @@ function collect(directory) {
 }
 
 function isTestSource(path) {
-  return /(?:\.test|\.contracts)\.(?:js|ts)$/.test(path);
-}
-
-function discoverWrappers(sources) {
-  const wrappers = new Map();
-  for (const [owner, content] of sources) {
-    const imported = content.match(/await import\(["'](\.\/[^"']+\.contracts\.(?:js|ts))["']\)/)?.[1];
-    if (!imported) continue;
-    const source = resolveImport(owner, imported);
-    const numeric = content.match(/OMS_TEST_SHARD\s*=\s*["'](\d+)\/(\d+)["']/);
-    const namedBody = content.match(/OMS_TEST_SHARD_NAMES\s*=\s*JSON\.stringify\(\[([\s\S]*?)\]\)/)?.[1];
-    const names = namedBody ? [...namedBody.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]) : null;
-    const entries = wrappers.get(source) ?? [];
-    entries.push({
-      owner,
-      index: numeric ? Number.parseInt(numeric[1], 10) : null,
-      count: numeric ? Number.parseInt(numeric[2], 10) : null,
-      names,
-    });
-    wrappers.set(source, entries);
-  }
-  return wrappers;
-}
-
-function resolveImport(owner, imported) {
-  const ownerParts = owner.split("/");
-  ownerParts.pop();
-  for (const part of imported.split("/")) {
-    if (part === ".") continue;
-    if (part === "..") ownerParts.pop();
-    else ownerParts.push(part);
-  }
-  return ownerParts.join("/");
-}
-
-function ownersFor(source, name, ordinal, wrappers) {
-  const candidates = wrappers.get(source);
-  if (!candidates) return [source];
-  const named = candidates.filter((candidate) => candidate.names?.includes(name));
-  if (named.length > 0) return named.map((candidate) => candidate.owner).sort();
-  const numeric = candidates.filter((candidate) => candidate.count && ordinal % candidate.count === candidate.index);
-  return numeric.map((candidate) => candidate.owner).sort();
+  return /\.test\.(?:js|ts)$/.test(path);
 }
 
 function layerFor(source) {
@@ -209,5 +161,8 @@ function uniqueById(contracts, label, errors) {
 }
 
 function sameStrings(left = [], right = []) {
-  return left.length === right.length && [...left].sort().every((value, index) => value === [...right].sort()[index]);
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
 }

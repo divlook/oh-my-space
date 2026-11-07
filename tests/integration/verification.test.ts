@@ -83,9 +83,7 @@ test("fingerprint CLI runs before dependencies are installed", () => {
   const root = repository();
   const verificationDir = join(root, "scripts", "verification");
   mkdirSync(verificationDir, { recursive: true });
-  for (const name of ["config.mjs", "environment.mjs", "fingerprint.mjs"]) {
-    cpSync(new URL(`../../scripts/verification/${name}`, import.meta.url), join(verificationDir, name));
-  }
+  cpSync(new URL("../../scripts/verification/", import.meta.url), verificationDir, { recursive: true });
   commitAll(root);
   const output = execFileSync(process.execPath, [realpathSync(join(verificationDir, "fingerprint.mjs")), "--ci"], {
     cwd: root,

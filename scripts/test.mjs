@@ -69,8 +69,9 @@ function runConcurrentPhase([command, args]) {
       stdio: "inherit",
       shell: process.platform === "win32",
     });
-    child.on("error", (error) => resolve({ command, args, status: null, signal: null, error }));
-    child.on("close", (status, signal) => resolve({ command, args, status, signal }));
+    let spawnError;
+    child.on("error", (error) => { spawnError = error; });
+    child.on("close", (status, signal) => resolve({ command, args, status, signal, error: spawnError }));
   });
 }
 

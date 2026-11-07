@@ -13,10 +13,10 @@ import {
 } from "../../scripts/lib/git.js";
 import type { GitResult } from "../../scripts/lib/types.js";
 
-function queuedRunner(results: GitResult[], calls: Array<{ cwd: string; args: string[]; input?: Buffer | null }> = []): RawGitRunner {
+function runnerFor(results: Record<string, GitResult>, calls: Array<{ cwd: string; args: string[]; input?: Buffer | null }> = []): RawGitRunner {
   return (cwd, args, input) => {
     calls.push({ cwd, args, input });
-    const result = results.shift();
+    const result = results[args[0]];
     assert.ok(result, `unexpected Git call: ${args.join(" ")}`);
     return result;
   };
@@ -27,7 +27,7 @@ const failed = (stderr = "failure"): GitResult => ({ exitCode: 1, success: false
 
 test("raw Git runner receives exact cwd, arguments, and submodule path", () => {
   const calls: Array<{ cwd: string; args: string[]; input?: Buffer | null }> = [];
-  const runner = queuedRunner([ok("main\n"), ok()], calls);
+  const runner = runnerFor({ status: ok("main\n"), fetch: ok() }, calls);
 
   assert.deepEqual(runGit("/repo", ["status"], false, undefined, runner), ok("main\n"));
   assert.deepEqual(runSub("/repo", "api", ["fetch"], false, runner), ok());
@@ -38,19 +38,19 @@ test("raw Git runner receives exact cwd, arguments, and submodule path", () => {
 });
 
 test("branch and dirty classifiers consume raw Git outcomes without a process", () => {
-  assert.equal(currentBranch("/repo", queuedRunner([ok("main\n")])), "main");
-  assert.equal(currentBranch("/repo", queuedRunner([ok("HEAD\n")])), null);
-  assert.equal(currentBranch("/repo", queuedRunner([failed()])), null);
-  assert.equal(isDirty("/repo", queuedRunner([ok(" M source.ts\n")])), true);
-  assert.equal(isDirty("/repo", queuedRunner([ok("\n")])), false);
-  assert.equal(isDirty("/repo", queuedRunner([failed()])), false);
+  assert.equal(currentBranch("/repo", () => ok("main\n")), "main");
+  assert.equal(currentBranch("/repo", () => ok("HEAD\n")), null);
+  assert.equal(currentBranch("/repo", () => failed()), null);
+  assert.equal(isDirty("/repo", () => ok(" M source.ts\n")), true);
+  assert.equal(isDirty("/repo", () => ok("\n")), false);
+  assert.equal(isDirty("/repo", () => failed()), false);
 });
 
 test("local branch inspection parses upstream divergence and degrades malformed counts", () => {
-  const result = inspectLocalBranches("/repo", queuedRunner([
-    ok("feature\torigin/feature\nmain\t\n"),
-    ok("2 3\n"),
-  ]));
+  const result = inspectLocalBranches("/repo", runnerFor({
+    "for-each-ref": ok("feature\torigin/feature\nmain\t\n"),
+    "rev-list": ok("2 3\n"),
+  }));
   assert.deepEqual(result, {
     ok: true,
     branches: [
@@ -60,23 +60,23 @@ test("local branch inspection parses upstream divergence and degrades malformed 
   });
 
   assert.deepEqual(
-    inspectLocalBranches("/repo", queuedRunner([ok("feature\torigin/feature\n"), ok("bad\n")])),
+    inspectLocalBranches("/repo", runnerFor({ "for-each-ref": ok("feature\torigin/feature\n"), "rev-list": ok("bad\n") })),
     { ok: true, branches: [{ name: "feature", upstream: "origin/feature", ahead: null, behind: null }] },
   );
 });
 
 test("remote branch inspection sorts names, removes symbolic HEAD, and redacts failures", () => {
   assert.deepEqual(
-    inspectRemoteBranches("/repo", "origin", queuedRunner([ok([
+    inspectRemoteBranches("/repo", "origin", () => ok([
       "refs/remotes/origin/zeta",
       "refs/remotes/origin/HEAD",
       "refs/remotes/origin/alpha",
       "",
-    ].join("\n"))])),
+    ].join("\n"))),
     { ok: true, branches: ["alpha", "zeta"] },
   );
   assert.deepEqual(
-    inspectRemoteBranches("/repo", "origin", queuedRunner([failed("https://user:secret@example.com/repo?token=value")])),
+    inspectRemoteBranches("/repo", "origin", () => failed("https://user:secret@example.com/repo?token=value")),
     { ok: false, diagnostic: "https://[redacted]@example.com/repo?token=[redacted]" },
   );
 });

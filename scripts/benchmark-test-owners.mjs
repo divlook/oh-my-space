@@ -2,15 +2,29 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
+import { parseArgs } from "node:util";
 import { discoverTestContracts } from "./test-inventory-lib.mjs";
 
-const nodeOption = process.argv.indexOf("--node");
-const node = nodeOption >= 0 ? process.argv[nodeOption + 1] : process.execPath;
-const ownerOption = process.argv.indexOf("--owner");
-const requestedOwner = ownerOption >= 0 ? process.argv[ownerOption + 1] : null;
-const prefixOption = process.argv.indexOf("--owner-prefix");
-const requestedPrefix = prefixOption >= 0 ? process.argv[prefixOption + 1] : null;
-if (!node) {
+let values;
+try {
+  ({ values } = parseArgs({
+    options: {
+      node: { type: "string", default: process.execPath },
+      owner: { type: "string" },
+      "owner-prefix": { type: "string" },
+    },
+  }));
+  if (values.owner !== undefined && values["owner-prefix"] !== undefined) {
+    throw new Error("--owner and --owner-prefix are mutually exclusive.");
+  }
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(2);
+}
+const node = values.node;
+const requestedOwner = values.owner;
+const requestedPrefix = values["owner-prefix"];
+if (!node || requestedOwner === "" || requestedPrefix === "") {
   console.error("Usage: node scripts/benchmark-test-owners.mjs [--node <executable>] [--owner <test-file> | --owner-prefix <prefix>]");
   process.exit(2);
 }
@@ -27,6 +41,10 @@ const owners = requestedOwner
   : requestedPrefix
     ? discoveredOwners.filter((owner) => owner.startsWith(requestedPrefix))
     : discoveredOwners;
+if (owners.length === 0) {
+  console.error(`No test owners match prefix: ${requestedPrefix}`);
+  process.exit(2);
+}
 const output = resolve(root, "tests/performance/owner-durations.json");
 const previous = existsSync(output) ? JSON.parse(readFileSync(output, "utf8")) : null;
 const measurements = Object.fromEntries(

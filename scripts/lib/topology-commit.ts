@@ -1,13 +1,11 @@
 import { log } from "@clack/prompts";
-import { runGit, shortSha, submodulePath } from "./git.js";
-import { stagedRootPaths } from "./root-index.js";
-import { gitlinkState, partialRemovalTopology, pendingAddTopology, pendingRemovalTopology } from "./status.js";
+import { runGit, shortSha, stagedRootPaths, submodulePath } from "./git.js";
+import { gitlinkState, partialRemovalTopology, pendingAddTopology, pendingRemovalTopology } from "./workspace-state.js";
 import { finalizeRootCommit } from "./root-tx.js";
 import type { AliasMetadataPlan } from "./gitmodules-reconcile.js";
 
 type TopologyKind = "add" | "remove";
 
-/** Unstage only the topology paths (.gitmodules + selected gitlinks), preserving unrelated staged paths. */
 function unstageTopologyPaths(repoRoot: string, aliases: string[]): void {
   runGit(repoRoot, ["reset", "-q", "HEAD", "--", ".gitmodules", ...aliases.map(submodulePath)]);
 }
@@ -19,32 +17,24 @@ function topologyCommitMessage(kind: TopologyKind, aliases: string[]): string {
   return aliases.length === 1 ? `chore(oms): remove ${aliases[0]} submodule` : "chore(oms): remove submodules";
 }
 
-/** Root index paths staged outside the given topology path set (.gitmodules + selected gitlinks). */
 function unrelatedStagedTopologyPaths(repoRoot: string, aliases: string[]): string[] {
   const topo = new Set([".gitmodules", ...aliases.map(submodulePath)]);
   return stagedRootPaths(repoRoot).filter((p) => !topo.has(p));
 }
 
-/**
- * Decide what happens to root topology changes after a successful sync/unsync: create a path-limited
- * topology commit by default, or leave the changes unstaged when the caller passed `--no-commit`.
- * Partial removal topology is rejected rather than committed. Returns a non-zero contribution on
- * topology failure.
- *
- * `commit` is tri-state on purpose. Commander yields `undefined` when neither `--commit` nor
- * `--no-commit` is given, and programmatic callers (`runSync([alias], {})`) pass nothing at all, so
- * the default is resolved here rather than at the flag declaration where those callers never see it.
- */
-export async function finalizeTopology(
-  repoRoot: string,
-  requested: string[],
-  kind: TopologyKind,
-  commit: boolean | undefined,
-  allSucceeded: boolean,
-  metadataPlans: AliasMetadataPlan[] = [],
-  omsYamlBytes: Buffer | null = null,
-  metadataAliases: string[] = [],
-): Promise<number> {
+type TopologyInput = {
+  repoRoot: string;
+  requested: string[];
+  kind: TopologyKind;
+  commit: boolean | undefined;
+  allSucceeded: boolean;
+  metadataPlans?: AliasMetadataPlan[];
+  omsYamlBytes?: Buffer | null;
+  metadataAliases?: string[];
+};
+
+export async function finalizeTopology(input: TopologyInput): Promise<number> {
+  const { repoRoot, requested, kind, commit, allSucceeded, metadataPlans = [], omsYamlBytes = null, metadataAliases = [] } = input;
   const topoPending: string[] = [];
   const partial: string[] = [];
   for (const alias of requested) {
@@ -57,13 +47,11 @@ export async function finalizeTopology(
       topoPending.push(alias);
     }
   }
-  // Metadata-only aliases (reconciled .gitmodules but no pending gitlink move) also drive finalization.
   const metaOnly = metadataAliases.filter((a) => !topoPending.includes(a));
   const pending = [...topoPending, ...metaOnly];
   if (pending.length === 0 && partial.length === 0) return 0;
   const involved = [...pending, ...partial];
 
-  // A topology change names the add/remove message; a metadata-only reconciliation uses its own.
   const message =
     topoPending.length > 0
       ? topologyCommitMessage(kind, topoPending)
@@ -81,7 +69,6 @@ export async function finalizeTopology(
     return 0;
   }
 
-  // A commit will be created; reject states that must not be committed.
   if (partial.length > 0) {
     log.error(
       `Partial removal topology for ${partial.join(", ")} must be cleaned up before committing. Complete the removal (or restore the submodule), then retry.`,
@@ -123,7 +110,6 @@ export async function finalizeTopology(
   const pendingSet = new Set(pending);
   const fin = finalizeRootCommit({
     repoRoot,
-    kind,
     // Metadata-only aliases contribute only their .gitmodules section; pointer moves remain for record.
     addAliases: kind === "add" ? topoPending : [],
     removeAliases: kind === "remove" ? topoPending : [],
@@ -137,7 +123,6 @@ export async function finalizeTopology(
       log.error(`Root commit ${shortSha(repoRoot)} was created, but finalization failed: ${fin.reason}. Re-run "${retry}" to recover.`);
       return fin.exitCode;
     }
-    // The commit failed before HEAD advanced; the real index and working tree are unchanged.
     log.error(`Root commit failed: ${fin.reason}. No changes were committed; re-run "${retry}" to retry.`);
     return fin.exitCode;
   }

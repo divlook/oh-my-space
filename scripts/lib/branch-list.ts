@@ -1,5 +1,6 @@
 import { cancel, log } from "@clack/prompts";
-import { aliasRegistration, prepareAlias } from "./alias-preparation.js";
+import { prepareAlias } from "./alias-preparation.js";
+import { aliasRegistration } from "./alias-registration.js";
 import { reportBaselines } from "./branch-baseline.js";
 import {
   aliasDir,
@@ -15,7 +16,7 @@ import { loadForSubmodules } from "./manifest.js";
 import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
 import { ensureRemotes } from "./submodule-config.js";
 import type { Repo } from "./types.js";
-import { refuseInsideManagedTree } from "./tree-ops.js";
+import { refuseInsideManagedTree } from "./tree-context.js";
 
 type RemoteState = "fresh" | "stale" | "unavailable";
 type RemoteInventory = { name: string; state: RemoteState; branches: string[]; warning: string | null };
@@ -171,7 +172,6 @@ function renderInventory(
   }
 }
 
-/** List local and declared-remote branches for one safely prepared submodule. */
 export async function runBranchList(aliasArg: string | undefined): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;

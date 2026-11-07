@@ -1,23 +1,18 @@
-import { aliasDir, currentBranch, localBranchExists, redactSensitiveUrls, remoteBranchExists, runGit, runSub, submodulePath } from "./git.js";
+import { aliasDir, currentBranch, localBranchExists, productionGitRunner, redactSensitiveUrls, remoteBranchExists, runGit, runSub, submodulePath, type RawGitRunner } from "./git.js";
 
-/** The branch recorded in .gitmodules for the submodule, if any. */
-export function gitmodulesBranch(repoRoot: string, alias: string): string | null {
+export function gitmodulesBranch(repoRoot: string, alias: string, runner: RawGitRunner = productionGitRunner): string | null {
   const r = runGit(repoRoot, [
     "config",
     "--file",
     ".gitmodules",
     "--get",
     `submodule.${submodulePath(alias)}.branch`,
-  ]);
+  ], false, undefined, runner);
   if (!r.success) return null;
   const b = r.stdout.trim();
   return b.length > 0 ? b : null;
 }
 
-/**
- * Outcome of attaching a detached submodule without changing its checked-out commit. `branch` is the
- * requested baseline in every variant, so callers can name it without tracking their own copy.
- */
 type AttachBranchResult =
   | { kind: "already-attached"; branch: string }
   | { kind: "attached"; branch: string }
@@ -30,11 +25,11 @@ type AttachBranchResult =
  * yet, a branch is created at the current (pinned) commit — the checked-out commit is preserved,
  * which keeps the parent's recorded pointer reproducible.
  */
-export function attachBranch(repoRoot: string, alias: string, branch: string): AttachBranchResult {
+export function attachBranch(repoRoot: string, alias: string, branch: string, runner: RawGitRunner = productionGitRunner): AttachBranchResult {
   const dir = aliasDir(repoRoot, alias);
-  if (currentBranch(dir) !== null) return { kind: "already-attached", branch };
+  if (currentBranch(dir, runner) !== null) return { kind: "already-attached", branch };
 
-  const head = runGit(dir, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const head = runGit(dir, ["rev-parse", "--verify", "HEAD^{commit}"], false, undefined, runner);
   const headOid = head.stdout.trim();
   if (!head.success || !/^[0-9a-f]{40}$/.test(headOid)) {
     return {
@@ -44,8 +39,8 @@ export function attachBranch(repoRoot: string, alias: string, branch: string): A
     };
   }
 
-  if (localBranchExists(dir, branch)) {
-    const tip = runGit(dir, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
+  if (localBranchExists(dir, branch, runner)) {
+    const tip = runGit(dir, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], false, undefined, runner);
     const branchOid = tip.stdout.trim();
     if (!tip.success || !/^[0-9a-f]{40}$/.test(branchOid)) {
       return {
@@ -56,7 +51,7 @@ export function attachBranch(repoRoot: string, alias: string, branch: string): A
     }
     if (branchOid !== headOid) return { kind: "diverged", branch, headOid, branchOid };
 
-    const switched = runSub(repoRoot, alias, ["switch", branch]);
+    const switched = runSub(repoRoot, alias, ["switch", branch], false, runner);
     if (!switched.success) {
       return {
         kind: "failed",
@@ -67,8 +62,7 @@ export function attachBranch(repoRoot: string, alias: string, branch: string): A
     return { kind: "attached", branch };
   }
 
-  // Create the branch at the current HEAD (the pinned commit) so the worktree stays put.
-  const created = runSub(repoRoot, alias, ["switch", "-c", branch]);
+  const created = runSub(repoRoot, alias, ["switch", "-c", branch], false, runner);
   if (!created.success) {
     return {
       kind: "failed",
@@ -76,8 +70,8 @@ export function attachBranch(repoRoot: string, alias: string, branch: string): A
       diagnostic: redactSensitiveUrls(created.stderr.trim()) || `git switch -c "${branch}" failed`,
     };
   }
-  if (remoteBranchExists(dir, branch)) {
-    runSub(repoRoot, alias, ["branch", "--set-upstream-to", `origin/${branch}`, branch]);
+  if (remoteBranchExists(dir, branch, runner)) {
+    runSub(repoRoot, alias, ["branch", "--set-upstream-to", `origin/${branch}`, branch], false, runner);
   }
   return { kind: "attached", branch };
 }
@@ -92,17 +86,18 @@ export function ensureRemotes(
   repoRoot: string,
   alias: string,
   remotes: Record<string, string>,
+  runner: RawGitRunner = productionGitRunner,
 ): RemoteReconciliation[] {
   const results: RemoteReconciliation[] = [];
   for (const [name, url] of Object.entries(remotes)) {
-    const existing = runSub(repoRoot, alias, ["remote", "get-url", name]);
+    const existing = runSub(repoRoot, alias, ["remote", "get-url", name], false, runner);
     if (!existing.success) {
-      const added = runSub(repoRoot, alias, ["remote", "add", name, url]);
+      const added = runSub(repoRoot, alias, ["remote", "add", name, url], false, runner);
       results.push(added.success
         ? { name, ok: true }
         : { name, ok: false, diagnostic: redactSensitiveUrls(added.stderr.trim()) });
     } else if (existing.stdout.trim() !== url) {
-      const updated = runSub(repoRoot, alias, ["remote", "set-url", name, url]);
+      const updated = runSub(repoRoot, alias, ["remote", "set-url", name, url], false, runner);
       results.push(updated.success
         ? { name, ok: true }
         : { name, ok: false, diagnostic: redactSensitiveUrls(updated.stderr.trim()) });

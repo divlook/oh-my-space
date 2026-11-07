@@ -8,14 +8,12 @@ function isIdentity(value) {
     && ["node", "git", "os", "osVersion", "arch"].every((key) => typeof value[key] === "string");
 }
 
-/** Creates the exact key for a content fingerprint and runtime identity. */
 export function verificationKey(fingerprint, environment) {
   const hash = createHash("sha256");
   hash.update(JSON.stringify({ fingerprint, environment }));
   return hash.digest("hex");
 }
 
-/** Parses a verification record, returning null for any malformed or unsupported input. */
 export function parseVerificationRecord(text) {
   try {
     const value = JSON.parse(text);
@@ -29,17 +27,14 @@ export function parseVerificationRecord(text) {
   }
 }
 
-/** Reads the latest worktree-local verification record. */
 export function readVerificationRecord(root) {
   try {
     return parseVerificationRecord(readFileSync(resolve(root, VERIFICATION_RECORD_PATH), "utf8"));
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return null;
+  } catch {
     return null;
   }
 }
 
-/** Writes the latest successful record atomically. */
 export function writeVerificationRecord(root, { fingerprint, environment, command = "npm test", verifiedAt = new Date().toISOString() }) {
   const record = {
     schema: VERIFICATION_SCHEMA_VERSION,
@@ -61,7 +56,6 @@ export function writeVerificationRecord(root, { fingerprint, environment, comman
   return record;
 }
 
-/** Removes the latest record only when it matches the rejected key. */
 export function invalidateVerificationRecord(root, expectedKey) {
   const record = readVerificationRecord(root);
   if (!record || record.key !== expectedKey) return false;
@@ -69,7 +63,6 @@ export function invalidateVerificationRecord(root, expectedKey) {
   return true;
 }
 
-/** Returns whether a parsed record exactly matches the current verification inputs. */
 export function recordMatches(record, fingerprint, environment) {
   return record?.key === verificationKey(fingerprint, environment);
 }

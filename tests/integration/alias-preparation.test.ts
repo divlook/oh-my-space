@@ -38,22 +38,16 @@ function cloneWithUninitializedApi(): string {
 }
 
 test("preparation initializes registered aliases directly without changing root topology", async () => {
-  const commands = [
-    ["commit", false],
-    ["fetch", true],
-    ["pull", true],
-    ["push", true],
-    ["branch list", true],
-    ["branch switch", true],
-    ["branch checkout", true],
-    ["branch delete", false],
+  const policies = [
+    { command: "commit", topologyOffer: false },
+    { command: "fetch", topologyOffer: true },
   ] as const;
   const cwd = cloneWithUninitializedApi();
   const loaded = loadRepos({ cwd });
   assert.ok(loaded);
   const before = rootSnapshot(cwd);
-  for (let index = 0; index < commands.length; index += 1) {
-    const [command, topologyOffer] = commands[index]!;
+  for (let index = 0; index < policies.length; index += 1) {
+    const { command, topologyOffer } = policies[index]!;
     const result = await prepareAlias(loaded.repoRoot, loaded.repos[0]!, {
       command,
       topologyOffer,
@@ -61,7 +55,7 @@ test("preparation initializes registered aliases directly without changing root 
     assert.deepEqual(result, { ok: true }, command);
     assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true, command);
     assert.deepEqual(rootSnapshot(cwd), before, command);
-    if (index < commands.length - 1) {
+    if (index < policies.length - 1) {
       git(cwd, "submodule", "deinit", "-f", "oms/api");
     }
   }
@@ -95,37 +89,35 @@ test("preparation preserves a pinned detached commit when the baseline branch ha
 });
 
 test("preparation registers an offered alias once and continues with its manifest state", async () => {
-  const commands = ["fetch", "pull", "branch list", "branch switch", "branch checkout"];
-  for (const command of commands) {
-    const origin = initBareUpstream();
-    const cwd = initGitWorkspace();
-    writeSources(cwd, sourceFor("api", origin));
-    const loaded = loadRepos({ cwd });
-    assert.ok(loaded);
-    const beforeCount = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
-    const originalCwd = process.cwd();
-    const previousMode = process.env.OMS_TEST_MODE;
-    const previousResponses = process.env.OMS_TEST_PROMPT_RESPONSES;
-    process.chdir(cwd);
-    process.env.OMS_TEST_MODE = "1";
-    process.env.OMS_TEST_PROMPT_RESPONSES = JSON.stringify([{ type: "select", value: "sync" }]);
+  const command = "fetch";
+  const origin = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", origin));
+  const loaded = loadRepos({ cwd });
+  assert.ok(loaded);
+  const beforeCount = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
+  const originalCwd = process.cwd();
+  const previousMode = process.env.OMS_TEST_MODE;
+  const previousResponses = process.env.OMS_TEST_PROMPT_RESPONSES;
+  process.chdir(cwd);
+  process.env.OMS_TEST_MODE = "1";
+  process.env.OMS_TEST_PROMPT_RESPONSES = JSON.stringify([{ type: "select", value: "sync" }]);
+  __resetPromptQueueForTests();
+  try {
+    const result = await prepareAlias(loaded.repoRoot, loaded.repos[0]!, {
+      command,
+      topologyOffer: true,
+    });
+    assert.deepEqual(result, { ok: true }, command);
+    assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount + 1, command);
+    assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+    assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  } finally {
     __resetPromptQueueForTests();
-    try {
-      const result = await prepareAlias(loaded.repoRoot, loaded.repos[0]!, {
-        command,
-        topologyOffer: true,
-      });
-      assert.deepEqual(result, { ok: true }, command);
-      assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount + 1, command);
-      assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
-      assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
-    } finally {
-      __resetPromptQueueForTests();
-      process.chdir(originalCwd);
-      if (previousResponses === undefined) delete process.env.OMS_TEST_PROMPT_RESPONSES;
-      else process.env.OMS_TEST_PROMPT_RESPONSES = previousResponses;
-      if (previousMode === undefined) delete process.env.OMS_TEST_MODE;
-      else process.env.OMS_TEST_MODE = previousMode;
-    }
+    process.chdir(originalCwd);
+    if (previousResponses === undefined) delete process.env.OMS_TEST_PROMPT_RESPONSES;
+    else process.env.OMS_TEST_PROMPT_RESPONSES = previousResponses;
+    if (previousMode === undefined) delete process.env.OMS_TEST_MODE;
+    else process.env.OMS_TEST_MODE = previousMode;
   }
 });

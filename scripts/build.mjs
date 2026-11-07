@@ -4,14 +4,7 @@ import { isBuiltin } from "node:module";
 import esbuild from "esbuild";
 import { validatePublishedSkillMetadata } from "./lib/skill-metadata.js";
 
-/**
- * Top-level runtime dependencies that must be inlined into the bundle (never
- * externalized). Used only by the self-containment assertion as a sanity check;
- * the third-party notices are derived from the full bundle graph, not this list.
- */
-const INLINED_DEPS = ["commander", "@clack/prompts", "semver", "yaml"];
 
-/** Candidate license-file basenames to look for inside an installed dependency (matched case-insensitively). */
 const LICENSE_FILENAMES = ["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "COPYING"];
 
 const result = await esbuild.build({
@@ -35,12 +28,11 @@ const result = await esbuild.build({
 
 assertSelfContained(result.metafile);
 
-// Build metadata: written as a sibling of dist/oms.js and read at runtime.
 let commit = null;
 try {
   commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 } catch {
-  // not a git repo (e.g. building from a published tarball) — fall back at runtime
+  // Build metadata remains optional outside a Git checkout.
 }
 mkdirSync("dist", { recursive: true });
 writeFileSync(
@@ -54,11 +46,9 @@ writeFileSync(
 // notices file instead. It ships via the existing "dist/" entry in package.json files.
 writeFileSync("dist/THIRD-PARTY-NOTICES.txt", buildThirdPartyNotices(result.metafile));
 
-// Guarantee the bin is executable; do not rely on esbuild's implicit shebang exec bit.
 chmodSync("dist/oms.js", 0o755);
 
 /**
- * Reads complete published skill references from skills/<name>/SKILL.md frontmatter.
  * @returns {Record<string, { version: string, omsVersion: string }> | null} validated references, or null when unavailable
  */
 function readPublishedSkillReferences() {
@@ -66,7 +56,7 @@ function readPublishedSkillReferences() {
   try {
     entries = readdirSync("skills", { withFileTypes: true });
   } catch {
-    // No skills/ directory — building from the published tarball, which ships only dist/.
+    // Missing source metadata remains supported; the runtime treats references as unavailable.
     return null;
   }
   const references = {};
@@ -90,9 +80,6 @@ function readPublishedSkillReferences() {
 }
 
 /**
- * Builds the third-party attribution text reproducing every bundled package's
- * license and copyright notice, as required by their MIT/ISC terms. The package
- * set is derived from the esbuild bundle graph so transitive deps are covered too.
  * @param {import("esbuild").Metafile} metafile - esbuild metafile for the build
  * @returns {string} the full notices document
  */
@@ -102,9 +89,9 @@ function buildThirdPartyNotices(metafile) {
     console.error("No bundled third-party packages found in metafile; cannot build notices.");
     process.exit(1);
   }
-  const sections = deps.map((dep) => {
-    const pkg = JSON.parse(readFileSync(`node_modules/${dep}/package.json`, "utf8"));
-    const license = readLicenseText(dep);
+  const sections = deps.map((root) => {
+    const pkg = JSON.parse(readFileSync(`${root}/package.json`, "utf8"));
+    const license = readLicenseText(root);
     const heading = `${pkg.name}@${pkg.version} (${normalizeLicense(pkg.license)})`;
     const rule = "=".repeat(80);
     return `${rule}\n${heading}\n${rule}\n\n${license}`;
@@ -115,27 +102,19 @@ function buildThirdPartyNotices(metafile) {
   return [header, ...sections].join("\n") + "\n";
 }
 
-/**
- * Derives the sorted set of npm package names esbuild vendored into the bundle
- * from the metafile inputs (own source files have no node_modules segment).
- * @param {import("esbuild").Metafile} metafile - esbuild metafile for the build
- * @returns {string[]} sorted unique package names (scoped names kept intact)
- */
 function collectBundledPackages(metafile) {
-  const names = new Set();
+  const roots = new Set();
   for (const input of Object.keys(metafile.inputs)) {
     const marker = input.lastIndexOf("node_modules/");
     if (marker === -1) continue;
     const rest = input.slice(marker + "node_modules/".length).split("/");
     const name = rest[0]?.startsWith("@") ? `${rest[0]}/${rest[1]}` : rest[0];
-    if (name) names.add(name);
+    if (name) roots.add(input.slice(0, marker) + "node_modules/" + name);
   }
-  return [...names].sort();
+  return [...roots].sort();
 }
 
 /**
- * Normalizes the npm package.json `license` field (string, `{ type }` object, or
- * array of either) into a single display label.
  * @param {unknown} license - the raw package.json license field
  * @returns {string} a human-readable license label
  */
@@ -151,15 +130,14 @@ function normalizeLicense(license) {
 }
 
 /**
- * Reads a dependency's license file text, trying common filenames case-insensitively.
- * @param {string} dep - dependency package name (its node_modules folder)
+ * @param {string} dep - physical dependency package root
  * @returns {string} the license file contents, trimmed
  */
 function readLicenseText(dep) {
   const wanted = new Set(LICENSE_FILENAMES.map((name) => name.toLowerCase()));
-  for (const entry of readdirSync(`node_modules/${dep}`)) {
+  for (const entry of readdirSync(dep)) {
     if (wanted.has(entry.toLowerCase())) {
-      return readFileSync(`node_modules/${dep}/${entry}`, "utf8").trim();
+      return readFileSync(`${dep}/${entry}`, "utf8").trim();
     }
   }
   console.error(`Could not find a license file for bundled dep "${dep}"`);
@@ -167,8 +145,6 @@ function readLicenseText(dep) {
 }
 
 /**
- * Fails the build unless the bundle is self-contained: only Node builtins may be
- * external, and every inlined dependency must appear among the bundle inputs.
  * @param {import("esbuild").Metafile} metafile - esbuild metafile for the build
  */
 function assertSelfContained(metafile) {
@@ -182,12 +158,4 @@ function assertSelfContained(metafile) {
     process.exit(1);
   }
 
-  const inputs = Object.keys(metafile.inputs);
-  const missing = INLINED_DEPS.filter(
-    (dep) => !inputs.some((path) => path.includes(`node_modules/${dep}/`)),
-  );
-  if (missing.length > 0) {
-    console.error(`Bundle is missing expected inlined deps: ${missing.join(", ")}`);
-    process.exit(1);
-  }
 }

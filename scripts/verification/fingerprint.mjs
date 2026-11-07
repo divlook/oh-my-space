@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isFingerprintExcluded } from "./config.mjs";
 import { normalizedTestEnvironment } from "./environment.mjs";
+import { betaSourceVersion, stableMetadataContents } from "./beta-metadata.mjs";
 
 function git(cwd, args, env) {
   return execFileSync("git", args, { cwd, env, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
@@ -45,7 +46,7 @@ function expectedBeta(cwd, packageVersion, env) {
   if (!match) return null;
   const head = git(cwd, ["rev-parse", "--short=7", "HEAD"], env).toString("utf8").trim();
   if (match[2] !== head) return null;
-  const sourceVersion = env.OMS_BETA_SOURCE_VERSION;
+  const sourceVersion = betaSourceVersion(env);
   const normalizedSourceVersion = sourceVersion == null ? null : normalizeStableVersion(sourceVersion);
   if (sourceVersion != null && normalizedSourceVersion === null) return null;
   const base = normalizedSourceVersion ?? match[1];
@@ -70,21 +71,14 @@ function normalizeBetaFiles(cwd, contents, env) {
 
   const beta = expectedBeta(cwd, packageJson.version, env);
   if (!beta) return contents;
-  if (packageLock.version !== beta.beta || packageLock.packages?.[""]?.version !== beta.beta) return contents;
-
-  const encodedBeta = JSON.stringify(beta.beta);
-  const encodedBase = JSON.stringify(beta.base);
-  const packageOccurrences = packageText.split(encodedBeta).length - 1;
-  const lockOccurrences = lockText.split(encodedBeta).length - 1;
-  if (packageOccurrences !== 1 || lockOccurrences !== 2) return contents;
-
+  const stable = stableMetadataContents(packageText, lockText, beta);
+  if (!stable) return contents;
   const normalized = new Map(contents);
-  normalized.set("package.json", Buffer.from(packageText.replaceAll(encodedBeta, encodedBase)));
-  normalized.set("package-lock.json", Buffer.from(lockText.replaceAll(encodedBeta, encodedBase)));
+  normalized.set("package.json", Buffer.from(stable[0]));
+  normalized.set("package-lock.json", Buffer.from(stable[1]));
   return normalized;
 }
 
-/** Computes a fail-safe repository fingerprint from path, working content, and mode. */
 export function computeFingerprint({
   cwd = process.cwd(),
   includeUntracked = true,

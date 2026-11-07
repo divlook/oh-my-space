@@ -2,11 +2,11 @@ import { log } from "@clack/prompts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { aliasRegistration } from "./alias-preparation.js";
+import { aliasRegistration } from "./alias-registration.js";
 import { aliasDir, runGit, submoduleInitialized, submodulePath } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
 import { selectRepos } from "./prompts.js";
-import { refuseInsideManagedTree } from "./tree-ops.js";
+import { refuseInsideManagedTree } from "./tree-context.js";
 import type { SourcesOptions } from "./types.js";
 
 type ExecResult =
@@ -55,11 +55,8 @@ export async function runExec(aliases: string[], options: SourcesOptions, comman
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
+  // Manifest validation guarantees a nonempty selection domain; target state is rechecked per child.
   if (refuseInsideManagedTree(repoRoot)) return 1;
-  if (repos.length === 0) {
-    log.error("No repositories declared in the workspace.");
-    return 1;
-  }
   const picked = await selectRepos(repos, aliases, options, "exec");
   if (!picked || picked.length === 0) return 1;
 

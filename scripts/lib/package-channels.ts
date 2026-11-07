@@ -1,6 +1,6 @@
 import semver from "semver";
-import { PACKAGE_NAME } from "./constants.js";
-import type { PackageManager } from "./types.js";
+import { formatCommand, packageInstallCommand } from "./package-install.js";
+import type { PackageManager } from "./package-install.js";
 
 export type RegistryDistTags = { latest: string; beta: string | null };
 
@@ -26,7 +26,6 @@ export function latestFromRegistryJson(data: unknown): string {
   return latest;
 }
 
-/** Parses the stable and beta npm dist-tags used for compatibility decisions. */
 export function registryDistTagsFromJson(data: unknown): RegistryDistTags {
   const distTags = registryDistTagsObject(data, "channels");
   const latest = distTags.latest;
@@ -41,10 +40,6 @@ export function registryDistTagsFromJson(data: unknown): RegistryDistTags {
   return { latest, beta };
 }
 
-/** Formats a package-manager-specific global install command for an npm channel. */
 export function channelInstallCommand(manager: PackageManager, tag: "beta" | "latest"): string {
-  if (manager === "npm") return `npm install -g ${PACKAGE_NAME}@${tag}`;
-  if (manager === "pnpm") return `pnpm add -g ${PACKAGE_NAME}@${tag}`;
-  if (manager === "yarn") return `yarn global add ${PACKAGE_NAME}@${tag}`;
-  return `bun add -g ${PACKAGE_NAME}@${tag}`;
+  return formatCommand(packageInstallCommand(manager, { tag }));
 }

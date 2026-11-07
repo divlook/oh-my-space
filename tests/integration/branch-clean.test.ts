@@ -4,6 +4,8 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 import { runBranchClean } from "../../scripts/lib/branch-clean.js";
+import { planBranchClean, executeBranchClean } from "../../scripts/lib/branch-clean-plan.js";
+import { loadRepos } from "../../scripts/lib/manifest.js";
 import { __resetPromptQueueForTests, assertPromptQueueDrained } from "../../scripts/lib/prompt-adapter.js";
 import { configIdentity, git, gitOut, initBareUpstream, initGitWorkspace, localBranchExists, queueEnv, sourceFor, sourcesFor, syncedSubmodule, tempFixture, testEnv, workspaceWithApi, writeSources } from "../helpers.js";
 
@@ -23,20 +25,14 @@ function candidates(wt: string) {
   git(wt, "branch", "a-first");
   git(wt, "branch", "z-last");
 }
-async function clean(cwd: string, options: { alias?: string; base?: string; responses?: unknown[]; env?: Record<string, string>; change?: () => void } = {}) {
+async function clean(cwd: string, options: { alias?: string; base?: string; responses?: unknown[]; env?: Record<string, string> } = {}) {
   const previous = { ...process.env };
   const oldCwd = process.cwd();
   const stdout = process.stdout.write;
   const stderr = process.stderr.write;
   let output = "";
-  let changed = false;
   const capture = (chunk: string | Uint8Array) => {
     output += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
-    // Observe the public immutable plan, not an internal implementation hook.
-    if (!changed && options.change && /z-last[^\n]*[0-9a-f]{40}/.test(output)) {
-      changed = true;
-      options.change();
-    }
     return true;
   };
   Object.assign(process.env, options.responses === undefined ? testEnv : queueEnv(options.responses), options.env);
@@ -47,7 +43,6 @@ async function clean(cwd: string, options: { alias?: string; base?: string; resp
   try {
     process.chdir(cwd);
     const code = await runBranchClean(options.alias ?? "api", { base: options.base });
-    if (options.change) assert.ok(changed, `Plan mutation boundary was not observed: ${output}`);
     if (code === 0) assertPromptQueueDrained();
     return { code, output };
   } finally {
@@ -57,6 +52,22 @@ async function clean(cwd: string, options: { alias?: string; base?: string; resp
     for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
     Object.assign(process.env, previous);
     __resetPromptQueueForTests();
+  }
+}
+function executeAfterChange(cwd: string, change: () => void, env: Record<string, string> = {}) {
+  const previous = { ...process.env };
+  Object.assign(process.env, env);
+  try {
+    const loaded = loadRepos({ cwd });
+    assert.ok(loaded);
+    const repo = loaded.repos.find((entry) => entry.alias === "api");
+    assert.ok(repo);
+    const plan = planBranchClean(loaded.repoRoot, repo, undefined);
+    change();
+    return executeBranchClean(loaded.repoRoot, repo, plan);
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
+    Object.assign(process.env, previous);
   }
 }
 function wrapper(body: string) {
@@ -214,7 +225,6 @@ test("cleanup retains registered initialization baseline attachment and tracking
   configIdentity(cwd);
   const wt = join(cwd, "oms", "api");
   const root = gitOut(cwd, "ls-files", "--stage");
-  // Initialization creates the baseline; topic is made local when initialization is observed.
   const interception = wrapper(`if [[ "$*" == *"worktree list"* ]] && [[ ! -f ${shell(join(cwd, "injected"))} ]]; then "$REAL" -C ${shell(wt)} branch topic origin/topic; touch ${shell(join(cwd, "injected"))}; fi`);
   const result = await clean(cwd, { responses: [{ type: "confirm", value: false }], env: interception.env });
   assert.equal(result.code, 1, result.output);
@@ -288,16 +298,15 @@ test("cleanup preserves changed occupied symbolic and newly protected candidates
     const { cwd, wt } = fixture();
     candidates(wt);
     git(wt, "commit", "--allow-empty", "-m", "base ahead");
-    const result = await clean(cwd, { responses: yes, change: () => {
+    const outcomes = executeAfterChange(cwd, () => {
       if (kind === "tip") git(wt, "update-ref", "refs/heads/a-first", gitOut(wt, "rev-parse", "main"));
       if (kind === "occupied") git(wt, "worktree", "add", join(tempFixture("clean-occupied-"), "tree"), "a-first");
       if (kind === "symbolic") { git(wt, "update-ref", "-d", "refs/heads/a-first"); git(wt, "symbolic-ref", "refs/heads/a-first", "refs/heads/main"); }
       if (kind === "protected") git(cwd, "config", "-f", ".gitmodules", "submodule.oms/api.branch", "a-first");
-    } });
-    assert.equal(result.code, 2, `${kind}: ${result.output}`);
+    });
+    assert.equal(outcomes[0]?.kind, kind === "protected" ? "not run" : "preserved", kind);
     assert.ok(localBranchExists(wt, "a-first"));
-    // Registration metadata is shared state; changing it aborts the remaining batch.
-    assert.equal(localBranchExists(wt, "z-last"), kind === "protected", result.output);
+    assert.equal(localBranchExists(wt, "z-last"), kind === "protected");
   }
 });
 
@@ -306,16 +315,15 @@ test("cleanup treats same-name same-OID recreation as confirmed and already abse
     const { cwd, wt } = fixture();
     candidates(wt);
     const tip = gitOut(wt, "rev-parse", "a-first");
-    const result = await clean(cwd, { responses: yes, change: () => {
+    const outcomes = executeAfterChange(cwd, () => {
       git(wt, "update-ref", "-d", "refs/heads/a-first");
       if (recreate) git(wt, "branch", "a-first", tip);
       git(wt, "branch", "new-after-plan", tip);
-    } });
-    assert.equal(result.code, 0, result.output);
+    });
+    assert.deepEqual(outcomes.map((outcome) => outcome.kind), [recreate ? "deleted" : "already absent", "deleted"]);
     assert.equal(localBranchExists(wt, "a-first"), false);
     assert.equal(localBranchExists(wt, "z-last"), false);
     assert.ok(localBranchExists(wt, "new-after-plan"));
-    assert.match(result.output, recreate ? /deleted/i : /already.absent/i);
   }
 });
 
@@ -326,7 +334,7 @@ test("cleanup aborts remaining work on base selected declaration registration re
     git(wt, "commit", "--allow-empty", "-m", "available changed pointer");
     const changedPointer = gitOut(wt, "rev-parse", "HEAD");
     git(wt, "reset", "--hard", "HEAD^");
-    const result = await clean(cwd, { responses: yes, change: () => {
+    const outcomes = executeAfterChange(cwd, () => {
       if (kind === "base") git(wt, "update-ref", "refs/heads/main", changedPointer);
       if (kind === "recorded") {
         git(cwd, "update-index", "--cacheinfo", `160000,${changedPointer},oms/api`);
@@ -335,10 +343,10 @@ test("cleanup aborts remaining work on base selected declaration registration re
       if (kind === "declaration") writeSources(cwd, sourceFor("api", bare, "main", { backup: bare }));
       if (kind === "registration") git(cwd, "config", "-f", ".gitmodules", "submodule.oms/api.url", "file:///changed");
       if (kind === "operation") writeFileSync(gitOut(wt, "rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"), `${gitOut(wt, "rev-parse", "HEAD")}\n`);
-    } });
-    assert.equal(result.code, 2, `${kind}: ${result.output}`);
+    });
+    assert.deepEqual(outcomes.map((outcome) => outcome.kind), ["not run", "not run"], kind);
     assert.ok(localBranchExists(wt, "a-first") && localBranchExists(wt, "z-last"));
-    assert.match(result.output, /not.run/i);
+    assert.ok(outcomes.every((outcome) => outcome.reason));
   }
 });
 
@@ -348,14 +356,14 @@ test("cleanup ignores unrelated root commits declarations and staged source poin
   git(wt, "commit", "--allow-empty", "-m", "available staged pointer");
   const stagedPointer = gitOut(wt, "rev-parse", "HEAD");
   git(wt, "reset", "--hard", "HEAD^");
-  const result = await clean(cwd, { responses: yes, change: () => {
+  const outcomes = executeAfterChange(cwd, () => {
     writeSources(cwd, sourcesFor([{ alias: "api", bare }, { alias: "web", bare }]));
     writeFileSync(join(cwd, "unrelated"), "root change");
     git(cwd, "add", "unrelated");
     git(cwd, "commit", "-m", "unrelated root commit");
     git(cwd, "update-index", "--cacheinfo", `160000,${stagedPointer},oms/api`);
-  } });
-  assert.equal(result.code, 0, result.output);
+  });
+  assert.deepEqual(outcomes.map((outcome) => outcome.kind), ["deleted", "deleted"]);
   assert.equal(localBranchExists(wt, "a-first"), false);
   assert.equal(localBranchExists(wt, "z-last"), false);
 });
@@ -460,10 +468,10 @@ test("cleanup shared inspection failures after confirmation abort all remaining 
     candidates(wt);
     const marker = join(tempFixture("clean-inspect-race-"), "armed");
     const intercepted = wrapper(`if [[ -f ${shell(marker)} && "$*" == *${shell(match)}* ]]; then echo shared-inspection-failure >&2; exit 128; fi`);
-    const result = await clean(cwd, { responses: yes, env: intercepted.env, change: () => writeFileSync(marker, "armed") });
-    assert.equal(result.code, 2, `${match}: ${result.output}`);
+    const outcomes = executeAfterChange(cwd, () => writeFileSync(marker, "armed"), intercepted.env);
+    assert.deepEqual(outcomes.map((outcome) => outcome.kind), ["not run", "not run"], match);
     assert.ok(localBranchExists(wt, "a-first") && localBranchExists(wt, "z-last"));
-    assert.match(result.output, /not.run/i);
+    assert.ok(outcomes.every((outcome) => outcome.reason?.includes("shared-inspection-failure")));
   }
 });
 

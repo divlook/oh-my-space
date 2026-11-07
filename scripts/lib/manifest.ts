@@ -4,8 +4,6 @@ import { log } from "@clack/prompts";
 import { parse as parseYaml } from "yaml";
 import {
   ALIAS_PATTERN,
-  ALLOWED_ITEM_KEYS,
-  ALLOWED_TOP_KEYS,
   DATA_DIRNAME,
   LEGACY_DATA_DIRNAME,
   LEGACY_MANIFEST,
@@ -16,12 +14,11 @@ import {
   WORKTREE_MIGRATION_DOC,
 } from "./constants.js";
 import { docUrl } from "./env.js";
-import {
-  aliasDir,
-  inspectWorkspaceGitIdentity,
-  resolveWorkspaceManifest,
-} from "./git.js";
+import { aliasDir } from "./git.js";
+import { inspectWorkspaceGitIdentity, resolveWorkspaceManifest } from "./workspace-discovery.js";
 import type { Repo, WorkspaceOptions } from "./types.js";
+const ALLOWED_TOP_KEYS = new Set(["repos"]);
+const ALLOWED_ITEM_KEYS = new Set(["alias", "remotes", "branch"]);
 
 export function validateSources(data: unknown): Repo[] {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
@@ -216,7 +213,6 @@ export function emitWorkspaceGitIdentityError(repoRoot: string): boolean {
   return true;
 }
 
-/** Shared preamble: load the manifest and validate the root submodule repository identity. */
 export function loadForSubmodules(): { repos: Repo[]; repoRoot: string } | null {
   const loaded = loadRepos();
   if (!loaded) {

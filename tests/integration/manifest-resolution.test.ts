@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, u
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { resolveWorkspaceManifest } from "../../scripts/lib/git.js";
+import { resolveWorkspaceManifest } from "../../scripts/lib/workspace-discovery.js";
 import { loadRepos, validateSources } from "../../scripts/lib/manifest.js";
 
 const manifest = "repos:\n  - alias: api\n    remotes:\n      origin: https://example.com/api.git\n";

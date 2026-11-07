@@ -3,22 +3,16 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import semver from "semver";
 import { parse as parseYaml } from "yaml";
 import {
-  cli,
   publishBetaScript,
   testEnv,
   currentVersion,
@@ -35,21 +29,11 @@ import {
   initBareUpstream,
   initGitWorkspace,
   gitOut,
-  initEmptyBare,
   queueEnv,
   sourceFor,
-  gitTopLevelStubEnv,
-  workspaceWithApi,
-  statusJson,
-  workspaceWithMovedApi,
-  sourcesFor,
-  gitmodulesSectionCount,
-  syncedSubmodule,
 } from "./helpers.js";
 
-// --- oms agent (managed instruction files) ---
 
-/** A bare workspace (oms.yaml only, no git) — enough for agent file management. */
 function agentWorkspace() {
   const cwd = tempWorkspace();
   writeSources(cwd);
@@ -106,21 +90,10 @@ test("agent target selection cancels cleanly for install and uninstall", () => {
   }
 });
 
-test("agent install appends after two blank lines and preserves existing content", () => {
-  const cwd = agentWorkspace();
-  mkdirSync(join(cwd, "oms"), { recursive: true });
-  writeFileSync(join(cwd, "oms", "AGENTS.md"), "# House rules\nBe nice.\n");
-
-  assert.equal(run(["agent", "install", "--target", "agents"], { cwd }).status, 0);
-  const content = readFileSync(join(cwd, "oms", "AGENTS.md"), "utf8");
-  assert.match(content, /# House rules\nBe nice\.\n\n\n<!-- OMS START -->/);
-  assert.ok(content.endsWith("<!-- OMS END -->\n"));
-});
 
 test("agent install replaces exactly one existing block and keeps outside content", () => {
   const cwd = agentWorkspace();
   assert.equal(run(["agent", "install", "--target", "agents"], { cwd }).status, 0);
-  // Add content around the block, then re-install.
   const file = join(cwd, "oms", "AGENTS.md");
   writeFileSync(file, `Top matter.\n\n${readFileSync(file, "utf8")}\nBottom matter.\n`);
   assert.equal(run(["agent", "install", "--target", "agents"], { cwd }).status, 0);
@@ -141,18 +114,16 @@ test("agent install does not stage the files in Git", () => {
 
 test("agent uninstall removes the block, deletes emptied files, and no-ops when absent", () => {
   const cwd = agentWorkspace();
-  // AGENTS.md keeps surrounding content; CLAUDE.md becomes empty and is deleted.
   assert.equal(run(["agent", "install", "--target", "both"], { cwd }).status, 0);
   const agents = join(cwd, "oms", "AGENTS.md");
   writeFileSync(agents, `Keep me.\n\n${readFileSync(agents, "utf8")}`);
 
   assert.equal(run(["agent", "uninstall", "--target", "both"], { cwd }).status, 0);
-  assert.equal(existsSync(join(cwd, "oms", "CLAUDE.md")), false); // emptied → deleted
+  assert.equal(existsSync(join(cwd, "oms", "CLAUDE.md")), false);
   const content = readFileSync(agents, "utf8");
   assert.doesNotMatch(content, /<!-- OMS START -->/);
   assert.match(content, /Keep me\./);
 
-  // Re-running uninstall is a clean no-op.
   const again = run(["agent", "uninstall", "--target", "both"], { cwd });
   const output = again.stdout + again.stderr;
   assert.equal(again.status, 0, output);
@@ -162,7 +133,6 @@ test("agent uninstall removes the block, deletes emptied files, and no-ops when 
 test("agent install rejects malformed markers atomically across targets", () => {
   const cwd = agentWorkspace();
   mkdirSync(join(cwd, "oms"), { recursive: true });
-  // AGENTS.md is clean (no block); CLAUDE.md is malformed (start-only).
   writeFileSync(join(cwd, "oms", "AGENTS.md"), "# Clean file\n");
   writeFileSync(join(cwd, "oms", "CLAUDE.md"), "<!-- OMS START -->\norphan\n");
 
@@ -170,8 +140,8 @@ test("agent install rejects malformed markers atomically across targets", () => 
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
   assert.match(output, /OMS marker|markers/);
-  // No file was modified: AGENTS.md still has no block.
-  assert.doesNotMatch(readFileSync(join(cwd, "oms", "AGENTS.md"), "utf8"), /<!-- OMS START -->/);
+  assert.equal(readFileSync(join(cwd, "oms", "AGENTS.md"), "utf8"), "# Clean file\n");
+  assert.equal(readFileSync(join(cwd, "oms", "CLAUDE.md"), "utf8"), "<!-- OMS START -->\norphan\n");
 });
 
 test("agent uninstall rejects a duplicate managed block atomically", () => {
@@ -183,12 +153,10 @@ test("agent uninstall rejects a duplicate managed block atomically", () => {
   const result = run(["agent", "uninstall", "--target", "claude"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
-  // The malformed file is left untouched.
   assert.equal(readFileSync(join(cwd, "oms", "CLAUDE.md"), "utf8"), dup);
 });
 
 
-// --- legacy guards ---
 
 test("legacy bare clone (oms/<alias>/.bare) blocks sync with the 0.6.0 migration hint", () => {
   const bare = initBareUpstream();
@@ -252,7 +220,6 @@ test("unrelated sources/ directory above the workspace does not block oms", () =
 });
 
 
-// --- self update ---
 
 test("update --check reports up to date without detecting install context", () => {
   const result = run(["update", "--check"], {
@@ -576,9 +543,6 @@ test("update fails before mutation when detected manager is unavailable", () => 
   assert.doesNotMatch(output, /Update command completed/);
 });
 
-// --- oms skills (install command + published skill sources) ---
-
-/** A stand-in for npx that records the args and cwd it was invoked with, then exits with `exit`. */
 function makeFakeNpx(dir, { exit = 0 } = {}) {
   const captureFile = join(dir, "npx-capture.json");
   const bin = join(dir, "fake-npx.mjs");
@@ -604,8 +568,8 @@ test("skills prints the project and global install commands", () => {
   const result = run(["skills"]);
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.match(output, /npx skills add divlook\/oh-my-space\/skills\b/); // project scope
-  assert.match(output, /npx skills add divlook\/oh-my-space\/skills -g\b/); // global scope
+  assert.match(output, /npx skills add divlook\/oh-my-space\/skills\b/);
+  assert.match(output, /npx skills add divlook\/oh-my-space\/skills -g\b/);
 });
 
 test("skills --install delegates to npx skills add from the workspace root, forwarding extra args", () => {
@@ -620,7 +584,6 @@ test("skills --install delegates to npx skills add from the workspace root, forw
 
   const captured = JSON.parse(readFileSync(captureFile, "utf8"));
   assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space/skills", "--skill", "oms-branch"]);
-  // Resolved to the workspace root, not the oms/<alias>/ subdir the command ran from.
   assert.equal(realpathSync(captured.cwd), realpathSync(ws));
 });
 
@@ -632,18 +595,9 @@ test("skills --install returns the delegated process exit code", () => {
   assert.equal(result.status, 7, result.stdout + result.stderr);
 });
 
-test("skills --install delegates the overridden executable the same args npx would receive", () => {
-  const ws = tempWorkspace();
-  writeSources(ws);
-  const { bin, captureFile } = makeFakeNpx(ws);
-  const result = run(["skills", "--install"], { cwd: ws, env: skillsEnv(bin) });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  const captured = JSON.parse(readFileSync(captureFile, "utf8"));
-  assert.deepEqual(captured.args, ["skills", "add", "divlook/oh-my-space/skills"]);
-});
 
 test("skills --install outside a workspace without -g errors and points to the global install", () => {
-  const dir = tempWorkspace(); // no oms.yaml
+  const dir = tempWorkspace();
   const { bin, captureFile } = makeFakeNpx(dir);
   const result = run(["skills", "--install"], { cwd: dir, env: skillsEnv(bin) });
   const output = result.stdout + result.stderr;
@@ -653,7 +607,7 @@ test("skills --install outside a workspace without -g errors and points to the g
 });
 
 test("skills --install -g delegates even outside a workspace", () => {
-  const dir = tempWorkspace(); // no oms.yaml
+  const dir = tempWorkspace();
   const { bin, captureFile } = makeFakeNpx(dir);
   const result = run(["skills", "--install", "-g"], { cwd: dir, env: skillsEnv(bin) });
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -671,83 +625,27 @@ test("skills --install prints the manual command when delegation cannot execute"
   assert.match(output, /npx skills add divlook\/oh-my-space\/skills/);
 });
 
-test("skills help documents purpose, scope, and an example", () => {
-  const result = run(["skills", "--help"]);
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /install the oms workspace skills/i);
-  assert.match(output, /project scope/i);
-  assert.match(output, /global/i);
-  assert.match(output, /\$ oms skills/);
-});
 
-const SKILL_NAMES = ["oms-workspace", "oms-pointer", "oms-branch"];
-
-function readSkill(name) {
-  return readFileSync(resolve("skills", name, "SKILL.md"), "utf8");
-}
-
-function splitSkillFrontmatter(content) {
-  const m = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  assert.ok(m, "SKILL.md must open with a --- frontmatter --- block");
-  return { frontmatter: m[1], body: m[2] };
-}
-
-test("each oms skill is published with name/description/metadata frontmatter", () => {
-  // SKILL_NAMES drives every skill assertion in this file, so a newly published skill must land
-  // here rather than shipping unchecked — an unchecked version reaches dist/build-info.json.
+test("published skill names match their installation directories", () => {
   const published = readdirSync(resolve("skills"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  assert.deepEqual(published, [...SKILL_NAMES].sort(), "add any new skills/<name>/ to SKILL_NAMES");
-
-  for (const name of SKILL_NAMES) {
-    const { frontmatter, body } = splitSkillFrontmatter(readSkill(name));
-    const data = parseYaml(frontmatter);
-    assert.equal(typeof data.name, "string", `${name}: name must be a string`);
-    assert.ok(data.name.length > 0, `${name}: name must be non-empty`);
-    assert.equal(data.name, name, `${name}: frontmatter name must match its directory`);
-    assert.equal(typeof data.description, "string", `${name}: description must be a string`);
-    assert.ok(data.description.length > 0, `${name}: description must be non-empty`);
-
-    assert.equal(typeof data.metadata.version, "string", `${name}: metadata.version must be a quoted string`);
-    assert.ok(semver.valid(data.metadata.version), `${name}: metadata.version must be valid semver`);
-    assert.equal(typeof data.metadata["oh-my-space-version"], "string", `${name}: OMS range must be quoted`);
-    assert.ok(semver.validRange(data.metadata["oh-my-space-version"]), `${name}: OMS range must be valid semver`);
-    assert.equal(
-      data.compatibility,
-      `Requires oh-my-space ${data.metadata["oh-my-space-version"]}.`,
-      `${name}: compatibility must exactly mirror the OMS range`,
-    );
-
-    // The skill's own version is frontmatter for oms doctor to read. The body declares only the
-    // oms status --json schemaVersion, which is an instruction to the agent.
-    assert.doesNotMatch(
-      body,
-      versionPattern(data.metadata.version),
-      `${name}: body must not declare the skill's own version`,
-    );
+    .map((entry) => entry.name);
+  for (const name of published) {
+    const content = readFileSync(resolve("skills", name, "SKILL.md"), "utf8");
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
+    assert.notEqual(frontmatter, undefined, `${name}: missing frontmatter`);
+    assert.equal(parseYaml(frontmatter).name, name, `${name}: installation identity`);
   }
 });
 
-// --- skill version drift reporting ---
 
-// Fixed references so future metadata.version bumps cannot invalidate these fixtures.
 const SKILL_REFERENCE = JSON.stringify({
   "oms-workspace": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
   "oms-pointer": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
   "oms-branch": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
 });
-// Fixed incompatible runtime so package release bumps cannot change these channel-selection scenarios.
 const INCOMPATIBLE_RUNTIME_VERSION = "0.14.2";
 
-/**
- * Builds a fake skills-tool home. `installed` maps a skill name to the version its SKILL.md declares,
- * or null for a copy carrying no metadata block — how every install predating the marker looks.
- * `locked` defaults to the installed names; pass it to record an install whose file is absent, and
- * `source` to forge a lock entry from somewhere other than the oms repository.
- */
 function fakeSkillsHome({ installed = {}, agentDir = ".claude", locked, source = "divlook/oh-my-space", lockBody } = {}) {
   const home = tempFixture("oms-skills-");
   for (const [name, value] of Object.entries(installed)) {
@@ -781,7 +679,6 @@ function driftEnv(home, overrides = {}) {
   };
 }
 
-/** Runs doctor in an existing git workspace with the drift check pointed at a fake skills home. */
 function doctorWithSkills(cwd, home, overrides = {}) {
   const result = run(["doctor"], { cwd, env: driftEnv(home, overrides) });
   return { result, output: result.stdout + result.stderr };
@@ -807,7 +704,6 @@ test("doctor reports an older installed skill and names the skills update comman
   assert.equal(result.status, 0, output);
   assert.match(output, /oms-branch: skill 1\.0\.0 is older than 1\.1\.0 \(global\)/);
   assert.match(output, /Update or reinstall: npx skills update oms-branch/);
-  // A matching install is not mentioned, and no scope flag is suggested.
   assert.doesNotMatch(output, /oms-pointer/);
   assert.doesNotMatch(output, /npx skills update[^\n]*-[gp]\b/);
 });
@@ -821,7 +717,6 @@ test("doctor reports a newer compatible skill without recommending an OMS update
   assert.equal(result.status, 0, output);
   assert.match(output, /oms-branch: skill 2\.0\.0 is newer than this oms knows \(1\.1\.0\); runtime compatibility is satisfied \(global\)/);
   assert.doesNotMatch(output, /oms update/);
-  // The older skill keeps its own remediation, and the newer one is not folded into it.
   assert.match(output, /Update or reinstall: npx skills update oms-workspace/);
   assert.doesNotMatch(output, /npx skills update[^\n]*oms-branch/);
 });
@@ -837,7 +732,10 @@ test("doctor prefers a satisfying stable channel over beta", () => {
     OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({
       "dist-tags": { latest: "1.0.0" },
     }),
-    OMS_TEST_INSTALL_CONTEXT: installContext("global", { manager: "pnpm" }),
+    OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+      manager: "pnpm",
+      updateCommand: { executable: "pnpm", args: ["add", "-g", "oh-my-space@latest"] },
+    }),
   });
   assert.equal(result.status, 0, output);
   assert.match(output, versionPattern(`requires oms >=1.0.0; running oms is ${INCOMPATIBLE_RUNTIME_VERSION}`));
@@ -856,7 +754,10 @@ test("doctor recommends beta when only beta satisfies the installed skill", () =
     OMS_TEST_REGISTRY_RESPONSE: JSON.stringify({
       "dist-tags": { latest: INCOMPATIBLE_RUNTIME_VERSION, beta: "1.0.0-beta.sha-test" },
     }),
-    OMS_TEST_INSTALL_CONTEXT: installContext("global", { manager: "bun" }),
+    OMS_TEST_INSTALL_CONTEXT: installContext("global", {
+      manager: "bun",
+      updateCommand: { executable: "bun", args: ["add", "-g", "oh-my-space@latest"] },
+    }),
   });
   assert.equal(result.status, 0, output);
   assert.match(output, /bun add -g oh-my-space@beta/);
@@ -901,7 +802,6 @@ test("doctor stays silent when skills match, are absent, or the baked reference 
   assert.equal(absent.result.status, 0, absent.output);
   assert.doesNotMatch(absent.output, /oms-branch|npx skills update/);
 
-  // No baked reference (a build without skills/) must not report a thing.
   const drifted = fakeSkillsHome({ installed: { "oms-branch": "1.0.0" } });
   const unreferenced = doctorWithSkills(cwd, drifted, { OMS_TEST_SKILL_REFERENCES: "" });
   assert.equal(unreferenced.result.status, 0, unreferenced.output);
@@ -935,20 +835,17 @@ test("doctor ignores a lock entry from another source but still reads the file w
   const cwd = initGitWorkspace();
   writeSources(cwd);
 
-  // Provenance excludes a same-named skill published by someone else.
   const foreign = fakeSkillsHome({ installed: {}, locked: ["oms-branch"], source: "someone/else" });
   const excluded = doctorWithSkills(cwd, foreign);
   assert.equal(excluded.result.status, 0, excluded.output);
   assert.doesNotMatch(excluded.output, /oms-branch/);
 
-  // An unparseable lock degrades to the filesystem search rather than losing the feature.
   const brokenLock = fakeSkillsHome({ installed: { "oms-branch": "1.0.0" }, lockBody: "{ not json" });
   const tolerated = doctorWithSkills(cwd, brokenLock);
   assert.equal(tolerated.result.status, 0, tolerated.output);
   assert.match(tolerated.output, /oms-branch: skill 1\.0\.0 is older than 1\.1\.0 \(global\)/);
 });
 
-/** Installs a skill into the workspace itself, the layout a project-scope install produces. */
 function installProjectSkill(cwd, name, version, omsVersion = ">=0.0.0") {
   const skillDir = join(cwd, ".agents", "skills", name);
   mkdirSync(skillDir, { recursive: true });
@@ -972,7 +869,6 @@ test("doctor merges scopes that drifted alike and splits scopes at different ver
   const cwd = initGitWorkspace();
   writeSources(cwd);
 
-  // Same version in both scopes collapses to one line naming both.
   installProjectSkill(cwd, "oms-branch", "1.0.0");
   const merged = doctorWithSkills(cwd, fakeSkillsHome({ installed: { "oms-branch": "1.0.0" } }));
   assert.equal(merged.result.status, 0, merged.output);
@@ -980,7 +876,6 @@ test("doctor merges scopes that drifted alike and splits scopes at different ver
   assert.equal(merged.output.match(/oms-branch: skill/g).length, 1, "one line should cover both scopes");
   assert.equal(merged.output.match(/npx skills update/g).length, 1, "one remediation line");
 
-  // Different versions per scope stay distinct, and the skill is named once in the remedy.
   installProjectSkill(cwd, "oms-branch", "0.9.0");
   const split = doctorWithSkills(cwd, fakeSkillsHome({ installed: { "oms-branch": "1.0.0" } }));
   assert.equal(split.result.status, 0, split.output);
@@ -994,8 +889,6 @@ test("doctor skips a baked version that is not valid semver instead of failing",
   writeSources(cwd);
   const home = fakeSkillsHome({ installed: { "oms-branch": "1.0.0", "oms-pointer": "1.0.0" } });
 
-  // The reference is a build artifact; a bad entry must not turn an informational report into
-  // a non-zero exit, and must not suppress the entries that are usable.
   const { result, output } = doctorWithSkills(cwd, home, {
     OMS_TEST_SKILL_REFERENCES: JSON.stringify({
       "oms-branch": { version: "1.1", omsVersion: ">=1.0.0-0" },

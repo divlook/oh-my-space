@@ -19,7 +19,7 @@ const EXCLUDED_PREFIXES = [
   "openspec/",
 ];
 
-/** Returns whether a repository-relative path cannot affect canonical tests. */
+/** Central cache policy; tests that read excluded inputs must revise these exclusions. */
 export function isFingerprintExcluded(path) {
   return EXCLUDED_ROOT_FILES.has(path) || EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix));
 }

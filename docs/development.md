@@ -15,6 +15,23 @@ nvm use
 npm ci
 ```
 
+## Find the owning module
+
+| Concern | Owning modules under `scripts/lib/` |
+| --- | --- |
+| Workspace discovery and root identity | `workspace-discovery.ts` |
+| Gitlink/topology observations and record eligibility | `workspace-state.ts`, `git-operation-state.ts` |
+| Registration, preparation, synchronization | `alias-registration.ts`, `alias-preparation.ts`, `sync-workspace.ts` |
+| Source commits and root pointer records | `commit.ts`, `record.ts` |
+| Managed-tree inspection and lifecycle | `tree-inventory.ts`, `tree-context.ts`, `tree-exclude.ts`, `tree-ops.ts` |
+| Branch protection and confirmed cleanup | `branch-baseline.ts`, `source-safety.ts`, `branch-clean-plan.ts`, `branch-clean.ts` |
+| Managed Git configuration and root finalization | `managed-gitmodules.ts`, `gitmodules-reconcile.ts`, `topology-commit.ts`, `root-tx.ts` |
+| CLI installation and registry transport | `package-install.ts`, `install-context.ts`, `registry.ts`, `update.ts` |
+| Installed skill discovery, classification, reporting | `skill-discovery.ts`, `skill-classification.ts`, `skills.ts` |
+
+Keep shared observations below command implementations. CLI routing and raw argument handling belong in `scripts/oms.ts`.
+The [refactoring decision log](refactoring-decisions.md) explains the seams and retained exceptional policies.
+
 ## Build
 
 ```bash
@@ -66,8 +83,9 @@ Use `currentVersion` when checking the actual package version or keeping install
 
 Protected process-integrity/recovery and production-bundle-wiring contracts stay black-box unless an equivalent replacement retains that boundary.
 You may consolidate or remove other journeys only when observable coverage remains.
+Each executable contract lives in the `.test.js` or `.test.ts` file that owns its execution; shared fixture helpers do not register tests or choose shards.
 Each migration must record its replacement or deletion reason in `tests/test-inventory.json`.
-That inventory also records deterministic owner assignment and the enforced black-box contract cap.
+That inventory also records source-file ownership, reviewed process-boundary classifications, and the enforced black-box contract cap.
 `npm run test:inventory` checks the inventory.
 
 ### Performance evidence

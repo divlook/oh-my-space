@@ -12,7 +12,14 @@ const layerConfig = inventory.execution?.layers?.[concurrencyOption];
 const benchmarkOverride = process.env.OMS_TEST_BENCHMARK === "1" && concurrencyOption
   ? process.env[`OMS_TEST_${concurrencyOption.toUpperCase()}_CONCURRENCY`]
   : undefined;
-const concurrency = benchmarkOverride ?? layerConfig?.concurrency ?? concurrencyOption;
+const namedLayer = ["unit", "integration", "blackbox"].includes(concurrencyOption);
+const concurrency = benchmarkOverride ?? layerConfig?.concurrency ?? (namedLayer ? undefined : concurrencyOption);
+const executionMode = concurrencyOption === "blackbox" ? "owned-processes" : "node-test";
+if ((executionMode === "owned-processes" && concurrency === undefined)
+  || (concurrency !== undefined && (!/^[1-9]\d*$/.test(String(concurrency)) || !Number.isSafeInteger(Number(concurrency))))) {
+  console.error(`Invalid test concurrency: ${concurrency}`);
+  process.exit(2);
+}
 
 const files = collect(resolve(directory));
 if (layerConfig?.ownerOrder) {
@@ -24,7 +31,7 @@ if (files.length === 0) {
   console.error(`No test files found under ${directory}.`);
   process.exit(1);
 }
-if (layerConfig?.ownerOrder) {
+if (executionMode === "owned-processes") {
   const { prepareSharedFixtures, testEnv } = await import("../tests/helpers.js");
   const fixtures = prepareSharedFixtures();
   const ownerEnv = {
@@ -78,8 +85,10 @@ function runOwnedFile(file, env) {
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("exit", (code) => {
+    let spawnError;
+    child.on("error", (error) => { spawnError = error; });
+    child.on("close", (code) => {
+      if (spawnError) return reject(spawnError);
       if (code === 0) {
         console.log(`[OK] ${relative(process.cwd(), file)}`);
       } else {

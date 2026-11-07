@@ -8,7 +8,6 @@ import {
 } from "./constants.js";
 import {
   currentBranch,
-  inspectWorkspaceGitIdentity,
   isRegisteredSubmodule,
   parseGitVersion,
   isGitVersionSupported,
@@ -21,11 +20,13 @@ import {
 } from "./git.js";
 import { abortOnLegacyRenameAt, abortOnLegacyWorktree, emitLegacyRenameHintWalkUp, loadRepos } from "./manifest.js";
 import { reportSkillFindings } from "./skills.js";
-import { pinState } from "./status.js";
+import { pinState } from "./workspace-state.js";
 import { gitignoreIgnoresOms } from "./workspace-ignore.js";
-import { listManagedTrees, rootExcludeEntryPresent } from "./tree-ops.js";
+import { listManagedTrees } from "./tree-inventory.js";
+import { rootExcludeEntryPresent } from "./tree-exclude.js";
+import { inspectWorkspaceGitIdentity } from "./workspace-discovery.js";
 
-export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): Promise<number> {
+export async function runDoctor(versionAndExcludeRunner: RawGitRunner = productionGitRunner): Promise<number> {
   const loaded = loadRepos();
   if (!loaded) {
     emitLegacyRenameHintWalkUp();
@@ -37,7 +38,7 @@ export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): 
   log.success(`Workspace manifest directory: ${repoRoot}`);
   log.success(`${MANIFEST_FILENAME}: ${repos.length} repo(s) configured`);
 
-  const git = runGit(process.cwd(), ["--version"], false, undefined, gitRunner);
+  const git = runGit(process.cwd(), ["--version"], false, undefined, versionAndExcludeRunner);
   if (!git.success) {
     log.error("git: not found");
     return 1;
@@ -112,8 +113,6 @@ export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): 
     }
   }
 
-  // Managed-tree diagnostics: broken links get repair guidance; a missing local-exclude entry
-  // would let .oms-tree/ pollute the root's untracked files until the next `oms tree add`.
   const treeInventory = listManagedTrees(repoRoot, repos, { dirtyAliases: [] });
   for (const tree of treeInventory) {
     if (tree.state === "broken") {
@@ -126,7 +125,7 @@ export async function runDoctor(gitRunner: RawGitRunner = productionGitRunner): 
       warnings++;
     }
   }
-  if (treeInventory.length > 0 && rootExcludeEntryPresent(repoRoot, gitRunner) === false) {
+  if (treeInventory.length > 0 && rootExcludeEntryPresent(repoRoot, versionAndExcludeRunner) === false) {
     log.warn(
       `${TREE_DIRNAME}/ exists but the root's local exclude entry is missing. Run "oms tree add" to re-assert it.`,
     );

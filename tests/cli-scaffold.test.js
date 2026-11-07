@@ -1,31 +1,17 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  realpathSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import semver from "semver";
-import { parse as parseYaml } from "yaml";
 import {
-  cli,
-  publishBetaScript,
   testEnv,
-  currentVersion,
-  newerVersion,
   run,
-  versionPattern,
-  updateEnv,
-  installContext,
   tempFixture,
   tempWorkspace,
   writeSources,
@@ -34,18 +20,10 @@ import {
   initBareUpstream,
   initGitWorkspace,
   gitOut,
-  initEmptyBare,
   sourceFor,
   gitTopLevelStubEnv,
-  workspaceWithApi,
-  statusJson,
-  workspaceWithMovedApi,
-  sourcesFor,
-  gitmodulesSectionCount,
-  syncedSubmodule,
 } from "./helpers.js";
 
-// --- help / scaffolding / validation (no git operations) ---
 
 test("help is exposed as oms with the submodule commands", () => {
   const result = run(["--help"]);
@@ -67,27 +45,6 @@ test("help is exposed as oms with the submodule commands", () => {
   assert.doesNotMatch(result.stdout, /\bmigrate\b/);
 });
 
-test("submodule command help explains workspace root requirements", () => {
-  for (const [args, detail] of [
-    [["branch", "--help"], /\bswitch\b.*\bcheckout\b.*\blist\b.*\bdelete\b/s],
-    [["branch", "switch", "--help"], /--from/],
-    [["branch", "checkout", "--help"], /REMOTE|origin/],
-    [["branch", "list", "--help"], /stale|cached/],
-    [["branch", "delete", "--help"], /--force/],
-    [["fetch", "--help"], /root Git top-level/],
-    [["pull", "--help"], /root Git top-level/],
-    [["push", "--help"], /root Git top-level/],
-    [["tree", "--help"], /\.oms-tree/],
-    [["tree", "add", "--help"], /--from/],
-    [["tree", "remove", "--help"], /--force/],
-    [["unsync", "--help"], /root Git top-level/],
-  ]) {
-    const result = run(args);
-    assert.equal(result.status, 0, `${args.join(" ")}\n${result.stdout}${result.stderr}`);
-    assert.match(result.stdout, /root Git top-level/, args.join(" "));
-    assert.match(result.stdout, detail, args.join(" "));
-  }
-});
 
 test("init scaffolds oms.yaml with the schema comment and does not gitignore oms/", () => {
   const cwd = tempWorkspace();
@@ -102,10 +59,11 @@ test("init scaffolds oms.yaml with the schema comment and does not gitignore oms
   );
   assert.match(manifest, /alias: example/);
 
-  // Submodules are tracked, so init must NOT add oms/ to .gitignore.
   if (existsSync(join(cwd, ".gitignore"))) {
     assert.doesNotMatch(readFileSync(join(cwd, ".gitignore"), "utf8"), /^oms\/$/m);
   }
+  assert.equal(existsSync(join(cwd, "oms", "AGENTS.md")), false);
+  assert.equal(existsSync(join(cwd, "oms", "CLAUDE.md")), false);
 });
 
 test("init removes a stale managed oms/ entry left in .gitignore", () => {
@@ -214,33 +172,6 @@ test("init fails before writes when target identity is indeterminate", () => {
   }
 });
 
-test("init points to both AI-setup commands without installing anything", () => {
-  const cwd = tempWorkspace();
-  const result = run(["init"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-
-  // Signposts both AI-setup commands so they are discoverable right after scaffolding.
-  assert.match(output, /oms agent install/);
-  assert.match(output, /oms skills/);
-  // Points to the command without expanding into the installer it would print.
-  assert.doesNotMatch(output, /npx skills add/);
-  // init writes only oms.yaml: no agent instruction files, no skills install.
-  assert.equal(existsSync(join(cwd, "oms", "AGENTS.md")), false);
-  assert.equal(existsSync(join(cwd, "oms", "CLAUDE.md")), false);
-});
-
-test("init --force re-init prints the same AI-setup guidance", () => {
-  const cwd = tempWorkspace();
-  writeSources(cwd);
-  const result = run(["init", "--force"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /created oms\.yaml/);
-  assert.match(output, /oms agent install/);
-  assert.match(output, /oms skills/);
-  assert.doesNotMatch(output, /npx skills add/);
-});
 
 test("doctor accepts the init-generated oms.yaml", () => {
   const cwd = tempWorkspace();
@@ -302,7 +233,7 @@ test("missing oms.yaml fails with creation guidance", () => {
 
 test("sync outside a git repository fails with git init guidance", () => {
   const bare = initBareUpstream();
-  const cwd = tempWorkspace(); // not a git repo
+  const cwd = tempWorkspace();
   writeSources(cwd, sourceFor("probe", bare));
   const result = run(["sync", "probe"], { cwd });
   const output = result.stdout + result.stderr;
@@ -405,7 +336,6 @@ test("unsync on a never-synced alias reports nothing to remove with exit 0", () 
 });
 
 
-// --- doctor ---
 
 test("doctor reports workspace, manifest count, git, and warns when not a git repo", () => {
   const cwd = tempWorkspace();

@@ -1,45 +1,18 @@
 import { cancel, log } from "@clack/prompts";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import {
-  aliasDir,
-  currentBranch,
-  isRegisteredSubmodule,
-  listLocalBranches,
-  localBranchOid,
-  redactSensitiveUrls,
-  runGit,
-  runSub,
-  shortOid,
-  submoduleInitialized,
-  submodulePath,
-} from "./git.js";
+import { aliasDir, currentBranch, listLocalBranches, localBranchOid, redactSensitiveUrls, runGit, runSub, shortOid, submoduleInitialized, submodulePath } from "./git.js";
+import { redactingGitRunner } from "./git.js";
 import { canPrompt, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
-import { runSync } from "./repo-ops.js";
+import { syncWorkspace } from "./sync-workspace.js";
 import { attachBranch, gitmodulesBranch } from "./submodule-config.js";
-import { assertRootTopologySafe, gitlinkState } from "./status.js";
+import { assertRootTopologySafe } from "./workspace-state.js";
 import type { Repo } from "./types.js";
+import { aliasRegistration, type AliasRegistration } from "./alias-registration.js";
 
-/**
- * One preparation path for every command that operates inside a submodule working tree. Extracted
- * from `oms branch list`, which was the only command implementing it, so the rest stop each having
- * their own answer to "the alias is not ready yet".
- */
 
-/** How completely an alias is registered across root HEAD, the root index, and the working tree. */
-type AliasRegistration =
-  | "initialized"
-  | "registered-uninitialized"
-  | "partially registered"
-  | "unregistered"
-  /** The root index could not be read, so no classification is possible. Distinct from a genuine
-   * inconsistency: the state is unknown, not wrong, and the remedy is to retry rather than repair. */
-  | "indeterminate";
 
 type PrepareResult = { ok: true } | { ok: false; code: number };
 
 type PrepareOptions = {
-  /** Command label used in guidance messages, e.g. `branch list` or `pull`. */
   command: string;
   /**
    * Whether this command may offer topology-creating registration. True only where a fresh
@@ -56,46 +29,7 @@ type PrepareOptions = {
   requiresSettledTopology?: boolean;
 };
 
-/** Whether one committed or indexed `.gitmodules` snapshot registers this alias's canonical path. */
-function snapshotRegisters(repoRoot: string, alias: string, snapshot: "HEAD" | "index"): boolean {
-  const path = submodulePath(alias);
-  const configArgs = snapshot === "HEAD" ? ["--blob", "HEAD:.gitmodules"] : ["--blob", ":0:.gitmodules"];
-  const result = runGit(repoRoot, ["config", ...configArgs, "--get-all", `submodule.${path}.path`]);
-  return result.success && result.stdout.split("\n").map((value) => value.trim()).filter(Boolean).length === 1
-    && result.stdout.trim() === path;
-}
 
-/** Classify registration presence across root HEAD, index, and working tree without comparing gitlink OIDs. */
-export function aliasRegistration(repoRoot: string, alias: string): AliasRegistration {
-  const state = gitlinkState(repoRoot, alias);
-  const path = submodulePath(alias);
-  // A failed read is not evidence of absence. Without this, an unreadable index makes every
-  // registration probe return false, and the mixed result reads as a genuine inconsistency.
-  const conflicts = runGit(repoRoot, ["ls-files", "-u", "--", ".gitmodules"]);
-  if (!conflicts.success) return "indeterminate";
-  if (state.conflict || conflicts.stdout.trim().length > 0) return "partially registered";
-
-  const gitlinks = [state.headOid !== null, state.indexOid !== null, state.indexOid !== null && state.pathExists];
-  const worktreeConfigReadable = runGit(repoRoot, ["config", "--file", ".gitmodules", "--list"]).success;
-  const worktreeRegistration = isRegisteredSubmodule(repoRoot, path)
-    || (state.initialized
-      && existsSync(join(repoRoot, ".gitmodules"))
-      && !worktreeConfigReadable
-      && snapshotRegisters(repoRoot, alias, "HEAD")
-      && snapshotRegisters(repoRoot, alias, "index"));
-  const registrations = [
-    snapshotRegisters(repoRoot, alias, "HEAD"),
-    snapshotRegisters(repoRoot, alias, "index"),
-    worktreeRegistration,
-  ];
-  if (gitlinks.every(Boolean) && registrations.every(Boolean)) {
-    return state.initialized ? "initialized" : "registered-uninitialized";
-  }
-  if ([...gitlinks, ...registrations].every((present) => !present)) return "unregistered";
-  return "partially registered";
-}
-
-/** Initialize only an already registered alias, overriding a drifted registration URL for this command only. */
 function initializeRegisteredAlias(repoRoot: string, repo: Repo, command: string): PrepareResult {
   log.step(`${repo.alias}: initializing registered submodule`);
   const update = runGit(repoRoot, [
@@ -131,19 +65,7 @@ function initializeRegisteredAlias(repoRoot: string, repo: Repo, command: string
   return { ok: false, code: 2 };
 }
 
-/** Delegate topology creation to sync while redacting inherited Git diagnostics for this invocation. */
-async function syncAndContinue(aliases: string[]): Promise<number> {
-  const previous = process.env.OMS_REDACT_GIT_DIAGNOSTICS;
-  process.env.OMS_REDACT_GIT_DIAGNOSTICS = "1";
-  try {
-    return await runSync(aliases, {});
-  } finally {
-    if (previous === undefined) delete process.env.OMS_REDACT_GIT_DIAGNOSTICS;
-    else process.env.OMS_REDACT_GIT_DIAGNOSTICS = previous;
-  }
-}
 
-/** The message an unregistered alias gets from a command that a fresh registration could not serve. */
 function refuseUnregistered(repo: Repo, command: string): PrepareResult {
   log.error(
     `${repo.alias}: declared in oms.yaml but not registered in the root repository, so it has no local state for "oms ${command}" to act on. Run "oms sync ${repo.alias}" to register it, then retry.`,
@@ -151,18 +73,13 @@ function refuseUnregistered(repo: Repo, command: string): PrepareResult {
   return { ok: false, code: 1 };
 }
 
-/**
- * Bring one alias to a state the requested command can act on. Registration that needs no root
- * topology change is performed automatically; creating topology is offered only when the command
- * could still be served afterwards, and never happens without an explicit choice.
- */
-export async function prepareAlias(
+function prepareExistingAlias(
   repoRoot: string,
   repo: Repo,
   options: PrepareOptions,
-): Promise<PrepareResult> {
-  const { command, topologyOffer } = options;
-  const registration = aliasRegistration(repoRoot, repo.alias);
+  registration: AliasRegistration,
+): PrepareResult | null {
+  const { command } = options;
   if (registration === "initialized") return { ok: true };
   if (registration === "indeterminate") {
     // Transient, so the remedy is to retry — not to repair a registration that may be perfectly fine.
@@ -183,6 +100,17 @@ export async function prepareAlias(
     );
     return { ok: false, code: 1 };
   }
+  return null;
+}
+
+export async function prepareAlias(
+  repoRoot: string,
+  repo: Repo,
+  options: PrepareOptions,
+): Promise<PrepareResult> {
+  const { command, topologyOffer } = options;
+  const existing = prepareExistingAlias(repoRoot, repo, options, aliasRegistration(repoRoot, repo.alias));
+  if (existing) return existing;
   if (!topologyOffer) return refuseUnregistered(repo, command);
   if (!canPrompt()) {
     log.error(
@@ -210,7 +138,7 @@ export async function prepareAlias(
     );
     return { ok: false, code: 1 };
   }
-  const code = await syncAndContinue([repo.alias]);
+  const code = await syncWorkspace(repoRoot, [repo], {}, redactingGitRunner);
   if (code !== 0) {
     log.error(`${repo.alias}: sync and continue failed. Sync's partial state and exit code were preserved.`);
     return { ok: false, code };
@@ -222,7 +150,6 @@ export async function prepareAlias(
   return { ok: true };
 }
 
-/** What a detached submodule HEAD needs before the command can safely proceed. */
 type AttachVerdict =
   | { kind: "on-branch"; branch: string }
   | { kind: "attached"; branch: string }
@@ -314,13 +241,7 @@ export async function resolveDetachedHead(
 }
 
 type BatchPreparation = {
-  /** Aliases the command may operate on. */
-  ready: Repo[];
-  /** Aliases the user chose to skip; reported but not a failure. */
-  skipped: Repo[];
-  /** Aliases that could not be prepared; each already reported its reason. */
-  failed: Repo[];
-  /** Set when the whole invocation should stop rather than continue with `ready`. */
+  outcomes: Map<string, "ready" | "skipped" | "failed">;
   cancelled: boolean;
 };
 
@@ -334,15 +255,15 @@ export async function prepareAliases(
   repos: Repo[],
   options: PrepareOptions & { explicitSelection: boolean },
 ): Promise<BatchPreparation> {
-  const { command, topologyOffer, requiresSettledTopology, explicitSelection } = options;
-  const result: BatchPreparation = { ready: [], skipped: [], failed: [], cancelled: false };
+  const { command, topologyOffer, explicitSelection } = options;
+  const result: BatchPreparation = { outcomes: new Map(), cancelled: false };
   const unregistered: Repo[] = [];
 
+  const registrations = new Map(repos.map((repo) => [repo.alias, aliasRegistration(repoRoot, repo.alias)]));
   for (const repo of repos) {
-    if (aliasRegistration(repoRoot, repo.alias) === "unregistered") unregistered.push(repo);
+    if (registrations.get(repo.alias) === "unregistered") unregistered.push(repo);
   }
 
-  // Decide the topology question once, before any alias is touched.
   let registerUnregistered = false;
   if (unregistered.length > 0 && topologyOffer) {
     if (!canPrompt()) {
@@ -350,7 +271,7 @@ export async function prepareAliases(
         log.error(
           `${repo.alias}: declared in oms.yaml but not registered in the root repository. No topology was changed. Run "oms sync ${repo.alias}", then retry "oms ${command}".`,
         );
-        result.failed.push(repo);
+        result.outcomes.set(repo.alias, "failed");
       }
     } else {
       const names = unregistered.map((r) => r.alias).join(", ");
@@ -377,18 +298,15 @@ export async function prepareAliases(
   }
 
   if (registerUnregistered) {
-    const topologyUnsafe: Repo[] = [];
     for (const repo of unregistered) {
       const topology = assertRootTopologySafe(repoRoot, repo.alias);
       if (topology.safe) continue;
       log.error(`${repo.alias}: sync cannot start because ${topology.reason} Root state was preserved.`);
-      topologyUnsafe.push(repo);
-      result.failed.push(repo);
+      result.outcomes.set(repo.alias, "failed");
     }
-    const syncable = unregistered.filter((repo) => !topologyUnsafe.includes(repo));
+    const syncable = unregistered.filter((repo) => !result.outcomes.has(repo.alias));
     if (syncable.length > 0) {
-      // One delegated sync, so the whole set lands in a single root topology commit.
-      const code = await syncAndContinue(syncable.map((r) => r.alias));
+      const code = await syncWorkspace(repoRoot, syncable, {}, redactingGitRunner);
       if (code !== 0) {
         log.error(`sync and continue failed. Sync's partial state and exit code were preserved.`);
       }
@@ -396,28 +314,28 @@ export async function prepareAliases(
       // continue; aliases left unregistered or partial retain the sync failure and are excluded.
       for (const repo of syncable) {
         const registration = aliasRegistration(repoRoot, repo.alias);
+        registrations.set(repo.alias, registration);
         if (registration === "initialized" || registration === "registered-uninitialized") continue;
         log.error(`${repo.alias}: sync and continue did not produce a complete registration.`);
-        result.failed.push(repo);
+        result.outcomes.set(repo.alias, "failed");
       }
     }
   }
 
   for (const repo of repos) {
-    if (result.failed.includes(repo)) continue;
-    if (!registerUnregistered && unregistered.includes(repo)) {
+    if (result.outcomes.has(repo.alias)) continue;
+    if (!registerUnregistered && registrations.get(repo.alias) === "unregistered") {
       if (topologyOffer && canPrompt()) {
         log.warn(`${repo.alias}: skipped (not registered).`);
-        result.skipped.push(repo);
+        result.outcomes.set(repo.alias, "skipped");
       } else if (!topologyOffer) {
         refuseUnregistered(repo, command);
-        result.failed.push(repo);
+        result.outcomes.set(repo.alias, "failed");
       }
       continue;
     }
-    const prepared = await prepareAlias(repoRoot, repo, { command, topologyOffer, requiresSettledTopology });
-    if (prepared.ok) result.ready.push(repo);
-    else result.failed.push(repo);
+    const prepared = prepareExistingAlias(repoRoot, repo, options, registrations.get(repo.alias)!)!;
+    result.outcomes.set(repo.alias, prepared.ok ? "ready" : "failed");
   }
   return result;
 }
