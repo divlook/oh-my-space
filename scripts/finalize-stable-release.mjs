@@ -7,6 +7,7 @@ import { PACKAGE_NAME } from "./lib/package-info.js";
 const repository = "divlook/oh-my-space";
 const registry = "https://registry.npmjs.org";
 const apiRoot = `repos/${repository}`;
+const publicationRetryDelaysMs = [1000, 2000, 4000, 8000, 16000];
 let phase = "input validation";
 let version;
 let commit;
@@ -41,9 +42,7 @@ try {
     }
 
     phase = "npm publication verification";
-    const published = JSON.parse(run("npm", [
-      "view", `${PACKAGE_NAME}@${version}`, "name", "version", "gitHead", "--json", "--registry", registry,
-    ]));
+    const published = await readPublishedMetadata(version);
     if (published.name !== PACKAGE_NAME || published.version !== version || !/^[0-9a-f]{40}$/.test(published.gitHead ?? "")) {
       throw new Error("npm metadata must identify the exact package, version, and published gitHead.");
     }
@@ -122,6 +121,33 @@ try {
     console.error("Recovery input guidance: node scripts/finalize-stable-release.mjs --help");
   }
   process.exitCode = 1;
+}
+
+function metadataNotVisible(result) {
+  if (result.error || result.status === 0) return false;
+  try {
+    const code = JSON.parse(result.stdout)?.error?.code;
+    if (typeof code === "string") return code === "E404";
+  } catch {
+    // npm versions can report failure diagnostics only on stderr.
+  }
+  return /^npm (?:error|ERR!) code E404\s*$/m.test(result.stderr);
+}
+
+async function readPublishedMetadata(version) {
+  const args = [
+    "view", `${PACKAGE_NAME}@${version}`, "name", "version", "gitHead",
+    "--json", "--registry", registry, "--prefer-online",
+  ];
+  for (let attempt = 0; ; attempt++) {
+    const result = invoke("npm", args);
+    const delay = publicationRetryDelaysMs[attempt];
+    if (delay === undefined || !metadataNotVisible(result)) {
+      return JSON.parse(requireSuccess(result, `npm ${args.join(" ")}`).trim());
+    }
+    console.error(`npm metadata for ${PACKAGE_NAME}@${version} is not visible yet (E404); retrying in ${delay / 1000}s (${attempt + 2}/${publicationRetryDelaysMs.length + 1}).`);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
 
 function invoke(command, args, input) {
