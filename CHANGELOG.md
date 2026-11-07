@@ -1,5 +1,13 @@
 # oh-my-space
 
+## 2.0.3
+
+### Patch Changes
+
+- [#102](https://github.com/divlook/oh-my-space/pull/102) [`35a2e35`](https://github.com/divlook/oh-my-space/commit/35a2e35ec940a5fd5569c669c3eee3a90ca23bf1) Thanks [@divlook](https://github.com/divlook)! - Batch Git operation-marker path queries, baseline metadata parsing, and registration snapshots within each inspection to reduce subprocess overhead. Preserve per-marker filesystem checks, linked-worktree isolation, fresh cleanup revalidation, metadata source provenance, and support for Git directory paths containing newlines.
+
+- [#99](https://github.com/divlook/oh-my-space/pull/99) [`5cd868f`](https://github.com/divlook/oh-my-space/commit/5cd868fae5f5be3020933bc86c5b8262d99a2230) Thanks [@divlook](https://github.com/divlook)! - Revalidate stable publication metadata with npm and retry only E404 visibility failures before creating GitHub release metadata. Bound retries to six queries with 31 seconds of scheduled waits, preserve immediate failure for other errors or identity mismatches, and retain metadata-only recovery without republishing packages.
+
 ## 2.0.2
 
 ### Patch Changes
