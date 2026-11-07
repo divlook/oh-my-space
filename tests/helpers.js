@@ -19,7 +19,6 @@ const retainFixtures = process.env.OMS_TEST_RETAIN_FIXTURES === "1";
 
 function copyFixture(template, prefix) {
   const destination = tempFixture(prefix);
-  rmSync(destination, { recursive: true });
   cpSync(template, destination, { recursive: true });
   return destination;
 }
@@ -159,9 +158,10 @@ function getApiWorkspaceTemplate() {
 
 function prepareSharedFixtures() {
   return {
-    upstream: getUpstreamTemplate(),
-    workspace: getWorkspaceTemplate(),
-    apiWorkspace: getApiWorkspaceTemplate(),
+    ...testEnv,
+    OMS_TEST_UPSTREAM_TEMPLATE: getUpstreamTemplate(),
+    OMS_TEST_WORKSPACE_TEMPLATE: getWorkspaceTemplate(),
+    OMS_TEST_API_WORKSPACE_TEMPLATE: getApiWorkspaceTemplate(),
   };
 }
 
@@ -217,6 +217,7 @@ function gitTopLevelStubEnv(mode) {
 function workspaceWithApi() {
   const bare = initBareUpstream();
   const cwd = copyFixture(getApiWorkspaceTemplate(), "oms-test-");
+  git(cwd, "config", "submodule.oms/api.url", `file://${bare}`);
   writeSources(cwd, sourceFor("api", bare));
   git(cwd, "config", "-f", ".gitmodules", "submodule.oms/api.url", `file://${bare}`);
   const wt = join(cwd, "oms", "api");

@@ -57,7 +57,7 @@ jobs:
         if: ${{ steps.marker.outputs.cache-hit != 'true' }}
         run: node scripts/benchmark-test-suite.mjs --runs 1 --label ci-development --ci-gating
       - name: Upload test performance evidence
-        if: ${{ steps.marker.outputs.cache-hit != 'true' }}
+        if: ${{ always() && steps.marker.outputs.cache-hit != 'true' }}
         uses: actions/upload-artifact@v6
         with:
           name: test-performance-development-${{ github.run_id }}

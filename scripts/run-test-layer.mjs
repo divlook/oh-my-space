@@ -31,23 +31,19 @@ if (files.length === 0) {
   console.error(`No test files found under ${directory}.`);
   process.exit(1);
 }
+let env = process.env;
+if (executionMode === "owned-processes" || concurrencyOption === "integration") {
+  const { prepareSharedFixtures } = await import("../tests/helpers.js");
+  env = prepareSharedFixtures();
+}
 if (executionMode === "owned-processes") {
-  const { prepareSharedFixtures, testEnv } = await import("../tests/helpers.js");
-  const fixtures = prepareSharedFixtures();
-  const ownerEnv = {
-    ...process.env,
-    NODE_COMPILE_CACHE: testEnv.NODE_COMPILE_CACHE,
-    OMS_TEST_UPSTREAM_TEMPLATE: fixtures.upstream,
-    OMS_TEST_WORKSPACE_TEMPLATE: fixtures.workspace,
-    OMS_TEST_API_WORKSPACE_TEMPLATE: fixtures.apiWorkspace,
-  };
-  const statuses = await runOwnedFiles(files, Number.parseInt(concurrency, 10), ownerEnv);
+  const statuses = await runOwnedFiles(files, Number.parseInt(concurrency, 10), env);
   process.exit(statuses.every((status) => status === 0) ? 0 : 1);
 }
 const args = ["--test", "--test-reporter=dot"];
 if (concurrency) args.push(`--test-concurrency=${concurrency}`);
 args.push(...files);
-const result = spawnSync(process.execPath, args, { stdio: "inherit", env: process.env });
+const result = spawnSync(process.execPath, args, { stdio: "inherit", env });
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);
 
