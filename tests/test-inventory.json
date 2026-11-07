@@ -6997,6 +6997,17 @@
       "processBoundaryRationale": null
     },
     {
+      "id": "tests/integration/stable-release.test.ts::stable finalization bounds visibility retries and rejects other registry failures without writes",
+      "name": "stable finalization bounds visibility retries and rejects other registry failures without writes",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
       "id": "tests/integration/stable-release.test.ts::stable finalization completes annotated tag-only state and preserves matching release prose on rerun",
       "name": "stable finalization completes annotated tag-only state and preserves matching release prose on rerun",
       "source": "tests/integration/stable-release.test.ts",
@@ -7043,6 +7054,17 @@
     {
       "id": "tests/integration/stable-release.test.ts::stable finalization retains a valid tag after release creation failure and resumes without duplicate writes",
       "name": "stable finalization retains a valid tag after release creation failure and resumes without duplicate writes",
+      "source": "tests/integration/stable-release.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/stable-release.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/integration/stable-release.test.ts::stable finalization waits for newly published npm metadata before GitHub writes",
+      "name": "stable finalization waits for newly published npm metadata before GitHub writes",
       "source": "tests/integration/stable-release.test.ts",
       "layer": "integration",
       "owners": [

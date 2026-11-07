@@ -33,7 +33,15 @@ const git = (...args) => cp.execFileSync('git', ['--git-dir', config.remote, ...
 const output = (value) => console.log(JSON.stringify(value));
 if (binary === 'npm') {
   record({ binary, args });
-  if (args.join(' ') !== 'view oh-my-space@' + config.requestVersion + ' name version gitHead --json --registry https://registry.npmjs.org') throw new Error('Unexpected npm request: ' + args.join(' '));
+  if (args[0] !== 'view' || args[1] !== 'oh-my-space@' + config.requestVersion) throw new Error('Unexpected npm request: ' + args.join(' '));
+  const lookups = fs.readFileSync(path.join(directory, 'calls.jsonl'), 'utf8').trim().split('\\n').filter((line) => JSON.parse(line).binary === 'npm').length;
+  const missing = config.npmNotFound && (lookups <= config.npmNotFound || !args.includes('--prefer-online'));
+  const errorCode = missing ? 'E404' : config.npmErrorCode;
+  if (errorCode) {
+    console.error('npm error code ' + errorCode);
+    if (config.npmErrorOutput !== 'stderr') output({ error: { code: errorCode, summary: 'Registry metadata not available' } });
+    process.exit(1);
+  }
   if (config.npmFail) { console.error('Registry unavailable'); process.exit(1); }
   output(config.metadata);
 } else if (binary === 'changeset') {
@@ -93,6 +101,7 @@ interface FixtureOptions {
   packageName?: string;
   packageVersion?: string;
   changelog?: string | null;
+  fastRetries?: boolean;
 }
 
 function fixture(options: FixtureOptions = {}) {
@@ -138,12 +147,18 @@ function fixture(options: FixtureOptions = {}) {
   configure({});
   writeFileSync(join(state, "releases.json"), "{}");
   writeFileSync(join(state, "calls.jsonl"), "");
+  const fastTimers = join(state, "fast-timers.mjs");
+  if (options.fastRetries) writeFileSync(fastTimers, "globalThis.setTimeout = (callback, _delay, ...args) => setImmediate(callback, ...args);\n");
   const calls = () => readFileSync(join(state, "calls.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
   const writes = () => calls().filter((call) => call.binary === "gh" && call.method !== "GET");
   const releases = () => JSON.parse(readFileSync(join(state, "releases.json"), "utf8"));
   const setRelease = (body: Record<string, unknown>) => writeFileSync(join(state, "releases.json"), JSON.stringify({ [tag]: { id: 1, tag_name: tag, draft: false, prerelease: false, body: "Maintainer-curated notes.", ...body } }));
   const remoteTag = () => execFileSync("git", ["--git-dir", remote, "rev-parse", "--verify", `refs/tags/${tag}^{commit}`], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-  const run = (args: string[] = []) => spawnSync(process.execPath, [join(root, "scripts", "finalize-stable-release.mjs"), ...args], { cwd: root, env, encoding: "utf8" });
+  const run = (args: string[] = []) => spawnSync(process.execPath, [
+    ...(options.fastRetries ? ["--import", fastTimers] : []),
+    join(root, "scripts", "finalize-stable-release.mjs"),
+    ...args,
+  ], { cwd: root, env, encoding: "utf8", timeout: options.fastRetries ? 10_000 : undefined });
   const recover = () => run(["--version", version, "--commit", commit]);
   const laterCommit = () => {
     packageJson.version = "1.2.4";
@@ -237,6 +252,37 @@ test("stable finalization derives current and historical publication identity fr
   fallback.git("update-ref", "-d", "refs/remotes/origin/main");
   success(fallback.run());
   complete(fallback);
+});
+
+test("stable finalization waits for newly published npm metadata before GitHub writes", () => {
+  for (const npmErrorOutput of ["json", "stderr"]) {
+    const f = fixture();
+    f.configure({ npmNotFound: 1, npmErrorOutput });
+    success(f.run());
+    complete(f);
+    const calls = f.calls();
+    assert.equal(calls.filter((call) => call.binary === "npm").length, 2);
+    assert.deepEqual(calls.slice(0, 2).map((call) => call.binary), ["npm", "npm"]);
+  }
+});
+
+test("stable finalization bounds visibility retries and rejects other registry failures without writes", () => {
+  for (const scenario of [
+    { config: { npmNotFound: 99 }, attempts: 6 },
+    { config: { npmErrorCode: "E401" }, attempts: 1 },
+    { config: { npmErrorCode: "E403" }, attempts: 1 },
+    { config: { npmErrorCode: "E500" }, attempts: 1 },
+    { config: { npmNotFound: 1, npmErrorCode: "E403" }, attempts: 2 },
+    { config: { npmFail: true }, attempts: 1 },
+  ]) {
+    const f = fixture({ fastRetries: true });
+    f.configure(scenario.config);
+    failure(f.run());
+    assert.equal(f.calls().filter((call) => call.binary === "npm").length, scenario.attempts);
+    assert.deepEqual(f.writes(), []);
+    assert.deepEqual(f.releases(), {});
+    assert.throws(() => f.remoteTag());
+  }
 });
 
 test("stable finalization refuses unverifiable identities and missing release evidence before writes", () => {

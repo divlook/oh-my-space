@@ -131,6 +131,13 @@ The finalizer also runs when Changesets successfully reports that the version is
 It does not parse Changesets publication messages.
 The finalizer, not Changesets Action's built-in GitHub Release creation, owns stable remote metadata.
 
+The finalizer uses `npm view --prefer-online` to revalidate publication metadata instead of relying on a fresh local cache entry.
+If npm reports `E404`, it makes up to six queries, waiting 1, 2, 4, 8, and 16 seconds between them.
+Those waits total 31 seconds, excluding request time.
+Other command errors, malformed metadata, and package/version/commit mismatches fail without this retry.
+GitHub metadata writes begin only after publication identity and source history are verified.
+If visibility retries are exhausted, use the metadata-only recovery below after npm exposes the published version; do not republish it.
+
 ### Stable completion checks
 
 Set `VERSION` to the exact stable version being checked:
