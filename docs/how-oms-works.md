@@ -209,6 +209,8 @@ Results distinguish deleted, already absent, preserved, failed, and not run. Onl
 
 Multi-repository operations isolate failures by alias and summarize partial success. Root finalization records only successful aliases and preserves unrelated staged paths.
 
+If the main index changes while OMS builds the registration or metadata commit in its temporary index, OMS stops before advancing `HEAD` and keeps the new staging.
+
 When finalizing repository registration or metadata, OMS writes durable recovery state before replacing the main index. If interruption leaves finalization state behind, `oms sync`, `oms unsync`, and `oms record` run a shared recovery preflight. They either complete the known operation safely or stop before making another main-project change.
 
 OMS limits automation to user intent. OMS performs deterministic preparation, but asks before choices such as registering a missing repository. When OMS cannot continue safely, the error names the failed operation and describes preserved state. The error points to an OMS command or limited Git repair.

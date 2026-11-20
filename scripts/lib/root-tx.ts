@@ -336,6 +336,8 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
 
   const head = currentHead(repoRoot);
   if (!head) return { ok: false, exitCode: 2, reason: "could not resolve root HEAD" };
+  const originalIndexHash = hashFile(realIndex);
+  if (!originalIndexHash) return { ok: false, exitCode: 2, reason: "could not hash the real index" };
 
   const env = { ...process.env, GIT_INDEX_FILE: tempIndex };
   removeIfPresent(tempIndex);
@@ -413,8 +415,6 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
       return fail(`staged ${path} does not match the validated sync commit`);
     }
   }
-  const originalIndexHash = hashFile(realIndex);
-  if (!originalIndexHash) return fail("could not hash the real index");
 
   const heldLock = acquireLock(repoRoot);
   if (heldLock === null) return fail("the OMS finalization lock is held by another process; retry");

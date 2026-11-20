@@ -31,4 +31,4 @@ For the no-commit delegated path, verify that a valid staged registration can be
 ## 4. End-to-end integration
 
 - [x] 4.1 Run the focused sync, preparation, and affected command contracts according to `docs/development.md`. Exercise approved registration without a commit, a follow-up invocation using the pending checkout, explicit finalization, and then a normal source pointer update through `oms record`. Verify that the initial registration and later pointer update are separate commits and that no unrelated staged paths or source work are lost.
-- [ ] 4.2 Verify the final handoff against the repository's required Node 24 CI gate (`npm test`); use the CI result rather than duplicating the broad suite locally. Leave all implementation checkboxes traceable to their verification.
+- [x] 4.2 Verify the final handoff against the repository's required Node 24 CI gate (`npm test`); use the CI result rather than duplicating the broad suite locally. Leave all implementation checkboxes traceable to their verification. [Node 24 CI passed for `812eb7aa4c`.](https://github.com/divlook/oh-my-space/actions/runs/44682026351/job/136107422796)
