@@ -13,3 +13,11 @@ Use the guide for the first target version newer than your installed OMS version
 - [0.2.x to 0.3.0](0.2.x-to-0.3.0.md) — historical migration from submodules to bare clones and worktrees.
 
 For current command selection and safety behavior, use the [command guide](../commands.md) and the built-in `oms <command> --help` output rather than older migration examples.
+
+## Opt-in registration commits
+
+`oms sync` and `oms unsync` no longer create main-project commits by default. No manifest edit is needed to switch to the new default. Git can still stage changes on affected paths, including replacing existing staging. Review or save any staged selection you need to preserve before running either command.
+
+If your automation expects a commit, add `--commit` to its `oms sync` and `oms unsync` invocations. Versions that previously committed by default already accept this flag, so it works in scripts shared with those versions. To restore automatic commits for an entire workspace, including registration you approve in other commands, set the top-level `autoCommit: true` in `oms.yaml`. An explicit `--no-commit` overrides it for that invocation.
+
+Before downgrading to a version that does not recognize `autoCommit`, review pending changes while still running the newer version. Remove `autoCommit` from `oms.yaml`, even if it is `false`. If a pending registration, removal, or metadata update is ready to commit, finalize it with the corresponding `oms sync <alias> --commit` or `oms unsync <alias> --commit`. If it is not ready, preserve it for manual review and avoid older OMS commands that depend on that registration until you resolve it.

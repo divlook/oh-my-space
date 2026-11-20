@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MANIFEST_FILENAME } from "./constants.js";
 import { runGit, productionGitRunner, type RawGitRunner } from "./git.js";
+import { gitOperationInProgress } from "./git-operation-state.js";
 import { recoveryPreflight } from "./root-tx.js";
 
 export function prepareTopologyMutation(
@@ -22,6 +23,11 @@ export function prepareTopologyMutation(
   }
   if (conflicts.stdout.trim()) {
     log.error(`Root .gitmodules is unmerged. Resolve the conflict before ${action}.`);
+    return { ok: false, code: 1 };
+  }
+  const operation = gitOperationInProgress(repoRoot);
+  if (operation) {
+    log.error(`The root repository has a ${operation} in progress. Resolve, continue, or abort it before ${action}.`);
     return { ok: false, code: 1 };
   }
   try {

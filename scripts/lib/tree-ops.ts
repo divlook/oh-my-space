@@ -119,7 +119,7 @@ export async function runTreeAdd(
     return 1;
   }
 
-  const prepared = await prepareAlias(repoRoot, repo, { command: "tree add", topologyOffer: true, requiresSettledTopology: false });
+  const prepared = await prepareAlias(repoRoot, repo, { command: "tree add", topologyOffer: true });
   if (!prepared.ok) return prepared.code;
 
   const dir = aliasDir(repoRoot, alias);

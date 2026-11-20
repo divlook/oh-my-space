@@ -81,7 +81,7 @@ You can run workspace-aware commands at the root or below it. Inside a declared 
 
 The remote baseline can advance beyond the recorded commit. In this case, synchronization preserves the checkout at the recorded commit and explains how to switch and pull. A fresh clone remains reproducible. Synchronization does not implicitly update source code.
 
-By default, OMS commits repository registration and OMS-managed `.gitmodules` changes in one path-limited main-project commit. Use `--no-commit` to leave those changes unstaged. A failed baseline check leaves the alias's metadata unchanged. OMS reports the failure without printing remote URLs.
+`oms sync` and `oms unsync` do not create a main-project commit by default. Pass `--commit` for one run or set `autoCommit: true` in `oms.yaml` for the workspace. Use `--no-commit` to override that setting. Git may stage changes on affected paths, including paths that were already staged, even when no commit is made. A failed baseline check leaves the alias's metadata unchanged. OMS reports the failure without printing remote URLs.
 
 ## Registration and preparation
 
@@ -89,10 +89,13 @@ Commands other than `oms exec` use these registration and preparation rules:
 
 - **Registered and initialized:** Commands continue normally.
 - **Registered but uninitialized:** Commands initialize the repository without changing the main project's registered paths. They then continue.
+- **Pending source registration:** `fetch`, `pull`, `commit`, `branch list`, `branch switch`, `branch checkout`, and `tree add` can use the checkout without recording its registration. `push`, `branch delete`, `branch clean`, `exec`, and `record` require a committed registration. Run `oms sync <alias> --commit` first.
 - **Declared but unregistered:** Read-only or fetch-like workflows may offer `oms sync`. Commit, push, branch deletion, and other commands that require existing local work refuse. A fresh checkout cannot contain that work.
 - **Partially or inconsistently registered:** Commands refuse and direct you to `oms sync`. They do not guess which state is correct.
 
 OMS never registers a repository silently. In a non-interactive session, an operation that needs your decision fails without changing the registered workspace.
+
+If some registrations in an approved batch fail, OMS continues for eligible successful targets and reports a nonzero exit. A failure in shared root finalization instead prevents the requested operation from running for any target.
 
 Before commit, pull, or push, OMS may attach a detached checkout to a local branch that points to the same commit. A **detached HEAD** means Git uses a commit directly instead of a branch. If attachment requires a different commit, OMS asks first or prints `oms branch switch` guidance.
 

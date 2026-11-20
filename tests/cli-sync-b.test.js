@@ -16,7 +16,7 @@ test("sync registers a submodule on its baseline branch and tracks it in the par
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("probe", bare));
 
-  const result = run(["sync", "probe"], { cwd });
+  const result = run(["sync", "probe", "--commit"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
 
@@ -137,21 +137,42 @@ test("status --json keeps valid JSON and exits non-zero when a repo read fails",
   assert.equal(data.errors.length, 1);
 });
 
-test("unsync commits the removal topology by default", () => {
-  const { cwd } = workspaceWithApi();
-  const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
-
-  assert.equal(run(["unsync", "api"], { cwd }).status, 0);
-  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): remove api submodule");
-  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), before + 1);
-  assert.equal(gitOut(cwd, "status", "--porcelain"), "");
-  assert.match(readFileSync(join(cwd, "oms.yaml"), "utf8"), /alias: api/);
+test("unsync commit policy honors manifest defaults, overrides, and conflicting flags", () => {
+  for (const [prefix, flags, expectedCommit] of [
+    ["", [], false],
+    ["autoCommit: false\n", [], false],
+    ["autoCommit: true\n", [], true],
+    ["autoCommit: true\n", ["--commit"], true],
+    ["autoCommit: false\n", ["--commit"], true],
+    ["autoCommit: true\n", ["--no-commit"], false],
+  ]) {
+    const { cwd, bare } = workspaceWithApi();
+    writeSources(cwd, prefix + sourceFor("api", bare));
+    const before = gitOut(cwd, "rev-parse", "HEAD");
+    for (const conflictingFlags of [["--commit", "--no-commit"], ["--no-commit", "--commit"]]) {
+      const result = run(["unsync", "api", ...conflictingFlags], { cwd });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout + result.stderr, /conflict|cannot be used/i);
+      assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
+      assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+    }
+    const result = run(["unsync", "api", ...flags], { cwd });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    if (expectedCommit) {
+      assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): remove api submodule");
+      assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+    } else {
+      assert.equal(gitOut(cwd, "rev-parse", "HEAD"), before);
+      assert.match(gitOut(cwd, "diff", "--cached", "--name-status"), /^D\s+oms\/api$/m);
+      assert.match(result.stdout + result.stderr, /oms unsync api --commit/);
+    }
+  }
 });
 
 test("delegated preparation sync commits its topology", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
+  writeSources(cwd, `autoCommit: true\n${sourceFor("api", bare)}`);
 
   const result = run(["branch", "list", "api"], {
     cwd,
@@ -263,7 +284,7 @@ test("sync restore fails before add during an in-progress root operation", () =>
 
   const result = run(["sync", "api"], { cwd });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 2, output);
+  assert.equal(result.status, 1, output);
   assert.match(output, /in progress/);
   assert.doesNotMatch(output, /git submodule add failed/);
 });
@@ -301,7 +322,7 @@ test("unsync refuses before deinit/rm during an in-progress root operation", () 
 
   const result = run(["unsync", "api"], { cwd });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 2, output);
+  assert.equal(result.status, 1, output);
   assert.match(output, /in progress/);
   assert.doesNotMatch(output, /uncommitted or untracked changes/);
   assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
@@ -336,7 +357,7 @@ test("push warns about a dirty submodule but still pushes the current HEAD", () 
 test("unsync removes the submodule, keeps oms.yaml, and re-sync works", () => {
   const { cwd } = workspaceWithApi();
 
-  const unsynced = run(["unsync", "api"], { cwd });
+  const unsynced = run(["unsync", "api", "--commit"], { cwd });
   assert.equal(unsynced.status, 0, unsynced.stdout + unsynced.stderr);
   assert.equal(existsSync(join(cwd, "oms", "api")), false);
   if (existsSync(join(cwd, ".gitmodules"))) {
@@ -346,7 +367,7 @@ test("unsync removes the submodule, keeps oms.yaml, and re-sync works", () => {
 
   assert.equal(gitOut(cwd, "status", "--porcelain"), "");
 
-  const resynced = run(["sync", "api"], { cwd });
+  const resynced = run(["sync", "api", "--commit"], { cwd });
   assert.equal(resynced.status, 0, resynced.stdout + resynced.stderr);
   assert.ok(existsSync(join(cwd, "oms", "api", ".git")));
   assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "main");

@@ -34,8 +34,6 @@ async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: str
       log.error(`Unknown alias "${aliasArg}". Use "oms sync --list" to see registered aliases.`);
       return { kind: "error", code: 1 };
     }
-    const prep = await prepareAlias(repoRoot, repo, PREPARE);
-    if (!prep.ok) return { kind: "error", code: prep.code };
     return { kind: "repo", repo };
   }
 
@@ -241,6 +239,8 @@ export async function runBranchDelete(
   const resolved = await resolveDeleteAlias(repos, repoRoot, aliasArg);
   if (resolved.kind === "error") return resolved.code;
   const repo = resolved.repo;
+  const prepared = await prepareAlias(repoRoot, repo, PREPARE);
+  if (!prepared.ok) return prepared.code;
   const dir = aliasDir(repoRoot, repo.alias);
 
   const pre = checkSubmodulePreconditions(repoRoot, repo);

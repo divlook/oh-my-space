@@ -1,4 +1,5 @@
 import { cancel, log } from "@clack/prompts";
+import { aliasRegistration } from "./alias-registration.js";
 import { dim, pad, uniqueAliases } from "./env.js";
 import { aliasDir, isDirty, submoduleInitialized } from "./git.js";
 import { canPrompt, guardedMultiselect, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
@@ -232,7 +233,9 @@ function commandCandidates(repos: Repo[], repoRoot: string, command: "commit" | 
   return repos.filter((repo) => {
     if (command === "commit") return submoduleInitialized(repoRoot, repo.alias) && isDirty(aliasDir(repoRoot, repo.alias));
     const state = gitlinkState(repoRoot, repo.alias);
-    return state.pin === "moved" && recordVerdict(state, repo.alias).kind === "recordable";
+    return state.pin === "moved"
+      && recordVerdict(state, repo.alias).kind === "recordable"
+      && aliasRegistration(repoRoot, repo.alias).kind === "initialized";
   }).map((repo) => repo.alias);
 }
 

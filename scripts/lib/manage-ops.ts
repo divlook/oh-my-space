@@ -74,7 +74,7 @@ export async function runManage(
   const prepared = await prepareAliases(repoRoot, picked, {
     command,
     topologyOffer: command !== "push",
-    explicitSelection: aliases.length > 0,
+    explicitSelection: !options.all && aliases.length > 0,
   });
   if (prepared.cancelled) return 1;
 

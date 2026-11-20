@@ -1,9 +1,7 @@
 import { log } from "@clack/prompts";
 import { spawn, type ChildProcess } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
-import { aliasRegistration } from "./alias-registration.js";
-import { aliasDir, runGit, submoduleInitialized, submodulePath } from "./git.js";
+import { aliasRegistration, canonicalCheckoutOwned, pendingRegistrationGuidance } from "./alias-registration.js";
+import { aliasDir, submoduleInitialized } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
 import { selectRepos } from "./prompts.js";
 import { refuseInsideManagedTree } from "./tree-context.js";
@@ -19,20 +17,15 @@ type ExecResult =
 
 function targetFailure(repoRoot: string, alias: string): string | null {
   const registration = aliasRegistration(repoRoot, alias);
-  if (registration !== "initialized") return registration;
-  if (!submoduleInitialized(repoRoot, alias)) return "checkout is not initialized";
-  const cwd = aliasDir(repoRoot, alias);
-  const top = runGit(cwd, ["rev-parse", "--show-toplevel"]);
-  const actual = runGit(cwd, ["rev-parse", "--absolute-git-dir"]);
-  const expected = runGit(repoRoot, ["rev-parse", "--git-path", `modules/${submodulePath(alias)}`]);
-  try {
-    if (top.success && actual.success && expected.success
-      && realpathSync(top.stdout.trim()) === realpathSync(cwd)
-      && realpathSync(actual.stdout.trim()) === realpathSync(resolve(repoRoot, expected.stdout.trim()))) return null;
-  } catch {
-    // Missing or foreign Git metadata is not an eligible canonical checkout.
-  }
-  return "checkout does not belong to the declared canonical submodule";
+  if (registration.kind === "pending registration") return pendingRegistrationGuidance(alias);
+  const repair = `State preserved; run "oms sync ${alias}".`;
+  if (registration.kind === "partially registered") return `${registration.kind}: ${registration.reason}. ${repair}`;
+  if (registration.kind === "indeterminate") return `${registration.reason}. State preserved; retry once Git is idle.`;
+  if (registration.kind !== "initialized") return `${registration.kind}. ${repair}`;
+  if (!submoduleInitialized(repoRoot, alias)) return `checkout is not initialized. ${repair}`;
+  return canonicalCheckoutOwned(repoRoot, alias)
+    ? null
+    : `checkout does not belong to the declared canonical submodule. ${repair}`;
 }
 
 function describe(result: ExecResult): string {
@@ -77,7 +70,7 @@ export async function runExec(aliases: string[], options: SourcesOptions, comman
       } else {
         const failure = targetFailure(repoRoot, repo.alias);
         if (failure) {
-          result = { kind: "target", reason: `${failure}. State preserved; run \"oms sync ${repo.alias}\".` };
+          result = { kind: "target", reason: failure };
         } else {
           log.step(`${repo.alias}: exec`);
           result = await new Promise<ExecResult>((complete) => {

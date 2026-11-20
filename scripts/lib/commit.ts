@@ -34,7 +34,7 @@ export async function runCommit(alias: string | undefined, options: CommitOption
     log.error(`Unknown alias "${selected}". Use "oms sync --list" to see registered aliases.`);
     return 1;
   }
-  const prepared = await prepareAlias(repoRoot, repo, { command: "commit", topologyOffer: false, requiresSettledTopology: false });
+  const prepared = await prepareAlias(repoRoot, repo, { command: "commit", topologyOffer: false });
   if (!prepared.ok) return prepared.code;
   // Check for an in-progress operation before detached HEAD, since a rebase detaches HEAD and should
   // report "rebase in progress" rather than a generic detached-HEAD message.

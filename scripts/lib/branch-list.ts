@@ -53,7 +53,7 @@ async function resolveAlias(repos: Repo[], repoRoot: string, aliasArg: string | 
     options: repos.map((repo) => ({
       value: repo.alias,
       label: repo.alias,
-      hint: aliasRegistration(repoRoot, repo.alias),
+      hint: aliasRegistration(repoRoot, repo.alias).kind,
     })),
   });
   if (isCancel(choice)) {

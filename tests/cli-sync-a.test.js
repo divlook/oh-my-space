@@ -108,33 +108,45 @@ test("status --json fails before emitting JSON for an unknown alias", () => {
   assert.match(result.stderr, /Unknown alias/);
 });
 
-test("the topology commit default does not depend on stdin being a terminal", () => {
+test("sync commit policy honors manifest defaults, overrides, and conflicting flags", () => {
   const bare = initBareUpstream();
 
-  const plain = initGitWorkspace();
-  writeSources(plain, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd: plain }).status, 0);
-
-  const flagged = initGitWorkspace();
-  writeSources(flagged, sourceFor("api", bare));
-  assert.equal(run(["sync", "api", "--commit"], { cwd: flagged }).status, 0);
-
-  for (const cwd of [plain, flagged]) {
-    assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
-    assert.equal(gitOut(cwd, "status", "--porcelain"), "");
-    assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  for (const [prefix, flags, expectedCommit] of [
+    ["", [], false],
+    ["autoCommit: false\n", [], false],
+    ["autoCommit: true\n", [], true],
+    ["autoCommit: true\n", ["--commit"], true],
+    ["autoCommit: false\n", ["--commit"], true],
+    ["autoCommit: true\n", ["--no-commit"], false],
+  ]) {
+    const cwd = initGitWorkspace();
+    writeSources(cwd, prefix + sourceFor("api", bare));
+    const head = gitOut(cwd, "rev-parse", "HEAD");
+    for (const conflictingFlags of [["--commit", "--no-commit"], ["--no-commit", "--commit"]]) {
+      const result = run(["sync", "api", ...conflictingFlags], { cwd });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout + result.stderr, /conflict|cannot be used/i);
+      assert.equal(existsSync(join(cwd, "oms", "api")), false);
+      assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+    }
+    const result = run(["sync", "api", ...flags], { cwd });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    if (expectedCommit) {
+      assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+      assert.equal(gitOut(cwd, "status", "--porcelain"), "");
+    } else {
+      assert.equal(gitOut(cwd, "rev-parse", "HEAD"), head);
+      assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^oms\/api$/m);
+      assert.match(result.stdout + result.stderr, /oms sync api --commit/);
+    }
   }
-  assert.equal(
-    gitOut(plain, "rev-list", "--count", "HEAD"),
-    gitOut(flagged, "rev-list", "--count", "HEAD"),
-  );
 });
 
-test("multi-alias sync still produces one plural topology commit by default", () => {
+test("opted-in multi-alias sync creates one plural registration commit", () => {
   const a = initBareUpstream();
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
-  writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
+  writeSources(cwd, `autoCommit: true\n${sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }])}`);
   const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
 
   assert.equal(run(["sync", "api", "web"], { cwd }).status, 0);
@@ -191,11 +203,10 @@ test("sync restore is scoped to the selected alias and preserves unrelated .gitm
   assert.equal(run(["sync", "--all", "--no-commit"], { cwd }).status, 0);
   git(cwd, "add", "-A");
   git(cwd, "commit", "-m", "add submodules");
-  writeFileSync(join(cwd, ".gitmodules"), `${readFileSync(join(cwd, ".gitmodules"), "utf8")}# keep web edit\n`);
-
   // The removal must stay uncommitted, or the gitlink leaves HEAD and the next sync takes the
   // fresh-add path instead of restorePendingRemoval — the scoped restore this test exists for.
   assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
+  writeFileSync(join(cwd, ".gitmodules"), `${readFileSync(join(cwd, ".gitmodules"), "utf8")}# keep web edit\n`);
   const result = run(["sync", "api"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
@@ -249,8 +260,8 @@ test("sync restore fails before add when the selected root gitlink is conflicted
 
   const result = run(["sync", "api"], { cwd });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 2, output);
-  assert.match(output, /root gitlink is conflicted/);
+  assert.equal(result.status, 1, output);
+  assert.match(output, /merge in progress/);
   assert.doesNotMatch(output, /git submodule add failed/);
 });
 
@@ -292,7 +303,7 @@ test("unsync --no-commit removes a normal registered submodule and leaves the re
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout + result.stderr, /api: unsynced/);
   assert.equal(existsSync(join(cwd, "oms", "api")), false);
-  assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  assert.match(gitOut(cwd, "diff", "--cached", "--name-status"), /^D\s+oms\/api$/m);
   const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
 
   assert.equal(run(["unsync", "api", "--commit"], { cwd }).status, 0);

@@ -17,20 +17,25 @@ import { docUrl } from "./env.js";
 import { aliasDir } from "./git.js";
 import { inspectWorkspaceGitIdentity, resolveWorkspaceManifest } from "./workspace-discovery.js";
 import type { Repo, WorkspaceOptions } from "./types.js";
-const ALLOWED_TOP_KEYS = new Set(["repos"]);
 const ALLOWED_ITEM_KEYS = new Set(["alias", "remotes", "branch"]);
 
-export function validateSources(data: unknown): Repo[] {
+type Manifest = { repos: Repo[]; autoCommit: boolean };
+type LoadedWorkspace = Manifest & { repoRoot: string };
+
+function validateManifest(data: unknown): Manifest {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error(`${MANIFEST_FILENAME}: root must be a mapping`);
   }
   const obj = data as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
-    if (!ALLOWED_TOP_KEYS.has(key)) {
+    if (key !== "repos" && key !== "autoCommit") {
       throw new Error(`${MANIFEST_FILENAME}: unknown top-level key "${key}"`);
     }
   }
-  const { repos } = obj;
+  const { repos, autoCommit = false } = obj;
+  if (typeof autoCommit !== "boolean") {
+    throw new Error(`${MANIFEST_FILENAME}: "autoCommit" must be a boolean`);
+  }
   if (!Array.isArray(repos)) {
     throw new Error(`${MANIFEST_FILENAME}: "repos" must be an array`);
   }
@@ -104,7 +109,15 @@ export function validateSources(data: unknown): Repo[] {
     validated.push({ alias: r.alias, remotes, branch });
   });
 
-  return validated;
+  return { repos: validated, autoCommit };
+}
+
+export function validateSources(data: unknown): Repo[] {
+  return validateManifest(data).repos;
+}
+
+export function parseManifest(text: string): Manifest {
+  return validateManifest(parseYaml(text));
 }
 
 function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: boolean }): void {
@@ -163,7 +176,7 @@ export function abortOnLegacyWorktree(repoRoot: string, repos: Repo[]): boolean 
   return true;
 }
 
-export function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repoRoot: string } | null {
+export function loadRepos(options: WorkspaceOptions = {}): LoadedWorkspace | null {
   const resolution = resolveWorkspaceManifest(options);
   if (resolution.kind === "missing") {
     log.error(
@@ -181,7 +194,7 @@ export function loadRepos(options: WorkspaceOptions = {}): { repos: Repo[]; repo
 
   try {
     return {
-      repos: validateSources(parseYaml(readFileSync(resolution.manifestPath, "utf8"))),
+      ...parseManifest(readFileSync(resolution.manifestPath, "utf8")),
       repoRoot: resolution.repoRoot,
     };
   } catch (e) {
@@ -213,7 +226,7 @@ export function emitWorkspaceGitIdentityError(repoRoot: string): boolean {
   return true;
 }
 
-export function loadForSubmodules(): { repos: Repo[]; repoRoot: string } | null {
+export function loadForSubmodules(): LoadedWorkspace | null {
   const loaded = loadRepos();
   if (!loaded) {
     emitLegacyRenameHintWalkUp();

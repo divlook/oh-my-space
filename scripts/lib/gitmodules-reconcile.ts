@@ -38,7 +38,7 @@ function getConfigValue(repoRoot: string, snapshot: string, key: string): string
   return r.success && value.length > 0 ? value : null;
 }
 
-function computeChangedFields(repoRoot: string, snapshot: string, plans: AliasMetadataPlan[]): Map<string, string[]> {
+export function computeChangedFields(repoRoot: string, snapshot: string, plans: AliasMetadataPlan[]): Map<string, string[]> {
   const changed = new Map<string, string[]>();
   for (const plan of plans) {
     const fields: string[] = [];

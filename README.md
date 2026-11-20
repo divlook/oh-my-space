@@ -69,7 +69,7 @@ Inspect its state:
 oms status
 ```
 
-The source repository is now available at `oms/api/`. Follow [Getting started](https://github.com/divlook/oh-my-space/blob/main/docs/getting-started.md) for your first branch, commit, push, and recorded-commit workflow.
+The source repository is now available at `oms/api/`. With the default settings, syncing does not commit its registration. Follow [Getting started](https://github.com/divlook/oh-my-space/blob/main/docs/getting-started.md) to commit the registration and complete your first source change.
 
 ## Documentation
 

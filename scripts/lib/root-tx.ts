@@ -254,6 +254,38 @@ function synthesizeGitmodules(
   }
 }
 
+export function checkSyncStaging(
+  repoRoot: string,
+  plans: AliasMetadataPlan[],
+  runner: RawGitRunner,
+): ReadonlyMap<string, string> | string {
+  const paths = [".gitmodules", ...plans.map(({ alias }) => submodulePath(alias))];
+  const changed = runGit(repoRoot, ["diff", "--cached", "--name-only", "-z", "--no-renames", "--", ...paths], false, undefined, runner);
+  if (!changed.success) return "Could not inspect staged root paths. Retry once Git is idle.";
+  const staged = new Map<string, string>();
+  for (const path of changed.stdout.split("\0").filter(Boolean)) {
+    const entry = runGit(repoRoot, ["ls-files", "--stage", "--", path], false, undefined, runner);
+    if (!entry.success) return "Could not inspect staged root paths. Retry once Git is idle.";
+    let matches: boolean;
+    if (path === ".gitmodules") {
+      const text = synthesizeGitmodules(repoRoot, plans, []);
+      if (text === null) return "Could not validate the planned .gitmodules content. No registration changes were made.";
+      const blob = runner(repoRoot, ["hash-object", "--stdin"], Buffer.from(text));
+      matches = blob.success && entry.stdout.trim() === `100644 ${blob.stdout.trim()} 0\t${path}`;
+    } else {
+      const head = runGit(repoRoot, ["ls-tree", "HEAD", "--", path], false, undefined, runner);
+      // Existing gitlink pointer updates belong to record, not sync.
+      if (head.success && head.stdout.startsWith("160000 commit ") && entry.stdout.startsWith("160000 ")) continue;
+      const source = runGit(join(repoRoot, path), ["rev-parse", "--verify", "HEAD^{commit}"], false, undefined, runner);
+      matches = head.success && head.stdout.length === 0 && source.success
+        && entry.stdout.trim() === `160000 ${source.stdout.trim()} 0\t${path}`;
+    }
+    if (!matches) return `Staged ${path} does not match the planned sync commit. Commit or unstage it before syncing, or run sync with --no-commit.`;
+    staged.set(path, entry.stdout);
+  }
+  return staged;
+}
+
 function hashObject(repoRoot: string, content: Buffer, runner: RawGitRunner = productionGitRunner): string | null {
   const proc = runner(repoRoot, ["hash-object", "-w", "--stdin"], content);
   const oid = proc.stdout.trim();
@@ -275,6 +307,8 @@ type FinalizeInput = {
   message: string;
   /** Exact working-tree oms.yaml bytes to stage, or null to keep HEAD's version. */
   omsYamlBytes: Buffer | null;
+  /** Existing staged entries that sync is authorized to consume only if the planned commit matches. */
+  staged?: ReadonlyMap<string, string>;
   /** Controls only object-format inspection and blob writes, not transaction/recovery execution. */
   objectGitRunner?: RawGitRunner;
 };
@@ -371,6 +405,14 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
   if (!changed.success) return fail("could not resolve the commit's changed paths");
   committedPaths = changed.stdout.split("\n").map((path) => path.trim()).filter(Boolean);
 
+  for (const path of committedPaths) {
+    const expected = input.staged?.get(path);
+    if (expected === undefined) continue;
+    const entry = runGitEnv(repoRoot, ["ls-files", "--stage", "--", path], env);
+    if (!entry.success || entry.stdout !== expected) {
+      return fail(`staged ${path} does not match the validated sync commit`);
+    }
+  }
   const originalIndexHash = hashFile(realIndex);
   if (!originalIndexHash) return fail("could not hash the real index");
 

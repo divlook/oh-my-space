@@ -1,11 +1,14 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "@clack/prompts";
+import { aliasRegistration } from "./alias-registration.js";
 import { DATA_DIRNAME } from "./constants.js";
-import { reconcileGitmodules, type AliasMetadataPlan } from "./gitmodules-reconcile.js";
+import { computeChangedFields, reconcileGitmodules, type AliasMetadataPlan } from "./gitmodules-reconcile.js";
 import { aliasDir, currentBranch, isRegisteredSubmodule, redactSensitiveUrls, remoteBranchExists, resolveOriginHead, runGit as executeGit, productionGitRunner, submoduleInitialized, submodulePath, type RawGitRunner } from "./git.js";
 import { gitOperationInProgress } from "./git-operation-state.js";
-import { gitlinkState, partialRemovalTopology, pendingRemovalTopology, readAliasDirEntries, unreadablePathReason } from "./workspace-state.js";
+import { gitlinkState, partialRemovalTopology, pendingAddTopology, pendingRemovalTopology, readAliasDirEntries, unreadablePathReason } from "./workspace-state.js";
+import { parseManifest } from "./manifest.js";
+import { checkSyncStaging } from "./root-tx.js";
 import { finalizeTopology } from "./topology-commit.js";
 import { attachBranch, ensureRemotes, gitmodulesBranch } from "./submodule-config.js";
 import { ensureOmsNotIgnored } from "./workspace-ignore.js";
@@ -13,7 +16,15 @@ import { prepareTopologyMutation } from "./topology-preflight.js";
 import { exitFromResults, printSummary } from "./operation-results.js";
 import type { OperationResult, Repo, SyncCommitOptions } from "./types.js";
 
-export async function syncWorkspace(repoRoot: string, picked: Repo[], options: SyncCommitOptions, runner: RawGitRunner = productionGitRunner): Promise<number> {
+type SyncOutcome = { code: number; outcomes: Map<string, OperationResult>; finalized: boolean };
+
+export async function syncWorkspace(
+  repoRoot: string,
+  picked: Repo[],
+  options: SyncCommitOptions & { commit: boolean; delegated?: boolean },
+  runner: RawGitRunner = productionGitRunner,
+): Promise<SyncOutcome> {
+  const outcomes = new Map<string, OperationResult>();
   const runGit: typeof executeGit = (cwd, args, inherit = false, env, override = runner) => executeGit(cwd, args, inherit, env, override);
   const runSub = (root: string, alias: string, args: string[], inherit = false) => runGit(aliasDir(root, alias), args, inherit);
   function cleanupFailedAdd(repoRoot: string, alias: string): void {
@@ -180,6 +191,14 @@ export async function syncWorkspace(repoRoot: string, picked: Repo[], options: S
     const path = submodulePath(alias);
     const registered = isRegisteredSubmodule(repoRoot, path);
     const state = gitlinkState(repoRoot, alias);
+    if (state.conflict) {
+      log.error(`${alias}: the root gitlink is conflicted. Resolve the root repository conflict first.`);
+      return "failed";
+    }
+    if (registered && state.headOid === null && state.initialized && aliasRegistration(repoRoot, alias).kind !== "pending registration") {
+      log.error(`${alias}: pending registration is inconsistent. Resolve the checkout or .gitmodules registration before syncing.`);
+      return "failed";
+    }
 
     if (!registered && state.headOid !== null) {
       const restore = restorePendingRemoval(repo, repoRoot);
@@ -230,7 +249,7 @@ export async function syncWorkspace(repoRoot: string, picked: Repo[], options: S
       const add = runGit(repoRoot, args, true);
       if (!add.success) {
         log.error(`${alias}: git submodule add failed (exit ${add.exitCode})`);
-        cleanupFailedAdd(repoRoot, alias);
+        if (options.commit) cleanupFailedAdd(repoRoot, alias);
         return "failed";
       }
       ensureRemotes(repoRoot, alias, repo.remotes, runner);
@@ -291,39 +310,69 @@ export async function syncWorkspace(repoRoot: string, picked: Repo[], options: S
   }
 
   const manifest = prepareTopologyMutation(repoRoot, "syncing", runner);
-  if (!manifest.ok) return manifest.code;
+  if (!manifest.ok) return { code: manifest.code, outcomes, finalized: false };
   const omsYamlBytes = manifest.bytes;
+  const plannedMetadata = picked.map((repo) => ({
+    alias: repo.alias,
+    url: repo.remotes.origin,
+    branch: repo.branch ?? null,
+  }));
+  if (options.delegated) {
+    try {
+      if (parseManifest(omsYamlBytes.toString("utf8")).autoCommit !== options.commit) {
+        log.error("oms.yaml autoCommit changed after approval. No registration changes were made; rerun the command.");
+        return { code: 1, outcomes, finalized: false };
+      }
+    } catch (error) {
+      log.error(redactSensitiveUrls(error instanceof Error ? error.message : "Invalid oms.yaml; rerun the command after correcting it."));
+      return { code: 1, outcomes, finalized: false };
+    }
+  }
+  const staged = options.commit ? checkSyncStaging(repoRoot, plannedMetadata, runner) : undefined;
+  if (typeof staged === "string") {
+    log.error(staged);
+    return { code: 1, outcomes, finalized: false };
+  }
   ensureOmsNotIgnored(repoRoot);
 
-  const outcomes = new Map(picked.map((repo) => [repo.alias, syncRepo(repo, repoRoot)]));
+  for (const repo of picked) outcomes.set(repo.alias, syncRepo(repo, repoRoot));
   const results = [...outcomes.values()];
-  const metadataPlans: AliasMetadataPlan[] = picked
-    .filter((repo) => outcomes.get(repo.alias) !== "failed")
-    .map((repo) => ({
-      alias: repo.alias,
-      url: repo.remotes.origin,
-      branch: repo.branch ?? null,
-    }));
-  // Reconcile OMS-managed .gitmodules metadata for successful aliases from the manifest, atomically and
-  // against the post-topology snapshot. Only drifted fields are rewritten; a failure leaves the
-  // completed topology as an unstaged, resumable working-tree result rather than committing.
+  const metadataPlans = plannedMetadata.filter(({ alias }) => outcomes.get(alias) !== "failed");
+  // Only successful aliases contribute metadata. A shared failure blocks delegated follow-on work.
   const gitmodulesPath = join(repoRoot, ".gitmodules");
   const snapshot = existsSync(gitmodulesPath) ? readFileSync(gitmodulesPath, "utf8") : "";
   const reconcile = reconcileGitmodules(repoRoot, metadataPlans, snapshot);
-  let metadataAliases: string[] = [];
   if (!reconcile.ok) {
     log.error(
       `.gitmodules metadata reconciliation failed: ${reconcile.reason}.${reconcile.chmodCommand ? ` Run: ${reconcile.chmodCommand}` : ""}`,
     );
+    if (options.commit) {
+      const introduced = picked
+        .filter(({ alias }) => !staged?.has(submodulePath(alias)) && pendingAddTopology(gitlinkState(repoRoot, alias)))
+        .map(({ alias }) => submodulePath(alias));
+      if (!staged?.has(".gitmodules")) introduced.push(".gitmodules");
+      if (introduced.length > 0 && !runGit(repoRoot, ["reset", "-q", "HEAD", "--", ...introduced]).success) {
+        log.error("Could not unstage changes introduced by the failed sync. Review the retained state before retrying.");
+      }
+    }
     if (results.length > 1 || options.all) printSummary(results);
-    return 2;
+    return { code: 2, outcomes, finalized: false };
   }
-  metadataAliases = [...reconcile.changedFields.keys()];
   for (const [alias, fields] of reconcile.changedFields) {
     log.info(`${alias}: reconciled .gitmodules ${fields.join(", ")} from oms.yaml`);
   }
 
-  const topoExit = await finalizeTopology({ repoRoot, requested: picked.map((r) => r.alias), kind: "add", commit: options.commit, allSucceeded: !results.includes("failed"), metadataPlans, omsYamlBytes, metadataAliases });
+  const oldMetadata = options.commit ? runGit(repoRoot, ["show", "HEAD:.gitmodules"]) : null;
+  const metadataAliases = new Set(reconcile.changedFields.keys());
+  if (oldMetadata) {
+    for (const alias of computeChangedFields(repoRoot, oldMetadata.success ? oldMetadata.stdout : "", metadataPlans).keys()) {
+      metadataAliases.add(alias);
+    }
+  }
+  const topoExit = await finalizeTopology({
+    repoRoot, requested: picked.filter((r) => !options.commit || outcomes.get(r.alias) !== "failed").map((r) => r.alias), kind: "add", commit: options.commit,
+    allSucceeded: !results.includes("failed"), metadataPlans, omsYamlBytes, metadataAliases: [...metadataAliases], staged,
+  });
   if (results.length > 1 || options.all) printSummary(results);
-  return exitFromResults(results) || topoExit;
+  return { code: exitFromResults(results) || topoExit, outcomes, finalized: topoExit === 0 };
 }

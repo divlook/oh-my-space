@@ -201,7 +201,7 @@ test("push --remote with an unknown remote fails for that repo", () => {
   const origin = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", origin));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
 
   const result = run(["push", "api", "--remote", "nope"], { cwd });
   const output = result.stdout + result.stderr;

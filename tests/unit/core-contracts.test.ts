@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { validateSources } from "../../scripts/lib/manifest.js";
+import { parseManifest, validateSources } from "../../scripts/lib/manifest.js";
 import {
   inferAliasFromCwd,
   pendingAddTopology,
@@ -44,6 +44,17 @@ test("manifest validation normalizes valid repositories and rejects structural a
     [{ repos: [{ alias: "api", remotes: { origin: "x" } }, { alias: "api", remotes: { origin: "y" } }] }, /duplicate alias/],
   ];
   for (const [value, message] of invalid) assert.throws(() => validateSources(value), message);
+});
+
+test("manifest parses registration commit opt-in as an optional boolean", () => {
+  const text = "repos:\n  - alias: api\n    remotes:\n      origin: https://example.com/api.git\n";
+  const repos = [{ alias: "api", remotes: { origin: "https://example.com/api.git" }, branch: undefined }];
+  assert.deepEqual(parseManifest(text), { repos, autoCommit: false });
+  assert.deepEqual(parseManifest(`autoCommit: false\n${text}`), { repos, autoCommit: false });
+  assert.deepEqual(parseManifest(`autoCommit: true\n${text}`), { repos, autoCommit: true });
+  for (const value of ['"true"', "1", "", "null", "[]", "{}"]) {
+    assert.throws(() => parseManifest(`autoCommit: ${value}\n${text}`), /"autoCommit" must be a boolean/);
+  }
 });
 
 test("status topology and record decisions distinguish add, removal, split, no-op, and movement", () => {

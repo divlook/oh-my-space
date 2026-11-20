@@ -55,10 +55,10 @@ See [Configure your workspace](configure-your-workspace.md) for the complete for
 
 ## Synchronize the repositories
 
-Synchronize every declared repository with its configured starting branch, called the baseline:
+Synchronize every declared repository with its configured starting branch, called the baseline. Use `--commit` to save the registrations in the main project before you push and record source changes:
 
 ```bash
-oms sync --all
+oms sync --all --commit
 ```
 
 Inspect the workspace state:
@@ -68,6 +68,8 @@ oms status
 ```
 
 The repository is now available at `oms/api/`. The main project records its exact commit. `oms/api/` remains a normal Git working tree where you can create branches and make commits.
+
+If you want to review registration changes before committing, run `oms sync --all` with [`autoCommit` disabled](configure-your-workspace.md#autocommit). Git may still stage changes on affected paths. When ready, run `oms sync --all --commit` before continuing to the first push.
 
 ## Complete the first change
 
