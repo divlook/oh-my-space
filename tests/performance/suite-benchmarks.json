@@ -117,6 +117,40 @@
       "varianceMs2": 0,
       "maxMs": 114750,
       "gating": false
+    },
+    {
+      "label": "untangle-baseline",
+      "measuredAt": "2026-11-20T07:53:47.748Z",
+      "runtime": "v24.21.0",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        75927,
+        79965,
+        78707
+      ],
+      "medianMs": 78707,
+      "varianceMs2": 2846268,
+      "maxMs": 79965,
+      "gating": false
+    },
+    {
+      "label": "untangle-final",
+      "measuredAt": "2026-11-20T08:26:28.430Z",
+      "runtime": "v24.21.0",
+      "runs": 3,
+      "integrationConcurrency": 4,
+      "blackboxConcurrency": 8,
+      "durationsMs": [
+        71622,
+        76430,
+        80257
+      ],
+      "medianMs": 76430,
+      "varianceMs2": 12480669,
+      "maxMs": 80257,
+      "gating": true
     }
   ]
 }

@@ -34,7 +34,6 @@ export function changeCounts(dir: string, excludePaths: Set<string>): ChangeCoun
     const x = entry[0];
     const y = entry[1];
     const path = entry.slice(3);
-    // A staged rename/copy emits "<XY> <dest>\0<src>\0"; consume the trailing source token.
     if (x === "R" || x === "C") i++;
     if (excludePaths.has(path)) continue;
     if (x === "?" && y === "?") {
@@ -70,6 +69,9 @@ export type GitlinkState = {
   pin: PinValue;
 };
 
+type RootGitlink = Pick<GitlinkState, "headOid" | "indexOid" | "conflict">;
+export type GitlinkObservation = Omit<GitlinkState, "gitmodulesEntry">;
+
 function headGitlinkOid(repoRoot: string, alias: string): string | null {
   const r = runGit(repoRoot, ["ls-tree", "HEAD", "--", submodulePath(alias)]);
   if (!r.success) return null;
@@ -89,15 +91,85 @@ function gitlinkConflicted(repoRoot: string, alias: string): boolean {
   return r.success && r.stdout.trim().length > 0;
 }
 
+function readGitlinkRecords(
+  repoRoot: string,
+  args: string[],
+  visit: (header: string, path: string) => boolean,
+): boolean {
+  const { success, stdout } = runGit(repoRoot, args);
+  if (!success) return false;
+  // Parse only complete NUL-delimited records. Paths can themselves contain tabs or newlines.
+  for (let start = 0; start < stdout.length;) {
+    const end = stdout.indexOf("\0", start);
+    const separator = stdout.indexOf("\t", start);
+    if (end < 0 || separator < 0 || separator >= end || separator + 1 === end) return false;
+    if (!visit(stdout.slice(start, separator), stdout.slice(separator + 1, end))) return false;
+    start = end + 1;
+  }
+  return true;
+}
+
+/** Read the selected status pointers without inspecting `.gitmodules` or unrelated aliases. */
+export function observeGitlinks(repoRoot: string, aliases: readonly string[]): GitlinkObservation[] {
+  if (aliases.length === 0) return [];
+  const paths = aliases.map(submodulePath);
+  const pointers = new Map<string, RootGitlink>(
+    paths.map((path) => [path, { headOid: null, indexOid: null, conflict: false }]),
+  );
+  const headRead = readGitlinkRecords(repoRoot, ["ls-tree", "-z", "HEAD", "--", ...paths], (header, path) => {
+    const entry = /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]+)$/.exec(header);
+    if (!entry) return false;
+    const pointer = pointers.get(path);
+    if (pointer && entry[1] === "160000" && entry[2] === "commit") pointer.headOid = entry[3];
+    return true;
+  });
+  const indexRead = readGitlinkRecords(repoRoot, ["ls-files", "--stage", "-z", "--", ...paths], (header, path) => {
+    const entry = /^([0-7]{6}) ([0-9a-f]+) ([0-3])$/.exec(header);
+    if (!entry) return false;
+    // A selected directory pathspec also matches its descendants, just like the singular query.
+    const child = path.indexOf("/", DATA_DIRNAME.length + 1);
+    const pointer = pointers.get(child < 0 ? path : path.slice(0, child));
+    if (pointer) {
+      if (entry[3] !== "0") pointer.conflict = true;
+      else if (entry[1] === "160000") pointer.indexOid ??= entry[2];
+    }
+    return true;
+  });
+
+  return aliases.map((alias, index) => {
+    const pointer = pointers.get(paths[index])!;
+    // Retry only the failed observation. An unreadable path or oversized batch must not hide
+    // healthy aliases, and a failed stage read must not erase a successful conflict read.
+    if (!headRead) pointer.headOid = headGitlinkOid(repoRoot, alias);
+    if (!indexRead) {
+      pointer.indexOid = indexGitlinkOid(repoRoot, alias);
+      pointer.conflict = gitlinkConflicted(repoRoot, alias);
+    }
+    return completeGitlinkObservation(repoRoot, alias, pointer);
+  });
+}
+
 export function gitlinkState(repoRoot: string, alias: string): GitlinkState {
-  const headOid = headGitlinkOid(repoRoot, alias);
-  const indexOid = indexGitlinkOid(repoRoot, alias);
-  const conflict = gitlinkConflicted(repoRoot, alias);
+  const pointer = {
+    headOid: headGitlinkOid(repoRoot, alias),
+    indexOid: indexGitlinkOid(repoRoot, alias),
+    conflict: gitlinkConflicted(repoRoot, alias),
+    gitmodulesEntry: isRegisteredSubmodule(repoRoot, submodulePath(alias)),
+  };
+  return completeGitlinkObservation(repoRoot, alias, pointer);
+}
+
+function completeGitlinkObservation<T extends RootGitlink>(
+  repoRoot: string,
+  alias: string,
+  pointer: T,
+): GitlinkObservation & T {
+  const { headOid, indexOid, conflict } = pointer;
+  const dir = aliasDir(repoRoot, alias);
   const initialized = submoduleInitialized(repoRoot, alias);
-  const pathExists = existsSync(aliasDir(repoRoot, alias));
-  const gitmodulesEntry = isRegisteredSubmodule(repoRoot, submodulePath(alias));
+  const pathExists = existsSync(dir);
   const worktreeOid = initialized
-    ? runGit(aliasDir(repoRoot, alias), ["rev-parse", "HEAD"]).stdout.trim() || null
+    ? runGit(dir, ["rev-parse", "HEAD"]).stdout.trim() || null
     : null;
 
   const moved =
@@ -116,14 +188,11 @@ export function gitlinkState(repoRoot: string, alias: string): GitlinkState {
   else pin = "ok";
 
   return {
+    ...pointer,
     alias,
-    headOid,
-    indexOid,
     worktreeOid,
-    conflict,
     initialized,
     pathExists,
-    gitmodulesEntry,
     moved,
     staged,
     split,
@@ -244,7 +313,7 @@ function occupiedByNonSubmodule(repoRoot: string, alias: string): OccupiedPathSt
 }
 
 export function assertRootWriteSafe(repoRoot: string, alias: string): RootTopologySafety {
-  if (gitlinkState(repoRoot, alias).conflict) {
+  if (gitlinkConflicted(repoRoot, alias)) {
     return { safe: false, reason: TOPOLOGY_REASON.conflict };
   }
   const op = gitOperationInProgress(repoRoot);
@@ -261,14 +330,9 @@ export function assertRootTopologySafe(repoRoot: string, alias: string): RootTop
   return { safe: true };
 }
 
-export function rootFollowupHint(alias: string, s: GitlinkState): string | null {
-  if (s.headOid !== null && s.pathExists && !s.conflict && s.moved) {
-    return `Run "oms record ${alias}" to record the root pointer update.`;
-  }
-  if (pendingAddTopology(s)) {
-    return `Run "oms sync ${alias} --commit" to create the topology commit.`;
-  }
-  return null;
+export function rootFollowupAction(s: GitlinkState): "record" | "sync" | null {
+  if (s.headOid !== null && s.pathExists && !s.conflict && s.moved) return "record";
+  return pendingAddTopology(s) ? "sync" : null;
 }
 
 /**

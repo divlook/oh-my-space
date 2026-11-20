@@ -24,7 +24,9 @@ export async function runBranchClean(aliasArg: string | undefined, options: { ba
   const repo = repos.find((entry) => entry.alias === alias);
   if (!repo) { log.error(`Unknown alias ${JSON.stringify(alias)}. Use "oms sync --list" to see declared aliases.`); return 1; }
   const wasInitialized = submoduleInitialized(repoRoot, repo.alias);
-  const preparation = await prepareAlias(repoRoot, repo, { command: "branch clean", topologyOffer: false });
+  const preparation = await prepareAlias(repoRoot, repo, {
+    command: "branch clean", topologyOffer: false, allowPendingRegistration: false,
+  });
   if (!preparation.ok) return preparation.code;
   const effects = wasInitialized ? undefined : "Preparation initialized the registered source; fetched data, baseline branch creation or attachment, and tracking configuration remain even if cleanup is declined.";
   let plan: BranchCleanPlan;

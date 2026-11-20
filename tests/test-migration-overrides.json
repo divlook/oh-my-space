@@ -6,6 +6,15 @@
   "tests/cli-branch-list.contracts.js::branch list redacts credential-bearing query parameters from Git diagnostics": [
     "tests/unit/git.test.ts::Git version and sensitive URL parsers reject malformed input without leaking credentials"
   ],
+  "tests/cli-sync.contracts.js::fetch updates origin refs inside the submodule": [
+    "tests/cli-preparation-a.test.js::fetch retries one transient failure and succeeds without an error"
+  ],
+  "tests/cli-tools.test.js::agent install rejects malformed markers atomically across targets": [
+    "tests/cli-tools.test.js::agent install leaves all targets unchanged when one has malformed markers"
+  ],
+  "tests/cli-tools.test.js::agent uninstall rejects a duplicate managed block atomically": [
+    "tests/cli-tools.test.js::agent uninstall leaves the file unchanged when the managed block is duplicated"
+  ],
   "tests/cli-tools.test.js::update fails cleanly when registry latest is unavailable": [
     "tests/unit/package-channels.test.ts::update version and channel decisions reject malformed registry or semver inputs"
   ],

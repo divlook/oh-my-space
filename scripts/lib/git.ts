@@ -112,7 +112,6 @@ export function hasRegisteredSubmodules(repoRoot: string): boolean {
   return registeredSubmodulePaths(repoRoot).length > 0;
 }
 
-/** A submodule is initialized when its working tree has a .git gitlink file/dir. */
 export function submoduleInitialized(repoRoot: string, alias: string): boolean {
   return existsSync(join(aliasDir(repoRoot, alias), ".git"));
 }
@@ -139,14 +138,12 @@ export function localBranchExists(dir: string, branch: string, runner: RawGitRun
   return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], false, undefined, runner).success;
 }
 
-/** Full 40-hex OID of a local branch tip, or null when the branch does not exist. */
 export function localBranchOid(dir: string, branch: string, runner: RawGitRunner = productionGitRunner): string | null {
   const r = runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], false, undefined, runner);
   const oid = r.stdout.trim();
   return r.success && /^[0-9a-f]{40}$/.test(oid) ? oid : null;
 }
 
-/** Abbreviated OID for an arbitrary revision, or a sentinel when it cannot be read. */
 export function shortOid(dir: string, rev: string, runner: RawGitRunner = productionGitRunner): string {
   return abbreviatedOid(dir, rev, runner, true);
 }
@@ -158,7 +155,6 @@ export function resolveOriginHead(dir: string, runner: RawGitRunner = production
   const ref = r.stdout.trim();
   const name = ref.startsWith("refs/remotes/origin/") ? ref.slice("refs/remotes/origin/".length) : "";
   if (!name) return null;
-  // A default that points at a nonexistent remote-tracking branch is not a usable baseline.
   return runGit(dir, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${name}`], false, undefined, runner).success ? name : null;
 }
 

@@ -34,7 +34,9 @@ export async function runSwitch(
 
   const repo = await selectRepoAlias(repos, alias, "branch switch");
   if (!repo) return 1;
-  const preparation = await prepareAlias(repoRoot, repo, { command: "branch switch", topologyOffer: true });
+  const preparation = await prepareAlias(repoRoot, repo, {
+    command: "branch switch", topologyOffer: true, allowPendingRegistration: true,
+  });
   if (!preparation.ok) return 1;
   const dir = aliasDir(repoRoot, repo.alias);
 
@@ -64,7 +66,9 @@ export async function runCheckout(alias: string | undefined, branch: string | un
 
   const repo = await selectRepoAlias(repos, alias, "branch checkout");
   if (!repo) return 1;
-  const preparation = await prepareAlias(repoRoot, repo, { command: "branch checkout", topologyOffer: true });
+  const preparation = await prepareAlias(repoRoot, repo, {
+    command: "branch checkout", topologyOffer: true, allowPendingRegistration: true,
+  });
   if (!preparation.ok) return 1;
   const dir = aliasDir(repoRoot, repo.alias);
 

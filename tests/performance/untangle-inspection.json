@@ -1,0 +1,1138 @@
+{
+  "formatVersion": 1,
+  "baselineCommit": "7b9b857dab2cada4e1ddcc631249f833cdde8aa4",
+  "runtime": {
+    "node": "v24.21.0",
+    "git": "2.54.0 (Apple Git-157)",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "method": "Compare production bundles using local disposable Git repositories. A Node preload counted Git spawnSync calls; it rejected fetch attempts in read-only runs. Run three paired samples, then one final-bundle pair to verify that call counts and behavior still match. Durations include instrumentation and are diagnostic, not a gate.",
+  "comparison": "Compare stdout, stderr, and exit codes exactly. For mutations use fresh replicas, normalize their paths, and compare resulting branch refs, Git trees, index entries, or working state as applicable.",
+  "scenarios": [
+    {
+      "fixture": "F1",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 16,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          229,
+          227,
+          238
+        ]
+      },
+      "after": {
+        "gitCalls": 14,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          257,
+          219,
+          228
+        ]
+      }
+    },
+    {
+      "fixture": "F1",
+      "command": [
+        "status",
+        "api",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 16,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          264,
+          215,
+          358
+        ]
+      },
+      "after": {
+        "gitCalls": 14,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          201,
+          206,
+          345
+        ]
+      }
+    },
+    {
+      "fixture": "F1",
+      "command": [
+        "status"
+      ],
+      "before": {
+        "gitCalls": 10,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          219,
+          151,
+          158
+        ]
+      },
+      "after": {
+        "gitCalls": 8,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          140,
+          133,
+          135
+        ]
+      }
+    },
+    {
+      "fixture": "F1",
+      "command": [
+        "status",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 10,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          164,
+          157,
+          152
+        ]
+      },
+      "after": {
+        "gitCalls": 8,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          161,
+          136,
+          136
+        ]
+      }
+    },
+    {
+      "fixture": "F1",
+      "command": [
+        "doctor"
+      ],
+      "before": {
+        "gitCalls": 6,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          207,
+          226,
+          200
+        ]
+      },
+      "after": {
+        "gitCalls": 6,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          210,
+          227,
+          204
+        ]
+      }
+    },
+    {
+      "fixture": "F1",
+      "command": [
+        "tree",
+        "list"
+      ],
+      "before": {
+        "gitCalls": 2,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          74,
+          76,
+          76
+        ]
+      },
+      "after": {
+        "gitCalls": 2,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          75,
+          74,
+          74
+        ]
+      }
+    },
+    {
+      "fixture": "F2",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 114,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1198,
+          1845,
+          1184
+        ]
+      },
+      "after": {
+        "gitCalls": 76,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          941,
+          975,
+          872
+        ]
+      }
+    },
+    {
+      "fixture": "F2",
+      "command": [
+        "status",
+        "api",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 25,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          353,
+          376,
+          361
+        ]
+      },
+      "after": {
+        "gitCalls": 23,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          341,
+          340,
+          334
+        ]
+      }
+    },
+    {
+      "fixture": "F2",
+      "command": [
+        "status"
+      ],
+      "before": {
+        "gitCalls": 91,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          972,
+          902,
+          1000
+        ]
+      },
+      "after": {
+        "gitCalls": 53,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          565,
+          558,
+          578
+        ]
+      }
+    },
+    {
+      "fixture": "F2",
+      "command": [
+        "status",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 19,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          235,
+          251,
+          239
+        ]
+      },
+      "after": {
+        "gitCalls": 17,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          215,
+          218,
+          222
+        ]
+      }
+    },
+    {
+      "fixture": "F2",
+      "command": [
+        "doctor"
+      ],
+      "before": {
+        "gitCalls": 42,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1382,
+          1347,
+          1350
+        ]
+      },
+      "after": {
+        "gitCalls": 42,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1444,
+          1328,
+          1337
+        ]
+      }
+    },
+    {
+      "fixture": "F2",
+      "command": [
+        "tree",
+        "list"
+      ],
+      "before": {
+        "gitCalls": 11,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          151,
+          153,
+          158
+        ]
+      },
+      "after": {
+        "gitCalls": 11,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          151,
+          154,
+          152
+        ]
+      }
+    },
+    {
+      "fixture": "F3",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 17,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          220,
+          217,
+          219
+        ]
+      },
+      "after": {
+        "gitCalls": 15,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          210,
+          200,
+          198
+        ]
+      }
+    },
+    {
+      "fixture": "F3",
+      "command": [
+        "status",
+        "api",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 17,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          216,
+          219,
+          219
+        ]
+      },
+      "after": {
+        "gitCalls": 15,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          202,
+          201,
+          205
+        ]
+      }
+    },
+    {
+      "fixture": "F3",
+      "command": [
+        "status"
+      ],
+      "before": {
+        "gitCalls": 11,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          160,
+          157,
+          163
+        ]
+      },
+      "after": {
+        "gitCalls": 9,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          139,
+          151,
+          138
+        ]
+      }
+    },
+    {
+      "fixture": "F3",
+      "command": [
+        "status",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 11,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          155,
+          164,
+          160
+        ]
+      },
+      "after": {
+        "gitCalls": 9,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          141,
+          140,
+          151
+        ]
+      }
+    },
+    {
+      "fixture": "F3",
+      "command": [
+        "doctor"
+      ],
+      "before": {
+        "gitCalls": 6,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          199,
+          201,
+          219
+        ]
+      },
+      "after": {
+        "gitCalls": 6,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          203,
+          206,
+          199
+        ]
+      }
+    },
+    {
+      "fixture": "F3",
+      "command": [
+        "tree",
+        "list"
+      ],
+      "before": {
+        "gitCalls": 3,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          83,
+          84,
+          84
+        ]
+      },
+      "after": {
+        "gitCalls": 3,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 1,
+        "durationsMs": [
+          84,
+          82,
+          87
+        ]
+      }
+    },
+    {
+      "fixture": "F4",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 127,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 11,
+        "durationsMs": [
+          1295,
+          1374,
+          1310
+        ]
+      },
+      "after": {
+        "gitCalls": 89,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 11,
+        "durationsMs": [
+          1094,
+          991,
+          1000
+        ]
+      }
+    },
+    {
+      "fixture": "F4",
+      "command": [
+        "status",
+        "api",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 31,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 5,
+        "durationsMs": [
+          436,
+          442,
+          413
+        ]
+      },
+      "after": {
+        "gitCalls": 29,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 5,
+        "durationsMs": [
+          461,
+          415,
+          398
+        ]
+      }
+    },
+    {
+      "fixture": "F4",
+      "command": [
+        "status"
+      ],
+      "before": {
+        "gitCalls": 103,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 11,
+        "durationsMs": [
+          990,
+          997,
+          1039
+        ]
+      },
+      "after": {
+        "gitCalls": 65,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 11,
+        "durationsMs": [
+          671,
+          742,
+          670
+        ]
+      }
+    },
+    {
+      "fixture": "F4",
+      "command": [
+        "status",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 25,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 5,
+        "durationsMs": [
+          299,
+          298,
+          300
+        ]
+      },
+      "after": {
+        "gitCalls": 23,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 5,
+        "durationsMs": [
+          278,
+          276,
+          292
+        ]
+      }
+    },
+    {
+      "fixture": "F4",
+      "command": [
+        "doctor"
+      ],
+      "before": {
+        "gitCalls": 43,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1413,
+          1379,
+          1382
+        ]
+      },
+      "after": {
+        "gitCalls": 43,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1457,
+          1344,
+          1344
+        ]
+      }
+    },
+    {
+      "fixture": "F4",
+      "command": [
+        "tree",
+        "list"
+      ],
+      "before": {
+        "gitCalls": 23,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 11,
+        "durationsMs": [
+          291,
+          279,
+          281
+        ]
+      },
+      "after": {
+        "gitCalls": 23,
+        "rootPointerCalls": 0,
+        "treeDirtyCalls": 11,
+        "durationsMs": [
+          280,
+          279,
+          309
+        ]
+      }
+    },
+    {
+      "fixture": "F1 moved",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 16,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          208,
+          238,
+          215
+        ]
+      },
+      "after": {
+        "gitCalls": 14,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          195,
+          197,
+          195
+        ]
+      }
+    },
+    {
+      "fixture": "F1 staged",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 16,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          209,
+          205,
+          215
+        ]
+      },
+      "after": {
+        "gitCalls": 14,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          191,
+          195,
+          195
+        ]
+      }
+    },
+    {
+      "fixture": "F1 split",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 16,
+        "rootPointerCalls": 3,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          214,
+          207,
+          208
+        ]
+      },
+      "after": {
+        "gitCalls": 14,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          193,
+          191,
+          192
+        ]
+      }
+    },
+    {
+      "fixture": "F2 moved",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 114,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1143,
+          1648,
+          1151
+        ]
+      },
+      "after": {
+        "gitCalls": 76,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          798,
+          1040,
+          806
+        ]
+      }
+    },
+    {
+      "fixture": "F2 staged",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 114,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1186,
+          1466,
+          1174
+        ]
+      },
+      "after": {
+        "gitCalls": 76,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          847,
+          923,
+          818
+        ]
+      }
+    },
+    {
+      "fixture": "F2 split",
+      "command": [
+        "status",
+        "--json"
+      ],
+      "before": {
+        "gitCalls": 114,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1525,
+          1583,
+          1242
+        ]
+      },
+      "after": {
+        "gitCalls": 76,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          994,
+          985,
+          828
+        ]
+      }
+    },
+    {
+      "fixture": "preparation 1",
+      "command": [
+        "fetch",
+        "--all"
+      ],
+      "before": {
+        "gitCalls": 7,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          136,
+          134,
+          137
+        ]
+      },
+      "after": {
+        "gitCalls": 7,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          137,
+          136,
+          135
+        ]
+      }
+    },
+    {
+      "fixture": "preparation 10",
+      "command": [
+        "fetch",
+        "--all"
+      ],
+      "before": {
+        "gitCalls": 61,
+        "rootPointerCalls": 20,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          841,
+          816,
+          787
+        ]
+      },
+      "after": {
+        "gitCalls": 16,
+        "rootPointerCalls": 2,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          364,
+          362,
+          383
+        ]
+      }
+    },
+    {
+      "fixture": "branch clean plan 1",
+      "command": [
+        "branch",
+        "clean",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 27,
+        "rootPointerCalls": 6,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          325,
+          309,
+          329
+        ]
+      },
+      "after": {
+        "gitCalls": 26,
+        "rootPointerCalls": 6,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          303,
+          317,
+          315
+        ]
+      }
+    },
+    {
+      "fixture": "branch clean plan 2",
+      "command": [
+        "branch",
+        "clean",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 28,
+        "rootPointerCalls": 6,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          311,
+          321,
+          315
+        ]
+      },
+      "after": {
+        "gitCalls": 27,
+        "rootPointerCalls": 6,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          297,
+          306,
+          307
+        ]
+      }
+    },
+    {
+      "fixture": "branch clean plan 6",
+      "command": [
+        "branch",
+        "clean",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 32,
+        "rootPointerCalls": 6,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          397,
+          361,
+          343
+        ]
+      },
+      "after": {
+        "gitCalls": 31,
+        "rootPointerCalls": 6,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          402,
+          338,
+          336
+        ]
+      }
+    },
+    {
+      "fixture": "branch clean confirmed 1",
+      "command": [
+        "branch",
+        "clean",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 50,
+        "rootPointerCalls": 10,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          531,
+          516,
+          534
+        ]
+      },
+      "after": {
+        "gitCalls": 48,
+        "rootPointerCalls": 10,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          492,
+          503,
+          488
+        ]
+      }
+    },
+    {
+      "fixture": "branch clean confirmed 2",
+      "command": [
+        "branch",
+        "clean",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 74,
+        "rootPointerCalls": 14,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          780,
+          744,
+          718
+        ]
+      },
+      "after": {
+        "gitCalls": 71,
+        "rootPointerCalls": 14,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          765,
+          702,
+          687
+        ]
+      }
+    },
+    {
+      "fixture": "branch clean confirmed 6",
+      "command": [
+        "branch",
+        "clean",
+        "api"
+      ],
+      "before": {
+        "gitCalls": 170,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1626,
+          1591,
+          1560
+        ]
+      },
+      "after": {
+        "gitCalls": 163,
+        "rootPointerCalls": 30,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1526,
+          1532,
+          1510
+        ]
+      }
+    },
+    {
+      "fixture": "sync commit 1",
+      "command": [
+        "sync",
+        "api",
+        "--commit"
+      ],
+      "before": {
+        "gitCalls": 64,
+        "rootPointerCalls": 10,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          932,
+          926,
+          813
+        ]
+      },
+      "after": {
+        "gitCalls": 62,
+        "rootPointerCalls": 7,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          808,
+          916,
+          783
+        ]
+      }
+    },
+    {
+      "fixture": "sync commit 4",
+      "command": [
+        "sync",
+        "api",
+        "web",
+        "app0",
+        "app1",
+        "--commit"
+      ],
+      "before": {
+        "gitCalls": 142,
+        "rootPointerCalls": 31,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1911,
+          1925,
+          2126
+        ]
+      },
+      "after": {
+        "gitCalls": 134,
+        "rootPointerCalls": 25,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          1872,
+          1831,
+          1838
+        ]
+      }
+    },
+    {
+      "fixture": "sync commit 10",
+      "command": [
+        "sync",
+        "api",
+        "web",
+        "app0",
+        "app1",
+        "app2",
+        "app3",
+        "app4",
+        "app5",
+        "app6",
+        "app7",
+        "--commit"
+      ],
+      "before": {
+        "gitCalls": 298,
+        "rootPointerCalls": 73,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          4142,
+          4138,
+          4176
+        ]
+      },
+      "after": {
+        "gitCalls": 278,
+        "rootPointerCalls": 61,
+        "treeDirtyCalls": 0,
+        "durationsMs": [
+          3997,
+          3986,
+          4001
+        ]
+      }
+    }
+  ]
+}

@@ -49,7 +49,7 @@
     "test:compile": "node scripts/compile-tests.mjs",
     "test:inventory": "node scripts/validate-test-inventory.mjs",
     "test:unit": "npm run test:inventory && npm run test:compile && node scripts/run-test-layer.mjs .test-dist/tests/unit unit",
-    "test:integration": "npm run test:inventory && npm run test:compile && node scripts/run-test-layer.mjs .test-dist/tests/integration integration",
+    "test:integration": "npm run test:inventory && npm run build && npm run test:compile && node scripts/run-test-layer.mjs .test-dist/tests/integration integration",
     "test:blackbox": "npm run test:inventory && npm run build && node scripts/run-test-layer.mjs tests blackbox",
     "test:preparation": "npm run test:inventory && npm run build && node --test tests/cli-preparation-*.test.js",
     "test:scaffold": "npm run test:inventory && npm run build && node --test tests/cli-scaffold.test.js",

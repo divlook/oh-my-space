@@ -54,8 +54,8 @@ function captureContext(root: string, alias: string): Context {
 
 function inspectSafety(root: string, repo: Repo, context: Context): SourceSafety {
   const dir = aliasDir(root, repo.alias);
-  const refusal = inspectCleanSourceSafety(dir, repo.alias, context.recorded);
-  if (refusal) throw new Error(refusal);
+  const source = inspectCleanSourceSafety(dir, repo.alias, context.recorded);
+  if ("reason" in source) throw new Error(source.reason);
   const baseline = resolveBaselines(root, repo);
   if (!baseline.ok) throw new Error(baseline.reason);
   const protectedBranches = new Map<string, string[]>();
@@ -64,11 +64,8 @@ function inspectSafety(root: string, repo: Repo, context: Context): SourceSafety
     reasons.push(item.reason);
     protectedBranches.set(item.branch, reasons);
   }
-  const current = runGit(dir, ["symbolic-ref", "--quiet", "HEAD"]);
-  if ((!current.success && current.exitCode !== 1) || current.stderr.trim() || (current.success && !/^refs\/heads\/.+$/.test(current.stdout.trim()))) throw new Error("Cannot inspect current source branch.");
-  if (current.success) {
-    const name = current.stdout.trim().replace(/^refs\/heads\//, "");
-    protectedBranches.set(name, [...(protectedBranches.get(name) ?? []), "current branch"]);
+  if (source.branch !== null) {
+    protectedBranches.set(source.branch, [...(protectedBranches.get(source.branch) ?? []), "current branch"]);
   }
   const worktrees = checked(dir, ["worktree", "list", "--porcelain", "-z"], "Cannot inspect all source worktrees");
   const records = worktrees.stdout.split("\0\0").filter(Boolean);

@@ -1,6 +1,6 @@
 import { cancel, log } from "@clack/prompts";
 import { prepareAlias } from "./alias-preparation.js";
-import { aliasRegistration } from "./alias-registration.js";
+import { aliasRegistrations } from "./alias-registration.js";
 import { reportBaselines } from "./branch-baseline.js";
 import {
   aliasDir,
@@ -22,7 +22,7 @@ type RemoteState = "fresh" | "stale" | "unavailable";
 type RemoteInventory = { name: string; state: RemoteState; branches: string[]; warning: string | null };
 type AliasResult = { kind: "repo"; repo: Repo } | { kind: "error"; code: number };
 
-const PREPARE = { command: "branch list", topologyOffer: true } as const;
+const PREPARE = { command: "branch list", topologyOffer: true, allowPendingRegistration: true };
 
 async function resolveAlias(repos: Repo[], repoRoot: string, aliasArg: string | undefined): Promise<AliasResult> {
   if (aliasArg) {
@@ -48,12 +48,13 @@ async function resolveAlias(repos: Repo[], repoRoot: string, aliasArg: string | 
     return { kind: "error", code: 1 };
   }
 
+  const registrations = aliasRegistrations(repoRoot, repos.map((repo) => repo.alias));
   const choice = await guardedSelect<string>({
     message: "Select a submodule to list branches from",
     options: repos.map((repo) => ({
       value: repo.alias,
       label: repo.alias,
-      hint: aliasRegistration(repoRoot, repo.alias).kind,
+      hint: registrations.get(repo.alias)!.kind,
     })),
   });
   if (isCancel(choice)) {

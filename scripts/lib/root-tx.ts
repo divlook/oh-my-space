@@ -233,17 +233,78 @@ function currentHead(repoRoot: string): string | null {
   return r.success ? r.stdout.trim() || null : null;
 }
 
+/** Group NUL-delimited records by exact path; keep every index stage for each path. */
+function collectPathEntries(result: GitResult, requested: ReadonlySet<string>, entries: Map<string, string>): boolean {
+  if (!result.success || (result.stdout && !result.stdout.endsWith("\0"))) return false;
+  for (const record of result.stdout.split("\0")) {
+    if (!record) continue;
+    const tab = record.indexOf("\t");
+    if (tab === -1) return false;
+    const path = record.slice(tab + 1);
+    if (!requested.has(path)) continue;
+    const metadata = record.slice(0, tab);
+    const previous = entries.get(path);
+    entries.set(path, previous === undefined ? metadata : `${previous}\n${metadata}`);
+  }
+  return true;
+}
+
+function readPathEntries(
+  repoRoot: string,
+  args: string[],
+  paths: readonly string[],
+  env?: NodeJS.ProcessEnv,
+  runner?: RawGitRunner,
+): Map<string, string> | null {
+  const entries = new Map<string, string>();
+  for (let offset = 0; offset < paths.length;) {
+    const command = [...args];
+    const requested = new Set<string>();
+    let bytes = 0;
+    while (offset < paths.length) {
+      const path = paths[offset];
+      // Leave room for inherited environment data under the OS subprocess argument limit.
+      const cost = Buffer.byteLength(path) + 16;
+      if (bytes > 0 && bytes + cost > 32 * 1024) break;
+      bytes += cost;
+      offset++;
+      command.push(path);
+      requested.add(path);
+    }
+    if (!collectPathEntries(runGit(repoRoot, command, false, env, runner), requested, entries)) return null;
+  }
+  return entries;
+}
+
+function readIndexEntries(repoRoot: string, paths: readonly string[], env?: NodeJS.ProcessEnv, runner?: RawGitRunner): Map<string, string> | null {
+  return readPathEntries(repoRoot, ["--literal-pathspecs", "ls-files", "--stage", "-z", "--"], paths, env, runner);
+}
+
+type RootTreeEntry = { mode: string; type: string; oid: string };
+
+function readTreeEntries(repoRoot: string, ref: string, paths: readonly string[], runner?: RawGitRunner): Map<string, RootTreeEntry> | null {
+  const entries = new Map<string, RootTreeEntry>();
+  if (paths.length === 0) return entries;
+  const records = readPathEntries(repoRoot, ["--literal-pathspecs", "ls-tree", "-t", "-z", ref, "--"], paths, undefined, runner);
+  if (!records) return null;
+  for (const [path, metadata] of records) {
+    const match = /^(\d{6}) (blob|commit|tree) ([0-9a-f]{40})$/.exec(metadata);
+    if (!match) return null;
+    entries.set(path, { mode: match[1], type: match[2], oid: match[3] });
+  }
+  return entries;
+}
+
 /** Synthesize `.gitmodules` from HEAD, applying only the given aliases' managed fields / removals. */
 function synthesizeGitmodules(
   repoRoot: string,
+  gitmodulesOid: string | undefined,
   addPlans: AliasMetadataPlan[],
   removeAliases: string[],
 ): string | null {
-  const listed = runGit(repoRoot, ["ls-tree", "HEAD", "--", ".gitmodules"]);
-  if (!listed.success) return null;
-  const head = listed.stdout.trim().length > 0 ? runGit(repoRoot, ["show", "HEAD:.gitmodules"]) : null;
-  if (head && !head.success) return null;
-  const seed = head?.stdout ?? "";
+  const metadata = gitmodulesOid === undefined ? null : runGit(repoRoot, ["show", gitmodulesOid]);
+  if (metadata && !metadata.success) return null;
+  const seed = metadata?.stdout ?? "";
   const tmp = join(omsStateDir(repoRoot), `synth-${process.pid}-${Date.now()}`);
   writeFileSync(tmp, seed, { mode: 0o600 });
   try {
@@ -260,28 +321,31 @@ export function checkSyncStaging(
   runner: RawGitRunner,
 ): ReadonlyMap<string, string> | string {
   const paths = [".gitmodules", ...plans.map(({ alias }) => submodulePath(alias))];
-  const changed = runGit(repoRoot, ["diff", "--cached", "--name-only", "-z", "--no-renames", "--", ...paths], false, undefined, runner);
+  const changed = runGit(repoRoot, ["--literal-pathspecs", "diff", "--cached", "--name-only", "-z", "--no-renames", "--", ...paths], false, undefined, runner);
   if (!changed.success) return "Could not inspect staged root paths. Retry once Git is idle.";
   const staged = new Map<string, string>();
-  for (const path of changed.stdout.split("\0").filter(Boolean)) {
-    const entry = runGit(repoRoot, ["ls-files", "--stage", "--", path], false, undefined, runner);
-    if (!entry.success) return "Could not inspect staged root paths. Retry once Git is idle.";
-    let matches: boolean;
+  const changedPaths = changed.stdout.split("\0").filter(Boolean);
+  if (changedPaths.length === 0) return staged;
+  const index = readIndexEntries(repoRoot, changedPaths, undefined, runner);
+  if (!index) return "Could not inspect staged root paths. Retry once Git is idle.";
+  const head = readTreeEntries(repoRoot, "HEAD", changedPaths, runner);
+  for (const path of changedPaths) {
+    const entry = index.get(path);
+    let expected: string | undefined;
     if (path === ".gitmodules") {
-      const text = synthesizeGitmodules(repoRoot, plans, []);
+      const text = head && synthesizeGitmodules(repoRoot, head.get(path)?.oid, plans, []);
       if (text === null) return "Could not validate the planned .gitmodules content. No registration changes were made.";
       const blob = runner(repoRoot, ["hash-object", "--stdin"], Buffer.from(text));
-      matches = blob.success && entry.stdout.trim() === `100644 ${blob.stdout.trim()} 0\t${path}`;
+      if (blob.success) expected = `100644 ${blob.stdout.trim()} 0`;
     } else {
-      const head = runGit(repoRoot, ["ls-tree", "HEAD", "--", path], false, undefined, runner);
       // Existing gitlink pointer updates belong to record, not sync.
-      if (head.success && head.stdout.startsWith("160000 commit ") && entry.stdout.startsWith("160000 ")) continue;
+      const headEntry = head?.get(path);
+      if (headEntry?.mode === "160000" && headEntry.type === "commit" && entry?.startsWith("160000 ")) continue;
       const source = runGit(join(repoRoot, path), ["rev-parse", "--verify", "HEAD^{commit}"], false, undefined, runner);
-      matches = head.success && head.stdout.length === 0 && source.success
-        && entry.stdout.trim() === `160000 ${source.stdout.trim()} 0\t${path}`;
+      if (head !== null && !headEntry && source.success) expected = `160000 ${source.stdout.trim()} 0`;
     }
-    if (!matches) return `Staged ${path} does not match the planned sync commit. Commit or unstage it before syncing, or run sync with --no-commit.`;
-    staged.set(path, entry.stdout);
+    if (entry === undefined || entry !== expected) return `Staged ${path} does not match the planned sync commit. Commit or unstage it before syncing, or run sync with --no-commit.`;
+    staged.set(path, entry);
   }
   return staged;
 }
@@ -346,12 +410,13 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
     return { ok: false, exitCode: 2, reason: "could not seed the temporary index from HEAD" };
   }
 
-  const synthesized = synthesizeGitmodules(repoRoot, input.metadataPlans, input.removeAliases);
-  if (synthesized === null) {
+  const addPaths = input.addAliases.map(submodulePath);
+  const headEntries = readTreeEntries(repoRoot, head, [".gitmodules", ...addPaths]);
+  const synthesized = headEntries && synthesizeGitmodules(repoRoot, headEntries.get(".gitmodules")?.oid, input.metadataPlans, input.removeAliases);
+  if (headEntries === null || synthesized === null) {
     removeIfPresent(tempIndex);
     return { ok: false, exitCode: 2, reason: "could not synthesize .gitmodules" };
   }
-  let committedPaths = [".gitmodules", "oms.yaml", ...input.addAliases.map(submodulePath), ...input.removeAliases.map(submodulePath)];
 
   const fail = (reason: string): FinalizeResult => {
     removeIfPresent(tempIndex);
@@ -370,12 +435,13 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
     }
   }
 
-  for (const alias of input.addAliases) {
-    const worktreeOid = runGit(repoRoot, ["rev-parse", `HEAD:${submodulePath(alias)}`]).stdout.trim();
-    const pinned = runGit(join(repoRoot, submodulePath(alias)), ["rev-parse", "HEAD"]).stdout.trim();
-    const oid = /^[0-9a-f]{40}$/.test(pinned) ? pinned : worktreeOid;
+  for (let i = 0; i < addPaths.length; i++) {
+    const path = addPaths[i];
+    const alias = input.addAliases[i];
+    const pinned = runGit(join(repoRoot, path), ["rev-parse", "HEAD"]).stdout.trim();
+    const oid = /^[0-9a-f]{40}$/.test(pinned) ? pinned : headEntries.get(path)?.oid ?? "";
     if (!/^[0-9a-f]{40}$/.test(oid)) return fail(`could not resolve gitlink for ${alias}`);
-    if (!runGitEnv(repoRoot, ["update-index", "--add", "--cacheinfo", `160000,${oid},${submodulePath(alias)}`], env).success) {
+    if (!runGitEnv(repoRoot, ["update-index", "--add", "--cacheinfo", `160000,${oid},${path}`], env).success) {
       return fail(`could not stage gitlink for ${alias}`);
     }
   }
@@ -403,16 +469,18 @@ export function finalizeRootCommit(input: FinalizeInput): FinalizeResult {
     : runGitEnv(repoRoot, ["commit-tree", plannedTree, "-p", head, "-m", input.message], env);
   const commitOid = commitResult.stdout.trim();
   if (!commitResult.success || !/^[0-9a-f]{40}$/.test(commitOid)) return fail("could not create the commit object");
-  const changed = runGit(repoRoot, ["diff-tree", "--no-commit-id", "--name-only", "-r", head, commitOid]);
+  const changed = runGit(repoRoot, ["diff-tree", "--no-commit-id", "--name-only", "-z", "-r", head, commitOid]);
   if (!changed.success) return fail("could not resolve the commit's changed paths");
-  committedPaths = changed.stdout.split("\n").map((path) => path.trim()).filter(Boolean);
+  const committedPaths = changed.stdout.split("\0").filter(Boolean);
 
-  for (const path of committedPaths) {
-    const expected = input.staged?.get(path);
-    if (expected === undefined) continue;
-    const entry = runGitEnv(repoRoot, ["ls-files", "--stage", "--", path], env);
-    if (!entry.success || entry.stdout !== expected) {
-      return fail(`staged ${path} does not match the validated sync commit`);
+  if (input.staged?.size) {
+    const staged = input.staged;
+    const stagedPaths = committedPaths.filter((path) => staged.has(path));
+    const plannedIndex = readIndexEntries(repoRoot, stagedPaths, env);
+    for (const path of stagedPaths) {
+      if (!plannedIndex || plannedIndex.get(path) !== staged.get(path)) {
+        return fail(`staged ${path} does not match the validated sync commit`);
+      }
     }
   }
 
@@ -524,12 +592,12 @@ function buildRecoveryIndex(
     return false;
   }
   const env = { ...process.env, GIT_INDEX_FILE: recoveryIndex };
+  const entries = readTreeEntries(repoRoot, newHead, committedPaths);
+  if (!entries) return false;
   for (const path of committedPaths) {
-    const entry = runGit(repoRoot, ["ls-tree", newHead, "--", path]);
-    if (!entry.success) return false;
-    const m = entry.stdout.match(/^(\d+) \w+ ([0-9a-f]{40})\t/);
-    if (m) {
-      if (!runGitEnv(repoRoot, ["update-index", "--add", "--cacheinfo", `${m[1]},${m[2]},${path}`], env).success) return false;
+    const entry = entries.get(path);
+    if (entry) {
+      if (!runGitEnv(repoRoot, ["update-index", "--add", "--cacheinfo", `${entry.mode},${entry.oid},${path}`], env).success) return false;
     } else {
       if (!runGitEnv(repoRoot, ["update-index", "--force-remove", path], env).success) return false;
     }
@@ -571,11 +639,12 @@ function markerCommitMatches(repoRoot: string, marker: FinalizeMarker): boolean 
     "diff-tree",
     "--no-commit-id",
     "--name-only",
+    "-z",
     "-r",
     marker.parent,
     marker.commitOid,
   ]);
-  const changedPaths = changed.stdout.split("\n").map((path) => path.trim()).filter(Boolean).sort();
+  const changedPaths = changed.stdout.split("\0").filter(Boolean).sort();
   const recordedPaths = [...marker.committedPaths].sort();
   return (
     parent.success &&
@@ -590,18 +659,14 @@ function markerCommitMatches(repoRoot: string, marker: FinalizeMarker): boolean 
 
 function recoveryEntriesMatchCommit(repoRoot: string, marker: FinalizeMarker): boolean {
   const env = { ...process.env, GIT_INDEX_FILE: marker.recoveryIndexPath };
-  for (const path of marker.committedPaths) {
-    const treeEntry = runGit(repoRoot, ["ls-tree", marker.commitOid, "--", path]);
-    const indexEntry = runGitEnv(repoRoot, ["ls-files", "--stage", "--", path], env);
-    if (!treeEntry.success || !indexEntry.success) return false;
-    const treeMatch = treeEntry.stdout.match(/^(\d+) \w+ ([0-9a-f]{40})\t/);
-    const indexMatch = indexEntry.stdout.match(/^(\d+) ([0-9a-f]{40}) 0\t/);
-    if (!treeMatch && !indexMatch) continue;
-    if (!treeMatch || !indexMatch || treeMatch[1] !== indexMatch[1] || treeMatch[2] !== indexMatch[2]) {
-      return false;
-    }
-  }
-  return true;
+  const tree = readTreeEntries(repoRoot, marker.commitOid, marker.committedPaths);
+  const index = readIndexEntries(repoRoot, marker.committedPaths, env);
+  if (!tree || !index) return false;
+  return marker.committedPaths.every((path) => {
+    const entry = tree.get(path);
+    const expected = entry ? `${entry.mode} ${entry.oid} 0` : undefined;
+    return index.get(path) === expected;
+  });
 }
 
 /**

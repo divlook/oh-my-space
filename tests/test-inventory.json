@@ -5017,6 +5017,39 @@
       "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
     },
     {
+      "id": "tests/cli-scaffold.test.js::workspace discovery rejects a nearest broken symbolic link candidate without ancestor fallback",
+      "name": "workspace discovery rejects a nearest broken symbolic link candidate without ancestor fallback",
+      "source": "tests/cli-scaffold.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-scaffold.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Checks that the bundled sync --list command treats a dangling manifest symlink as invalid, exits with an error, and does not print the valid ancestor manifest's aliases."
+    },
+    {
+      "id": "tests/cli-scaffold.test.js::workspace discovery rejects a nearest directory candidate without ancestor fallback",
+      "name": "workspace discovery rejects a nearest directory candidate without ancestor fallback",
+      "source": "tests/cli-scaffold.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-scaffold.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Checks the bundled sync --list command's nonzero exit and refusal diagnostic when a directory named oms.yaml shadows a usable ancestor manifest."
+    },
+    {
+      "id": "tests/cli-scaffold.test.js::workspace discovery rejects a nearest symbolic link to a directory candidate without ancestor fallback",
+      "name": "workspace discovery rejects a nearest symbolic link to a directory candidate without ancestor fallback",
+      "source": "tests/cli-scaffold.test.js",
+      "layer": "blackbox",
+      "owners": [
+        "tests/cli-scaffold.test.js"
+      ],
+      "boundary": "production-cli-journey",
+      "processBoundaryRationale": "Checks that following a manifest symlink to a directory does not let the bundled sync --list command accept the target or use the ancestor manifest instead."
+    },
+    {
       "id": "tests/cli-sync-a.test.js::a dirty submodule among several is surfaced and only it remains",
       "name": "a dirty submodule among several is surfaced and only it remains",
       "source": "tests/cli-sync-a.test.js",
@@ -5283,17 +5316,6 @@
     {
       "id": "tests/cli-sync-b.test.js::delegated preparation sync commits its topology",
       "name": "delegated preparation sync commits its topology",
-      "source": "tests/cli-sync-b.test.js",
-      "layer": "blackbox",
-      "owners": [
-        "tests/cli-sync-b.test.js"
-      ],
-      "boundary": "production-cli-journey",
-      "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
-    },
-    {
-      "id": "tests/cli-sync-b.test.js::fetch updates origin refs inside the submodule",
-      "name": "fetch updates origin refs inside the submodule",
       "source": "tests/cli-sync-b.test.js",
       "layer": "blackbox",
       "owners": [
@@ -5809,8 +5831,8 @@
       "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
-      "id": "tests/cli-tools.test.js::agent install rejects malformed markers atomically across targets",
-      "name": "agent install rejects malformed markers atomically across targets",
+      "id": "tests/cli-tools.test.js::agent install leaves all targets unchanged when one has malformed markers",
+      "name": "agent install leaves all targets unchanged when one has malformed markers",
       "source": "tests/cli-tools.test.js",
       "layer": "blackbox",
       "owners": [
@@ -5853,8 +5875,8 @@
       "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
-      "id": "tests/cli-tools.test.js::agent uninstall rejects a duplicate managed block atomically",
-      "name": "agent uninstall rejects a duplicate managed block atomically",
+      "id": "tests/cli-tools.test.js::agent uninstall leaves the file unchanged when the managed block is duplicated",
+      "name": "agent uninstall leaves the file unchanged when the managed block is duplicated",
       "source": "tests/cli-tools.test.js",
       "layer": "blackbox",
       "owners": [
@@ -6500,6 +6522,17 @@
       ],
       "boundary": "process-integrity-or-recovery",
       "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
+    },
+    {
+      "id": "tests/integration/alias-preparation.test.ts::batch registration preserves a healthy alias when another index listing is oversized",
+      "name": "batch registration preserves a healthy alias when another index listing is oversized",
+      "source": "tests/integration/alias-preparation.test.ts",
+      "layer": "integration",
+      "owners": [
+        "tests/integration/alias-preparation.test.ts"
+      ],
+      "boundary": "owned-filesystem-or-process",
+      "processBoundaryRationale": null
     },
     {
       "id": "tests/integration/alias-preparation.test.ts::preparation initializes registered aliases directly without changing root topology",
@@ -7476,6 +7509,17 @@
       "layer": "unit",
       "owners": [
         "tests/unit/skill-metadata.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
+      "id": "tests/unit/test-inventory.test.ts::inventory discovery requires direct statically named test registrations",
+      "name": "inventory discovery requires direct statically named test registrations",
+      "source": "tests/unit/test-inventory.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/test-inventory.test.ts"
       ],
       "boundary": "in-process-decision",
       "processBoundaryRationale": null
@@ -8691,7 +8735,7 @@
     {
       "baselineId": "tests/cli-sync.contracts.js::fetch updates origin refs inside the submodule",
       "finalIds": [
-        "tests/cli-sync-b.test.js::fetch updates origin refs inside the submodule"
+        "tests/cli-preparation-a.test.js::fetch retries one transient failure and succeeds without an error"
       ]
     },
     {
@@ -9180,7 +9224,7 @@
     {
       "baselineId": "tests/cli-tools.test.js::agent install rejects malformed markers atomically across targets",
       "finalIds": [
-        "tests/cli-tools.test.js::agent install rejects malformed markers atomically across targets"
+        "tests/cli-tools.test.js::agent install leaves all targets unchanged when one has malformed markers"
       ]
     },
     {
@@ -9204,7 +9248,7 @@
     {
       "baselineId": "tests/cli-tools.test.js::agent uninstall rejects a duplicate managed block atomically",
       "finalIds": [
-        "tests/cli-tools.test.js::agent uninstall rejects a duplicate managed block atomically"
+        "tests/cli-tools.test.js::agent uninstall leaves the file unchanged when the managed block is duplicated"
       ]
     },
     {

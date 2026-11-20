@@ -7,35 +7,36 @@ const inventoryPath = resolve(root, "tests/test-inventory.json");
 const evidencePath = resolve(root, "tests/performance/owner-durations.json");
 const migrationOverridesPath = resolve(root, "tests/test-migration-overrides.json");
 const discovered = discoverTestContracts(root);
+const write = process.argv.includes("--write");
+const previous = existsSync(inventoryPath) ? JSON.parse(readFileSync(inventoryPath, "utf8")) : null;
+let inventory = previous;
 
-if (process.argv.includes("--write")) {
+if (write) {
   if (!existsSync(evidencePath)) {
     console.error(`Owner-duration evidence is required before writing the inventory: ${evidencePath}`);
     process.exit(1);
   }
   const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));
-  const previous = existsSync(inventoryPath) ? JSON.parse(readFileSync(inventoryPath, "utf8")) : null;
   const previousContracts = new Map((previous?.contracts ?? []).map((contract) => [contract.id, contract]));
   const contracts = discovered.map((contract) => ({
     ...contract,
     boundary: previousContracts.get(contract.id)?.boundary ?? boundaryFor(contract),
     processBoundaryRationale: contract.layer === "blackbox"
-      ? previousContracts.get(contract.id)?.processBoundaryRationale ?? "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
+      ? previousContracts.get(contract.id)?.processBoundaryRationale ?? null
       : null,
-  }));
-  const initialBaselineContracts = contracts.map((contract) => ({
-    id: contract.id,
-    name: contract.name,
-    source: contract.source,
-    owner: contract.owners[0],
-    layer: contract.layer,
-    boundary: contract.boundary,
-    measuredOwnerDurationMs: evidence.owners[contract.owners[0]]?.durationMs,
   }));
   const baseline = previous?.baseline ?? {
     capturedRuntime: evidence.runtime,
     capturedOwnerDurationsAt: evidence.measuredAt,
-    contracts: initialBaselineContracts,
+    contracts: contracts.map((contract) => ({
+      id: contract.id,
+      name: contract.name,
+      source: contract.source,
+      owner: contract.owners[0],
+      layer: contract.layer,
+      boundary: contract.boundary,
+      measuredOwnerDurationMs: evidence.owners[contract.owners[0]]?.durationMs,
+    })),
   };
   const overrides = existsSync(migrationOverridesPath) ? JSON.parse(readFileSync(migrationOverridesPath, "utf8")) : {};
   const currentIds = new Set(contracts.map((contract) => contract.id));
@@ -45,18 +46,14 @@ if (process.argv.includes("--write")) {
     const override = overrides[baselineId];
     if (Array.isArray(override)) return { baselineId, finalIds: override };
     if (override && typeof override === "object") return { baselineId, ...override };
-    const previousMigration = previousMigrations.get(baselineId);
-    if (currentIds.has(baselineId)) return { baselineId, finalIds: [baselineId] };
-    if (previousMigration?.deleted === true) {
-      return { baselineId, deleted: true, reason: previousMigration.reason };
-    }
-    return { baselineId, finalIds: previousMigration?.finalIds ?? [] };
+    return previousMigrations.get(baselineId)
+      ?? { baselineId, finalIds: currentIds.has(baselineId) ? [baselineId] : [] };
   });
   const blackboxBudget = previous?.execution?.budgets?.blackbox
     ?? contracts.filter((contract) => contract.layer === "blackbox").length;
   const blackboxOwners = [...new Set(contracts.filter((contract) => contract.layer === "blackbox").flatMap((contract) => contract.owners))];
   blackboxOwners.sort((left, right) => (evidence.owners[right]?.durationMs ?? 0) - (evidence.owners[left]?.durationMs ?? 0) || left.localeCompare(right));
-  const inventory = {
+  inventory = {
     schemaVersion: 1,
     execution: {
       budgets: { ...(previous?.execution?.budgets ?? {}), blackbox: blackboxBudget },
@@ -72,16 +69,13 @@ if (process.argv.includes("--write")) {
     contracts,
     migrations,
   };
-  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
-  console.log(`Wrote ${contracts.length} contracts to ${inventoryPath}.`);
 }
 
-if (!existsSync(inventoryPath)) {
+if (!inventory) {
   console.error(`Test inventory does not exist: ${inventoryPath}`);
   process.exit(1);
 }
 
-const inventory = JSON.parse(readFileSync(inventoryPath, "utf8"));
 const errors = validateTestInventory(inventory, discovered);
 for (const contract of inventory.baseline?.contracts ?? []) {
   if (!Number.isFinite(contract.measuredOwnerDurationMs)) errors.push(`Missing measured owner duration for ${contract.id}`);
@@ -89,6 +83,10 @@ for (const contract of inventory.baseline?.contracts ?? []) {
 if (errors.length > 0) {
   for (const error of errors) console.error(`- ${error}`);
   process.exit(1);
+}
+if (write) {
+  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
+  console.log(`Wrote ${inventory.contracts.length} contracts to ${inventoryPath}.`);
 }
 console.log(`Validated ${discovered.length} test contracts and source-file ownership.`);
 

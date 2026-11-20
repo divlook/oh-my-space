@@ -1,3 +1,5 @@
+import { SKILL_NAMES_FOR_DISPLAY } from "./constants.js";
+
 export const exitHelp = "\nExit codes: 0 ok | 1 usage/config error | 2 one or more git operations failed.";
 
 export const workspaceContextHelp = `
@@ -237,7 +239,7 @@ Example:
   $ oms agent uninstall --target both
 `;
 export const skillsHelp = `
-Installs the oms workspace skills (oms-workspace, oms-pointer, oms-branch) via the external "skills" tool.
+Installs the oms workspace skills (${SKILL_NAMES_FOR_DISPLAY}) via the external "skills" tool.
 Project scope (installed at the workspace root, discovered from the root and its subdirectories) is the
 default; -g installs globally for every workspace. With --install, oms resolves to the workspace root and
 delegates to "npx skills add", forwarding extra arguments (-g, --skill <name>, --list, --copy) straight

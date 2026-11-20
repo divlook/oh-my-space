@@ -25,18 +25,20 @@ function detachedReason(alias: string): string {
 }
 
 /** Dirty files and staged root pointers are allowed; only root HEAD anchors detachment. */
-export function inspectCleanSourceSafety(dir: string, alias: string, recorded: string): string | null {
+export function inspectCleanSourceSafety(dir: string, alias: string, recorded: string): { branch: string | null } | { reason: string } {
   const operation = inspectSourceOperations(dir);
-  if (operation.kind === "active") return `${alias}: a ${operation.label} is in progress. Resolve, continue, or abort it first.`;
-  if (operation.kind === "unreadable") return operation.access
+  if (operation.kind === "active") return { reason: `${alias}: a ${operation.label} is in progress. Resolve, continue, or abort it first.` };
+  if (operation.kind === "unreadable") return { reason: operation.access
     ? `Cannot inspect source operation marker ${operation.marker}; resolve filesystem access, then retry.`
-    : `Cannot inspect source operation marker ${operation.marker}; retry once Git is idle.`;
+    : `Cannot inspect source operation marker ${operation.marker}; retry once Git is idle.` };
   const head = runGit(dir, ["rev-parse", "--verify", "HEAD"]);
-  if (!head.success || head.stderr.trim() || !/^[0-9a-f]{40,64}$/.test(head.stdout.trim())) return "Cannot inspect source HEAD; retry once Git is idle.";
+  if (!head.success || head.stderr.trim() || !/^[0-9a-f]{40,64}$/.test(head.stdout.trim())) return { reason: "Cannot inspect source HEAD; retry once Git is idle." };
   const branch = runGit(dir, ["symbolic-ref", "--quiet", "HEAD"]);
-  if ((!branch.success && branch.exitCode !== 1) || branch.stderr.trim() || (branch.success && !/^refs\/heads\/.+$/.test(branch.stdout.trim()))) return "Cannot inspect whether source HEAD is detached; retry once Git is idle.";
+  const ref = branch.stdout.trim();
+  const prefix = "refs/heads/";
+  if ((!branch.success && branch.exitCode !== 1) || branch.stderr.trim() || (branch.success && !/^refs\/heads\/.+$/.test(ref))) return { reason: "Cannot inspect whether source HEAD is detached; retry once Git is idle." };
   if (branch.exitCode === 1 && !anchored(recorded, head.stdout.trim())) {
-    return detachedReason(alias);
+    return { reason: detachedReason(alias) };
   }
-  return null;
+  return { branch: branch.success ? ref.slice(prefix.length) : null };
 }

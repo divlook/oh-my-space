@@ -5,7 +5,7 @@ import { loadForSubmodules } from "./manifest.js";
 import { resolveCommitAlias } from "./prompts.js";
 import { changeCounts, isDirtyCounts } from "./workspace-state.js";
 import { gitOperationInProgress } from "./git-operation-state.js";
-import { printRootFollowup } from "./status.js";
+import { printRootFollowups } from "./root-followup.js";
 import { refuseInsideManagedTree } from "./tree-context.js";
 import type { CommitOptions } from "./types.js";
 
@@ -34,7 +34,11 @@ export async function runCommit(alias: string | undefined, options: CommitOption
     log.error(`Unknown alias "${selected}". Use "oms sync --list" to see registered aliases.`);
     return 1;
   }
-  const prepared = await prepareAlias(repoRoot, repo, { command: "commit", topologyOffer: false });
+  const prepared = await prepareAlias(repoRoot, repo, {
+    command: "commit",
+    topologyOffer: false,
+    allowPendingRegistration: true,
+  });
   if (!prepared.ok) return prepared.code;
   // Check for an in-progress operation before detached HEAD, since a rebase detaches HEAD and should
   // report "rebase in progress" rather than a generic detached-HEAD message.
@@ -52,7 +56,7 @@ export async function runCommit(alias: string | undefined, options: CommitOption
   const counts = changeCounts(dir, new Set());
   if (!isDirtyCounts(counts)) {
     log.info(`Nothing to commit for ${selected}.`);
-    printRootFollowup(repoRoot, selected);
+    printRootFollowups(repoRoot, [selected]);
     return 0;
   }
   if (messages.length === 0) {
@@ -76,7 +80,7 @@ export async function runCommit(alias: string | undefined, options: CommitOption
   }
 
   log.success(`${selected}: committed ${shortSha(dir)}`);
-  printRootFollowup(repoRoot, selected);
+  printRootFollowups(repoRoot, [selected]);
   return 0;
 }
 

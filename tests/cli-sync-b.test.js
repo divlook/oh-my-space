@@ -83,15 +83,6 @@ test("push --commit is unsupported and fails before pushing", () => {
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), rootHeadBefore);
 });
 
-test("fetch updates origin refs inside the submodule", () => {
-  const { cwd } = workspaceWithApi();
-
-  const result = run(["fetch", "api"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 0, output);
-  assert.match(output, /fetched/);
-});
-
 test("status --json represents a detached submodule HEAD explicitly", () => {
   const { cwd } = workspaceWithApi();
   git(join(cwd, "oms", "api"), "checkout", "--detach");

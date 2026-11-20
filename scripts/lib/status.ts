@@ -4,7 +4,7 @@ import { aliasDir, currentBranch, isDirty, registeredSubmodulePaths, runGit, sho
 import { loadForSubmodules } from "./manifest.js";
 import { listManagedTrees, type ManagedTree } from "./tree-inventory.js";
 import type { Repo, StatusOptions } from "./types.js";
-import { changeCounts, isDirtyCounts, gitlinkState, inferAliasFromCwd, rootFollowupHint, type GitlinkState, type ChangeCounts, type PinValue } from "./workspace-state.js";
+import { changeCounts, inferAliasFromCwd, isDirtyCounts, observeGitlinks, type ChangeCounts, type GitlinkObservation, type PinValue } from "./workspace-state.js";
 
 type StatusRow = {
   alias: string;
@@ -15,11 +15,13 @@ type StatusRow = {
   behind: string;
 };
 
+function readDivergence(dir: string): string[] {
+  const r = runGit(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+  return r.success ? r.stdout.trim().split(/\s+/, 2) : [];
+}
 
 function aheadBehind(dir: string): { ahead: string; behind: string } {
-  const r = runGit(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
-  if (!r.success) return { ahead: "", behind: "" };
-  const [behind, ahead] = r.stdout.trim().split(/\s+/);
+  const [behind, ahead] = readDivergence(dir);
   return { ahead: ahead && ahead !== "0" ? ahead : "", behind: behind && behind !== "0" ? behind : "" };
 }
 
@@ -43,9 +45,9 @@ function trackingState(dir: string): TrackingState {
   const up = runGit(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
   const trackingBranch = up.success ? up.stdout.trim() || null : null;
   if (!trackingBranch) return { trackingBranch: null, ahead: null, behind: null };
-  const r = runGit(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
-  if (!r.success) return { trackingBranch, ahead: null, behind: null };
-  const [behind, ahead] = r.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
+  const [rawBehind = "", rawAhead = ""] = readDivergence(dir);
+  const behind = Number.parseInt(rawBehind, 10);
+  const ahead = Number.parseInt(rawAhead, 10);
   return {
     trackingBranch,
     ahead: Number.isNaN(ahead) ? null : ahead,
@@ -109,15 +111,11 @@ type JsonTreeStatus = {
   error: string | null;
 };
 
-/**
- * Build one repo's JSON status. Never throws: an initialized repo whose HEAD cannot be read keeps the
- * normal entry shape with null scalars, safe-default structured fields, and a concise `error` message.
- */
-function buildRepoStatus(repoRoot: string, repo: Repo, state: GitlinkState): JsonRepoStatus {
+function buildRepoStatus(repoRoot: string, state: GitlinkObservation): JsonRepoStatus {
   const common = {
-    alias: repo.alias,
-    path: submodulePath(repo.alias),
-    absolutePath: aliasDir(repoRoot, repo.alias),
+    alias: state.alias,
+    path: submodulePath(state.alias),
+    absolutePath: aliasDir(repoRoot, state.alias),
     configured: true,
     pin: state.pin,
   };
@@ -134,14 +132,14 @@ function buildRepoStatus(repoRoot: string, repo: Repo, state: GitlinkState): Jso
   if (!state.initialized) {
     return { ...common, initialized: false, ...safeDefaults, error: null };
   }
-  const dir = aliasDir(repoRoot, repo.alias);
+  const dir = common.absolutePath;
   const head = headShortSha(dir);
   if (head === null) {
     return {
       ...common,
       initialized: true,
       ...safeDefaults,
-      error: `${repo.alias}: could not read submodule HEAD`,
+      error: `${state.alias}: could not read submodule HEAD`,
     };
   }
   const branch = currentBranch(dir);
@@ -166,7 +164,7 @@ function buildRepoStatus(repoRoot: string, repo: Repo, state: GitlinkState): Jso
  * Build the root JSON status. root.changes always excludes every configured submodule gitlink path so
  * pointer movement is reported only through submodulePointers, whose arrays cover the selected repos.
  */
-function buildRootStatus(repoRoot: string, configuredRepos: Repo[], states: GitlinkState[]): JsonRootStatus {
+function buildRootStatus(repoRoot: string, configuredRepos: Repo[], states: GitlinkObservation[]): JsonRootStatus {
   const { branch, head, detached } = headState(repoRoot);
   const excludePaths = new Set<string>([
     ...registeredSubmodulePaths(repoRoot),
@@ -183,10 +181,15 @@ function buildRootStatus(repoRoot: string, configuredRepos: Repo[], states: Gitl
   return { branch, head, detached, dirty: isDirtyCounts(changes), changes, submodulePointers: pointers };
 }
 
-function buildTreeStatuses(repoRoot: string, configuredRepos: Repo[], selectedAliases: string[] | null): JsonTreeStatus[] {
+function collectStatusTrees(repoRoot: string, configuredRepos: Repo[], selectedAliases: string[] | null): ManagedTree[] {
   const trees = listManagedTrees(repoRoot, configuredRepos, { dirtyAliases: selectedAliases ?? "all" });
-  const narrowed = selectedAliases === null ? trees : trees.filter((tree) => selectedAliases.includes(tree.alias));
-  return narrowed.map((tree: ManagedTree) => ({
+  if (selectedAliases === null) return trees;
+  const selected = new Set(selectedAliases);
+  return trees.filter((tree) => selected.has(tree.alias));
+}
+
+function buildTreeStatuses(trees: ManagedTree[]): JsonTreeStatus[] {
+  return trees.map((tree) => ({
     alias: tree.alias,
     task: tree.task,
     path: tree.path,
@@ -198,24 +201,22 @@ function buildTreeStatuses(repoRoot: string, configuredRepos: Repo[], selectedAl
   }));
 }
 
-/** Emit exactly one two-space pretty JSON object on stdout. Exits non-zero if any repo read failed. */
 function printStatusJson(
   repoRoot: string,
   configuredRepos: Repo[],
-  selectedRepos: Repo[],
+  states: GitlinkObservation[],
   treeAliases: string[] | null,
 ): number {
-  const states = new Map(selectedRepos.map((repo) => [repo.alias, gitlinkState(repoRoot, repo.alias)]));
-  const repos = selectedRepos.map((repo) => buildRepoStatus(repoRoot, repo, states.get(repo.alias)!));
+  const repos = states.map((state) => buildRepoStatus(repoRoot, state));
   const errors = repos.filter((r) => r.error !== null).map((r) => r.error as string);
   const payload: JsonStatus = {
     schemaVersion: 1,
     toolVersion: readPackageVersion(),
     workspaceRoot: repoRoot,
     currentAlias: inferAliasFromCwd(repoRoot, configuredRepos),
-    root: buildRootStatus(repoRoot, configuredRepos, [...states.values()]),
+    root: buildRootStatus(repoRoot, configuredRepos, states),
     repos,
-    trees: buildTreeStatuses(repoRoot, configuredRepos, treeAliases),
+    trees: buildTreeStatuses(collectStatusTrees(repoRoot, configuredRepos, treeAliases)),
     errors,
   };
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -227,12 +228,12 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
   if (!loaded) return 1;
   const { repos, repoRoot } = loaded;
 
-  let selected: Repo[];
+  let selectedAliases: string[];
   // Null means "no alias filter was given": the tree inventory is then reported whole, including
   // entries whose alias is no longer declared in the manifest.
   let treeAliases: string[] | null = null;
   if (options.all || aliases.length === 0) {
-    selected = repos;
+    selectedAliases = repos.map((repo) => repo.alias);
   } else {
     const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
     if (unknown.length > 0) {
@@ -241,27 +242,34 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
       else log.error(msg);
       return 1;
     }
-    const byAlias = new Map(repos.map((r) => [r.alias, r]));
-    selected = uniqueAliases(aliases).map((a) => byAlias.get(a)!);
-    treeAliases = selected.map((repo) => repo.alias);
+    selectedAliases = uniqueAliases(aliases);
+    treeAliases = selectedAliases;
   }
 
-  if (options.json) {
-    return printStatusJson(repoRoot, repos, selected, treeAliases);
-  }
+  const states = observeGitlinks(repoRoot, selectedAliases);
+  if (options.json) return printStatusJson(repoRoot, repos, states, treeAliases);
+  printStatusText(repoRoot, repos, states, treeAliases);
+  return 0;
+}
 
+function printStatusText(
+  repoRoot: string,
+  configuredRepos: Repo[],
+  states: GitlinkObservation[],
+  treeAliases: string[] | null,
+): void {
   const rows: StatusRow[] = [];
-  for (const repo of selected) {
-    const state = gitlinkState(repoRoot, repo.alias);
+  for (const state of states) {
+    const { alias } = state;
     if (!state.initialized) {
-      rows.push({ alias: repo.alias, branch: "(not synced)", pin: state.pin, dirty: "", ahead: "", behind: "" });
+      rows.push({ alias, branch: "(not synced)", pin: state.pin, dirty: "", ahead: "", behind: "" });
       continue;
     }
-    const dir = aliasDir(repoRoot, repo.alias);
+    const dir = aliasDir(repoRoot, alias);
     const branch = currentBranch(dir) ?? `(detached ${shortSha(dir)})`;
     const { ahead, behind } = aheadBehind(dir);
     rows.push({
-      alias: repo.alias,
+      alias,
       branch,
       pin: state.pin,
       dirty: isDirty(dir) ? "yes" : "",
@@ -287,9 +295,7 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
     );
   }
 
-  const trees = listManagedTrees(repoRoot, repos, { dirtyAliases: treeAliases ?? "all" }).filter(
-    (tree) => treeAliases === null || treeAliases.includes(tree.alias),
-  );
+  const trees = collectStatusTrees(repoRoot, configuredRepos, treeAliases);
   if (trees.length > 0) {
     console.log("");
     console.log("Managed trees (.oms-tree/):");
@@ -299,31 +305,4 @@ export async function runStatus(aliases: string[], options: StatusOptions): Prom
       console.log(`  ${tree.path}  ${branch}  ${state}`);
     }
   }
-  return 0;
-}
-
-export function printRootFollowup(repoRoot: string, alias: string): void {
-  const hint = rootFollowupHint(alias, gitlinkState(repoRoot, alias));
-  if (hint) log.info(hint);
-}
-
-export function printRootFollowups(repoRoot: string, aliases: string[]): void {
-  const moved: string[] = [];
-  const others: string[] = [];
-  for (const alias of aliases) {
-    const state = gitlinkState(repoRoot, alias);
-    if (state.headOid !== null && state.pathExists && !state.conflict && state.moved) {
-      moved.push(alias);
-      continue;
-    }
-    const hint = rootFollowupHint(alias, state);
-    if (hint) others.push(hint);
-  }
-
-  if (moved.length === 1) {
-    others.unshift(`Run "oms record ${moved[0]}" to record the root pointer update.`);
-  } else if (moved.length > 1) {
-    others.unshift(`Run "oms record --all" to record ${moved.length} root pointer updates.`);
-  }
-  for (const hint of others) log.info(hint);
 }
