@@ -41,7 +41,7 @@ export async function syncWorkspace(
     } catch {}
   }
 
-  function headGitmodulesSection(repoRoot: string, alias: string): string | null {
+  function readHeadGitmodulesSection(repoRoot: string, alias: string): { section: string; followingHeaders: string[] } | null {
     const path = submodulePath(alias);
     const r = runGit(repoRoot, ["show", "HEAD:.gitmodules"]);
     if (!r.success) return null;
@@ -49,28 +49,15 @@ export async function syncWorkspace(
     const start = lines.findIndex((line) => line.trim() === `[submodule "${path}"]`);
     if (start === -1) return null;
     let end = lines.length;
+    const followingHeaders: string[] = [];
     for (let i = start + 1; i < lines.length; i++) {
-      if (/^\s*\[submodule ".+"\]\s*$/.test(lines[i])) {
-        end = i;
-        break;
-      }
+      const header = lines[i].trim();
+      if (!/^\[submodule ".+"\]$/.test(header)) continue;
+      if (end === lines.length) end = i;
+      followingHeaders.push(header);
     }
-    return `${lines.slice(start, end).join("\n").replace(/\n*$/, "\n")}`;
-  }
-
-  function headFollowingGitmodulesHeaders(repoRoot: string, alias: string): string[] {
-    const path = submodulePath(alias);
-    const r = runGit(repoRoot, ["show", "HEAD:.gitmodules"]);
-    if (!r.success) return [];
-    const lines = r.stdout.split("\n");
-    const start = lines.findIndex((line) => line.trim() === `[submodule "${path}"]`);
-    if (start === -1) return [];
-    const headers: string[] = [];
-    for (let i = start + 1; i < lines.length; i++) {
-      const match = lines[i].trim().match(/^\[submodule "(.+)"\]$/);
-      if (match) headers.push(`[submodule "${match[1]}"]`);
-    }
-    return headers;
+    const section = lines.slice(start, end).join("\n").replace(/\n*$/, "\n");
+    return { section, followingHeaders };
   }
 
   function currentGitmodulesHasSameAliasSection(repoRoot: string, alias: string): boolean {
@@ -79,10 +66,9 @@ export async function syncWorkspace(
     return readFileSync(gitmodules, "utf8").split("\n").some((line) => line.trim() === `[submodule "${submodulePath(alias)}"]`);
   }
 
-  function insertGitmodulesSection(repoRoot: string, alias: string, section: string): void {
+  function insertGitmodulesSection(repoRoot: string, section: string, followingHeaders: string[]): void {
     const gitmodules = join(repoRoot, ".gitmodules");
     const existing = existsSync(gitmodules) ? readFileSync(gitmodules, "utf8") : "";
-    const followingHeaders = headFollowingGitmodulesHeaders(repoRoot, alias);
     const lines = existing.split("\n");
     for (const followingHeader of followingHeaders) {
       const insertAt = lines.findIndex((line) => line.trim() === followingHeader);
@@ -155,15 +141,15 @@ export async function syncWorkspace(
     if (currentGitmodulesHasSameAliasSection(repoRoot, alias) && !state.gitmodulesEntry) {
       return unsafe("current .gitmodules has an incomplete same-alias section");
     }
-    const section = headGitmodulesSection(repoRoot, alias);
-    if (!section) return unsafe(".gitmodules metadata is not recoverable from HEAD");
+    const headMetadata = readHeadGitmodulesSection(repoRoot, alias);
+    if (!headMetadata) return unsafe(".gitmodules metadata is not recoverable from HEAD");
     const cleanup = cleanupRestorableAliasDir(repoRoot, alias);
     if (cleanup === "unreadable") return unsafe(`${path} could not be read (permission or I/O error)`);
     if (cleanup === "unremovable") return unsafe(`${path} could not be removed (permission or I/O error)`);
     if (cleanup === "occupied") return unsafe(`${path} is occupied by a non-submodule path`);
 
     runGit(repoRoot, ["restore", "--source=HEAD", "--staged", "--", ".gitmodules"]);
-    if (!state.gitmodulesEntry) insertGitmodulesSection(repoRoot, alias, section);
+    if (!state.gitmodulesEntry) insertGitmodulesSection(repoRoot, headMetadata.section, headMetadata.followingHeaders);
     // Managed metadata (url/branch) is reconciled from oms.yaml through the unified sync finalization,
     // not inline here, so a restore's metadata edits follow the same commit-or-unstage decision.
 

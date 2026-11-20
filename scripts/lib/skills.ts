@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { log } from "@clack/prompts";
 import semver from "semver";
-import { MANIFEST_FILENAME, PACKAGE_NAME } from "./constants.js";
+import { MANIFEST_FILENAME, PACKAGE_NAME, SKILLS_INSTALL_SOURCE, SKILL_NAMES_FOR_DISPLAY } from "./constants.js";
 import { readPackageVersion, readSkillReferences, runtimePlatform, testEnv } from "./env.js";
 import { findWorkspaceRoot } from "./workspace-discovery.js";
 import { detectInstallContext, installGuidanceManager } from "./install-context.js";
@@ -11,10 +11,6 @@ import { classifyInstalledSkills } from "./skill-classification.js";
 import { fetchRegistryJson } from "./registry.js";
 import type { PackageManager } from "./package-install.js";
 import type { SkillFinding } from "./skill-discovery.js";
-
-const SKILLS_REPO = "divlook/oh-my-space/skills";
-
-
 
 export function omsSkillsInstalled(workspaceRoot: string | null): boolean {
   const reference = readSkillReferences();
@@ -47,8 +43,6 @@ function describeCompatibility(finding: SkillFinding, runningVersion: string): s
   }
   return `${finding.name}: skill ${finding.installedVersion ?? "unknown"} requires oms ${finding.installedOmsVersion}; running oms is ${runningVersion} (${scopes})`;
 }
-
-
 
 function reportChannelRemediation(findings: SkillFinding[], tags: RegistryDistTags, manager: PackageManager): void {
   for (const finding of findings) {
@@ -110,16 +104,15 @@ export async function reportSkillFindings(workspaceRoot: string | null): Promise
   }
 }
 
-
 export async function runSkills(install: boolean, extraArgs: string[]): Promise<number> {
-  const projectCommand = `npx skills add ${SKILLS_REPO}`;
+  const projectCommand = `npx skills add ${SKILLS_INSTALL_SOURCE}`;
   const globalCommand = `${projectCommand} -g`;
 
   if (!install) {
     log.info("Install the oms workspace skills with the skills tool:");
     log.message(`  ${projectCommand}        # project scope (run at the workspace root)`);
     log.message(`  ${globalCommand}     # global scope (every workspace)`);
-    log.message("Add --skill <name> to install one (oms-workspace, oms-pointer, oms-branch), or --list to list them.");
+    log.message(`Add --skill <name> to install one (${SKILL_NAMES_FOR_DISPLAY}), or --list to list them.`);
     return 0;
   }
 
@@ -132,8 +125,7 @@ export async function runSkills(install: boolean, extraArgs: string[]): Promise<
     );
     return 1;
   }
-
-  const args = ["skills", "add", SKILLS_REPO, ...extraArgs];
+  const args = ["skills", "add", SKILLS_INSTALL_SOURCE, ...extraArgs];
   const npxBin = testEnv("OMS_NPX_BIN") ?? "npx";
   const result = spawnSync(npxBin, args, {
     stdio: "inherit",

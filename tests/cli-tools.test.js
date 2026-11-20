@@ -130,7 +130,7 @@ test("agent uninstall removes the block, deletes emptied files, and no-ops when 
   assert.match(output, /no OMS block found/);
 });
 
-test("agent install rejects malformed markers atomically across targets", () => {
+test("agent install leaves all targets unchanged when one has malformed markers", () => {
   const cwd = agentWorkspace();
   mkdirSync(join(cwd, "oms"), { recursive: true });
   writeFileSync(join(cwd, "oms", "AGENTS.md"), "# Clean file\n");
@@ -144,7 +144,7 @@ test("agent install rejects malformed markers atomically across targets", () => 
   assert.equal(readFileSync(join(cwd, "oms", "CLAUDE.md"), "utf8"), "<!-- OMS START -->\norphan\n");
 });
 
-test("agent uninstall rejects a duplicate managed block atomically", () => {
+test("agent uninstall leaves the file unchanged when the managed block is duplicated", () => {
   const cwd = agentWorkspace();
   mkdirSync(join(cwd, "oms"), { recursive: true });
   const dup = "<!-- OMS START -->\na\n<!-- OMS END -->\n<!-- OMS START -->\nb\n<!-- OMS END -->\n";

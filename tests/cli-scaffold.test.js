@@ -196,29 +196,35 @@ test("sync --list loads oms.yaml from a parent workspace (no git repo needed)", 
 });
 
 
-for (const [name, createCandidate] of [
-  ["directory", (path) => mkdirSync(path)],
-  ["broken symbolic link", (path) => symlinkSync(join(dirname(path), "missing.yaml"), path)],
-  ["symbolic link to a directory", (path) => {
+test("workspace discovery rejects a nearest directory candidate without ancestor fallback", () => {
+  assertNearestManifestRefusal((path) => mkdirSync(path));
+});
+
+test("workspace discovery rejects a nearest broken symbolic link candidate without ancestor fallback", () => {
+  assertNearestManifestRefusal((path) => symlinkSync(join(dirname(path), "missing.yaml"), path));
+});
+
+test("workspace discovery rejects a nearest symbolic link to a directory candidate without ancestor fallback", () => {
+  assertNearestManifestRefusal((path) => {
     const target = join(dirname(path), "manifest-dir");
     mkdirSync(target);
     symlinkSync(target, path);
-  }],
-]) {
-  test(`workspace discovery rejects a nearest ${name} candidate without ancestor fallback`, () => {
-    const outer = tempWorkspace();
-    const inner = join(outer, "nested");
-    mkdirSync(inner);
-    writeSources(outer, sourceFor("outer", "/tmp/outer"));
-    createCandidate(join(inner, "oms.yaml"));
-
-    const result = run(["sync", "--list"], { cwd: inner });
-    const output = result.stdout + result.stderr;
-    assert.equal(result.status, 1, output);
-    assert.match(output, /regular file|broken symbolic link/);
-    assert.match(output, /will not fall back/);
-    assert.doesNotMatch(result.stdout, /outer/);
   });
+});
+
+function assertNearestManifestRefusal(createCandidate) {
+  const outer = tempWorkspace();
+  const inner = join(outer, "nested");
+  mkdirSync(inner);
+  writeSources(outer, sourceFor("outer", "/tmp/outer"));
+  createCandidate(join(inner, "oms.yaml"));
+
+  const result = run(["sync", "--list"], { cwd: inner });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 1, output);
+  assert.match(output, /regular file|broken symbolic link/);
+  assert.match(output, /will not fall back/);
+  assert.doesNotMatch(result.stdout, /outer/);
 }
 
 

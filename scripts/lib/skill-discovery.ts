@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { SKILLS_SOURCE_REPO } from "./constants.js";
 import { testEnv } from "./env.js";
 import { parseSkillMetadata, type SkillReference } from "./skill-metadata.js";
 import type { SkillFreshness, SkillCompatibility } from "./skill-classification.js";
@@ -17,7 +18,6 @@ export type SkillFinding = {
   scopes: SkillScope[];
 };
 
-const SKILLS_SOURCE_REPO = "divlook/oh-my-space";
 const AGENTS_DIRNAME = ".agents";
 const GLOBAL_LOCK_FILENAME = ".skill-lock.json";
 const PROJECT_LOCK_FILENAME = "skills-lock.json";

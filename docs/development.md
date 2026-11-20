@@ -21,6 +21,7 @@ npm ci
 | --- | --- |
 | Workspace discovery and root identity | `workspace-discovery.ts` |
 | Gitlink/topology observations and record eligibility | `workspace-state.ts`, `git-operation-state.ts` |
+| Status output and root follow-up guidance | `status.ts`, `root-followup.ts` |
 | Registration, preparation, synchronization | `alias-registration.ts`, `alias-preparation.ts`, `sync-workspace.ts` |
 | Source commits and root pointer records | `commit.ts`, `record.ts` |
 | Managed-tree inspection and lifecycle | `tree-inventory.ts`, `tree-context.ts`, `tree-exclude.ts`, `tree-ops.ts` |
@@ -55,6 +56,7 @@ It then runs the unit, integration, and black-box test layers.
 The integration and black-box layers share immutable bare-repository and canonical-workspace seeds prepared after the build.
 Each test receives private copies of mutable Git state, including its upstream repository and submodule remote configuration.
 Standalone layer commands prepare their own seeds; the owning process removes them only after its children finish.
+Standalone `test:integration` builds the CLI before preparing its seeds because the canonical API seed uses the real `sync` command.
 Use `workspaceWithApi()` for an already registered, clean `api/main` test setup; keep real sync, clone, and deinitialization commands when that transition is the contract under test.
 
 Pull-request CI has one required validation job, `test (development)`, on `.nvmrc` Node 24.
@@ -89,6 +91,8 @@ Use `currentVersion` when checking the actual package version or keeping install
 Protected process-integrity/recovery and production-bundle-wiring contracts stay black-box unless an equivalent replacement retains that boundary.
 You may consolidate or remove other journeys only when observable coverage remains.
 Each executable contract lives in the `.test.js` or `.test.ts` file that owns its execution; shared fixture helpers do not register tests or choose shards.
+Register each contract with a top-level `node:test` call and a literal name. The inventory rejects dynamic names and unsupported registration forms instead of omitting them.
+For a new black-box contract, record why it needs the production process before regenerating the inventory.
 Branch-clean integration contracts have separate owners for baseline eligibility (`branch-clean.test.ts`), confirmation and revalidation (`branch-clean-confirmation.test.ts`), and transactional failures and recovery (`branch-clean-transactions.test.ts`).
 Their shared fixture module registers no tests, so the existing integration concurrency can schedule these owners without filtering contracts.
 Each migration must record its replacement or deletion reason in `tests/test-inventory.json`.
@@ -101,6 +105,7 @@ Keep ongoing performance measurements in `tests/performance/`, independently of 
 
 - `owner-durations.json` records current test-owner timings used by `node scripts/validate-test-inventory.mjs --write`, with earlier snapshots retained in `history`.
 - `suite-benchmarks.json` records complete-suite measurements and is uploaded by CI.
+- `untangle-inspection.json` compares production-bundle calls for status, multi-alias preparation, branch cleanup, and root finalization.
 
 The required CI job uploads its performance evidence even when the 55-second check fails; a failed check still prevents package inspection and verification-marker publication.
 
@@ -140,6 +145,10 @@ Cleanup registration snapshots also validate and collect each configuration sour
 ### Workspace inspection measurements
 
 `status-inspection.json` records production-bundle Git calls, outputs, and three-run median/range timings separately from suite timings. JSON status now collects each selected alias's pointer state once per invocation; later invocations read it again. The A measurements halve root pointer HEAD/index/conflict reads without removing root or source working-file reads.
+
+Multi-alias status now reads all selected root HEAD gitlinks in one query and all selected index stages in another.
+Each preparation phase likewise shares its root HEAD, index, and configuration reads across the aliases it inspects.
+Failed batches fall back to per-alias inspection so that a failed read does not suppress the other aliases.
 
 Doctor still discovers and diagnoses the complete tree namespace, but no longer checks healthy trees' working files during inventory. The B measurements remove one such read in F3 and eleven in F4; other doctor Git commands remain. Tree listing and removal still inspect dirty state, including undeclared trees.
 

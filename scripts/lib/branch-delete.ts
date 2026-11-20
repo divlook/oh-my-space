@@ -25,7 +25,7 @@ type BranchDeleteOptions = { force?: boolean };
 
 type AliasResult = { kind: "repo"; repo: Repo } | { kind: "error"; code: number };
 
-const PREPARE = { command: "branch delete", topologyOffer: false } as const;
+const PREPARE = { command: "branch delete", topologyOffer: false, allowPendingRegistration: false };
 
 async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: string | undefined): Promise<AliasResult> {
   if (aliasArg) {

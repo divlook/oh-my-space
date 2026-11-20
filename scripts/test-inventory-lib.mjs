@@ -1,11 +1,27 @@
 import { readdirSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { API } from "typescript/unstable/sync";
-import { isCallExpression, isIdentifier, isNoSubstitutionTemplateLiteral, isStringLiteral } from "typescript/unstable/ast/is";
+import { SyntaxKind } from "typescript/unstable/ast";
+import {
+  isArrowFunction,
+  isCallExpression,
+  isElementAccessExpression,
+  isExportDeclaration,
+  isExpressionStatement,
+  isExternalModuleReference,
+  isFunctionExpression,
+  isIdentifier,
+  isImportDeclaration,
+  isNamedImports,
+  isNoSubstitutionTemplateLiteral,
+  isPropertyAccessExpression,
+  isPropertyAssignment,
+  isStringLiteral,
+} from "typescript/unstable/ast/is";
 
 export function discoverTestContracts(root) {
   const testsRoot = resolve(root, "tests");
-  const files = collect(testsRoot).filter(isTestSource);
+  const files = collect(testsRoot).filter((file) => /\.(?:js|ts)$/.test(file) && !file.endsWith(".d.ts"));
   const contracts = [];
   const api = new API({ cwd: root });
 
@@ -16,6 +32,9 @@ export function discoverTestContracts(root) {
       const sourceFile = snapshot.getDefaultProjectForFile(file)?.program.getSourceFile(file);
       if (!sourceFile) throw new Error(`TypeScript did not parse test source ${source}`);
       const names = extractContractNames(sourceFile);
+      if (names.length > 0 && !isTestSource(source)) {
+        throw new Error(`Test registrations must belong to a .test.js or .test.ts owner: ${source}`);
+      }
       for (const name of names) {
         contracts.push({
           id: `${source}::${name}`,
@@ -46,8 +65,9 @@ export function validateTestInventory(inventory, discovered) {
     }
     if (declared.layer !== contract.layer) errors.push(`Layer mismatch for ${id}: ${declared.layer} != ${contract.layer}`);
     if (!sameStrings(declared.owners, contract.owners)) errors.push(`Owner mismatch for ${id}`);
-    if (contract.layer === "blackbox" && !declared.processBoundaryRationale?.trim()) {
-      errors.push(`Missing black-box process-boundary rationale for ${id}`);
+    if (contract.layer === "blackbox"
+      && (typeof declared.processBoundaryRationale !== "string" || !declared.processBoundaryRationale.trim())) {
+      errors.push(`Missing black-box process-boundary rationale for ${id}; add processBoundaryRationale to its inventory entry`);
     }
   }
   for (const id of declaredById.keys()) {
@@ -110,22 +130,83 @@ export function validateTestInventory(inventory, discovered) {
 }
 
 export function extractContractNames(source) {
+  const bindings = new Map();
+  const callbacks = new Map();
   const names = [];
-  visit(source);
+  const isNodeTestImport = (node) => isImportDeclaration(node)
+    && literalText(node.moduleSpecifier) === "node:test";
+
+  for (const statement of source.statements) {
+    if (!isNodeTestImport(statement)) continue;
+    const clause = statement.importClause;
+    if (clause?.phaseModifier === SyntaxKind.TypeKeyword) continue;
+    if (clause?.name) bindings.set(clause.name.text, true);
+    if (!clause?.namedBindings) continue;
+    if (!isNamedImports(clause.namedBindings)) unsupported(clause.namedBindings, "use named or default imports");
+    for (const specifier of clause.namedBindings.elements) {
+      if (specifier.isTypeOnly) continue;
+      const imported = (specifier.propertyName ?? specifier.name).text;
+      if (["default", "test", "it"].includes(imported)) bindings.set(specifier.name.text, true);
+      else if (["after", "afterEach", "before", "beforeEach"].includes(imported)) bindings.set(specifier.name.text, false);
+      else if (imported !== "mock" && imported !== "assert") unsupported(specifier, `unsupported node:test export ${imported}`);
+    }
+  }
+
+  for (const statement of source.statements) {
+    if (!isNodeTestImport(statement)) visit(statement);
+  }
   return names;
 
-  function visit(node) {
-    if (
-      isCallExpression(node)
-      && isIdentifier(node.expression)
-      && node.expression.text === "test"
-      && node.arguments.length > 0
-      && (isStringLiteral(node.arguments[0]) || isNoSubstitutionTemplateLiteral(node.arguments[0]))
-    ) {
-      names.push(node.arguments[0].text);
+  function visit(node, contextName) {
+    const parent = node.parent;
+    contextName = callbacks.get(node) ?? contextName;
+    if (literalText(node) === "node:test"
+      && ((isCallExpression(parent) && parent.arguments[0] === node
+        && (parent.expression.kind === SyntaxKind.ImportKeyword
+          || (isIdentifier(parent.expression) && parent.expression.text === "require")))
+        || isExportDeclaration(parent) || isExternalModuleReference(parent))) {
+      unsupported(node, "use a static node:test import");
     }
-    node.forEachChild(visit);
+    if (isIdentifier(node) && bindings.has(node.text)
+      && !((isPropertyAssignment(parent) || isPropertyAccessExpression(parent)) && parent.name === node)) {
+      const registersTest = bindings.get(node.text);
+      if (!isCallExpression(parent) || parent.expression !== node || parent.questionDotToken) {
+        unsupported(node, "use a direct call to the imported binding");
+      }
+      if (registersTest) {
+        if (!isExpressionStatement(parent.parent) || parent.parent.parent !== source) {
+          unsupported(parent, "put each test call at the top level");
+        }
+        const name = parent.arguments.length > 0 ? literalText(parent.arguments[0]) : undefined;
+        if (!name?.trim()) unsupported(parent, "give each test a nonempty literal name");
+        names.push(name);
+      }
+      const callback = parent.arguments.at(-1);
+      if (!callback || !(isArrowFunction(callback) || isFunctionExpression(callback))) {
+        unsupported(parent, "use an inline test or hook callback");
+      }
+      const parameter = callback.parameters[0]?.name;
+      if (parameter) {
+        if (!isIdentifier(parameter)) unsupported(parameter, "use a plain test-context parameter, not destructuring");
+        callbacks.set(callback, parameter.text);
+      }
+    }
+    if (contextName && (isPropertyAccessExpression(node) || isElementAccessExpression(node))
+      && isIdentifier(node.expression) && node.expression.text === contextName) {
+      const name = isPropertyAccessExpression(node) ? node.name.text : literalText(node.argumentExpression);
+      if (name === "test" || name === undefined) unsupported(node, "register subtests as separate top-level tests");
+    }
+    node.forEachChild((child) => visit(child, contextName));
   }
+
+  function unsupported(node, reason) {
+    const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source));
+    throw new Error(`Unsupported test registration in ${source.fileName}:${line + 1}:${character + 1}: ${reason}`);
+  }
+}
+
+function literalText(node) {
+  if (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node)) return node.text;
 }
 
 function collect(directory) {

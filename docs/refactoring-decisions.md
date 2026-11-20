@@ -1,198 +1,38 @@
 # Refactoring decisions
 
-OMS keeps the existing command contracts, source/root Git separation, recorded-commit preservation, and recovery format. This log records the structural problems addressed by the codebase refactor and the exceptional policies deliberately retained.
+This document records why OMS keeps certain responsibilities separate and which exceptions are intentional. See [Development](development.md#find-the-owning-module) for module ownership and [How OMS works](how-oms-works.md) for command behavior.
 
-## Put shared observations below commands
+## Keep observation, selection, and mutation separate
 
-Shared state belongs to modules that do not import command implementations:
+Shared observations sit below commands so a change to `status` output cannot change a write-safety decision. Selection does not initialize or register a checkout. Preparation calls synchronization with an explicit workspace root and selected declarations, rather than rediscovering a workspace from the current directory. It passes the redacting Git runner explicitly instead of changing process-wide state.
 
-- `workspace-discovery.ts`: nearest-manifest discovery and Git-root identity.
-- `workspace-state.ts`: gitlinks, topology decisions, change counts, record eligibility, and alias inference.
-- `git-operation-state.ts`: one operation-marker inventory with explicit strict and permissive inspection policies.
-- `tree-inventory.ts`, `tree-context.ts`, and `tree-exclude.ts`: managed-tree discovery, canonical-command context, and local exclusion.
+- The nearest manifest is authoritative even when invalid. Commands that inspect or mutate submodules require that manifest directory to be the Git root. Legacy layouts and managed trees retain their own refusal rules so commands do not act on the wrong checkout.
+- Explicit and widened selections keep different defaults. Destructive confirmation defaults to No. Preparation can offer registration once per batch, but commands that require existing local work refuse a fresh registration. Accepting a pending registration is a separate decision from offering a new one.
+- Source commits honor existing staging and do not record root pointers. Synchronization preserves the recorded source commit; a detached checkout can attach automatically only at the same commit. Pull and push carry the resolved branch name through to Git so a tag, significant whitespace, or a name such as `--all` cannot redirect the operation.
 
-Problems solved:
+## Share Git reads only within one inspection
 
-- `status.ts` owned safety decisions used by preparation, recording, synchronization, and branch deletion.
-- `tree-ops.ts` combined discovery and context checks with creation/removal workflows.
-- Preparation, synchronization, selection, status, and tree commands formed runtime dependency cycles.
-- Three operation-marker lists could drift independently.
-- Workspace discovery was coupled to Git process transport.
+Status and multi-alias preparation batch reads to avoid repeated Git subprocesses. A failed batch falls back to per-alias inspection so one unreadable result does not suppress healthy aliases. Observations are not cached across confirmation, initialization, delegated synchronization, or mutation: those steps can change the facts the next decision depends on.
 
-The resulting runtime import graph has no cycles. Observation failures retain their existing command-specific meaning; this refactor does not silently turn permissive inspection into strict refusal.
+- Strict branch cleanup refuses incomplete or ambiguous evidence. Reporting can still show reliable observations alongside failures; single-branch deletion retains its existing permissive probes. Baseline drift protects every reliably resolved baseline. Cleanup registration and preparation keep distinct policies because they require different evidence.
+- A cleanup plan can become stale while the user is deciding or while earlier candidates are processed. Execution rechecks safety and candidate identity before each deletion and verifies the displayed commit IDs in the ref transaction. A configuration cleanup failure does not undo a completed ref deletion. These safeguards are not a general lock against concurrent Git activity.
 
-## Synchronize an explicit workspace, not another CLI invocation
+## Keep root commits scoped and recoverable
 
-`sync-workspace.ts` owns synchronization for an explicit root and selected declarations. `repo-ops.ts` owns CLI loading and selection. Preparation calls the workspace operation directly and supplies a redacting Git runner when needed.
+Working-file reconciliation and root commit synthesis share the same `.gitmodules` edits but start from different content. A root commit uses recorded content so it cannot pick up unrelated working-file edits. Add and remove workflows retain separate partial-success rules because the effects they can safely finalize differ.
 
-Problems solved:
+Root finalization batches literal-path reads within each phase, caps batch size for subprocess argument limits, and stops on a failed batch. It keeps the lock, index hash, expected HEAD, and durable recovery marker checks because HEAD can advance before the replacement index is installed. The existing marker format and lock limitations still apply. Bounded fetch, lock, index-install, metadata-install, and chmod retries remain operation-specific; best-effort cleanup must not hide the primary failure.
 
-- Preparation accepted a root and repository but discarded them when it called `runSync`, rediscovering the workspace from the process working directory.
-- Preparation changed `OMS_REDACT_GIT_DIAGNOSTICS`, which Git transport read implicitly.
-- Successful repositories were correlated with results by array position or object identity.
-- Single and batch preparation repeated existing-registration handling.
-- Sync and unsync repeated root-recovery, metadata-conflict, and manifest-snapshot preflight.
+## Keep external tooling failures in scope
 
-Preparation outcomes are keyed by alias. `topology-preflight.ts` owns the common preflight, while each workflow retains its selection, partial-success, and finalization policy. No process-wide state cache was introduced.
+- Ordinary updates validate the stable tag independently of beta compatibility checks: a malformed beta tag must not block a stable update. Automatic mutation is limited to confidently identified global installs.
+- Skill installation and discovery share a repository identity so they cannot drift apart. External lock metadata is optional and filesystem discovery retains first-match precedence. Missing package-manager guidance does not block compatibility inspection, and skill diagnostics do not change `doctor`'s exit status.
+- Agent instruction edits validate every selected file before applying any edit, so one malformed marker leaves all targets unchanged. This is not a rollback guarantee if a later write fails. Outside content and Git staging are left untouched; an empty file may be removed.
 
-## Keep selection, preparation, and routing distinct
+## Keep verification tied to the behavior it protects
 
-Repository selection in `prompts.ts` no longer initializes or registers a repository. Branch workflows explicitly prepare their selection. Source commits and root pointer recording live in `commit.ts` and `record.ts`, respectively.
+- Beta preparation and verification fingerprinting share the same metadata transformation. Temporary metadata stays in place until child processes finish, including on interruption. Bundle license collection uses physical package roots so nested dependency versions are not collapsed. [Release channels](release-channels.md) documents the remaining publication and recovery constraints, including the cache-miss beta limitation.
+- Each test file owns the contracts it runs; literal registration names let the inventory reject unsupported forms rather than silently miss tests. Black-box contracts require an explicit reason to use the production process, such as crash recovery, streaming, interruption, or bundle wiring. Platform and permission skips remain only where the environment cannot exercise the contract.
+- The standalone integration layer builds the CLI because its shared seed uses the real `sync` command. The canonical gate already builds before preparing that seed, so it does not build again.
 
-Problems solved:
-
-- `resolveInitializedAlias` combined choosing a repository with mutating its registration.
-- A generic single-alias resolver retained an unused record mode alongside the actual multi-alias record resolver.
-- Branch deletion owned the bare branch menu, Commander coupling, and imports of every sibling branch workflow.
-- The CLI maintained a second handwritten top-level command-name set.
-- Removed push flags leaked into core operation options.
-- Skills delegation read global argument positions inside its implementation.
-- Remote/update prompts bypassed the existing guarded prompt seam.
-
-The CLI now owns branch routing, unsupported push-flag diagnostics, and skills argument extraction. Its unknown-command guard derives names from actual registration. Branch menu entries reference their registered commands. Distinct sole-candidate and destructive-selection policies remain explicit.
-
-## Share Git mechanics without merging safety policies
-
-`git.ts` uses one spawn/result conversion implementation. `shell.ts` owns POSIX recovery-command quoting. Existing-branch switching and forced branch deletion each have one execution path.
-
-Problems solved:
-
-- Default and environment-specific Git runners duplicated process setup and result conversion.
-- Recovery quoting and destructive execution were copied across workflows.
-- A separate root-index module only forwarded one Git query.
-- Root finalization exposed an unused operation discriminator and obsolete forwarding exports.
-- A partially injected Git runner appeared to control the entire transaction.
-
-The root transaction's `objectGitRunner` name identifies its actual scope. Buffered output and inherited credential input remain unchanged. Branch deletion uses typed current-branch protection rather than interpreting a rendered reason string.
-
-## Observe baselines once, then apply the caller's policy
-
-`branch-baseline.ts` shares captured-content validation and records baseline provenance as data. Strict deletion and degraded reporting remain separate consumers of those observations.
-
-Problems solved:
-
-- Strict and permissive resolution duplicated almost the complete metadata-source validation algorithm.
-- Policy depended on whether human-readable reasons contained `.gitmodules`.
-- Section ambiguity and value parsing were repeated, and parsing could reread a different live snapshot.
-
-Strict resolution still refuses ambiguous or malformed evidence. Listing still reports reliable baselines alongside incomplete or unavailable evidence. Drift continues to protect every reliably resolved baseline.
-
-## Share managed Git configuration transformations, not their seeds
-
-`managed-gitmodules.ts` owns edits to managed fields and sections. Working-file reconciliation and root transaction synthesis apply those edits to their own captured content. Topology finalization accepts a named input object.
-
-Problems solved:
-
-- Working-file reconciliation and root finalization separately implemented URL/branch changes and nullable-branch removal.
-- Metadata plans stored both an alias and its derivable path.
-- Nine positional finalization arguments exposed bookkeeping and ordering to callers.
-
-The working file and committed file intentionally start from different seeds. A root commit must not consume unrelated working `.gitmodules` edits. Existing no-op formatting, file modes, bounded retries, partial-success asymmetries, and durable recovery markers remain intact.
-
-## Separate branch cleanup planning from execution
-
-`branch-clean-plan.ts` owns `planBranchClean` and `executeBranchClean`. `branch-clean.ts` owns selection, preparation, confirmation, and reporting.
-
-Problems solved:
-
-- Candidate inspection, context snapshots, safety revalidation, destructive effects, and output were interwoven.
-- Race tests waited for a particular branch name and commit ID to appear on stdout before mutating repository state.
-
-Tests can now mutate real repository state between planning and execution. Execution still rechecks shared safety and candidate identity, preserves changed branches, and distinguishes completed deletion from failed configuration cleanup. Cleanup's strict registration snapshot remains local: its requirements intentionally differ from preparation's tolerant registration classification.
-
-## Give package commands and registry transport one owner
-
-`package-install.ts` builds package-manager argument vectors and formats them for display. `registry.ts` owns registry transport. Installation context and skill/update types live with their owning modules.
-
-Problems solved:
-
-- Global execution, channel guidance, and project guidance independently encoded package-manager syntax.
-- Update and skill diagnostics duplicated registry URL, timeout, override, fetch, and HTTP handling.
-- A central workspace type file depended on skill metadata and allowed unrelated installation-state combinations.
-- Callers reconstructed manager/automatic-update fallback decisions.
-
-Stable-only parsing and stable/beta compatibility parsing remain different policies. A malformed beta tag cannot prevent an ordinary stable update. Only confidently identified global installations permit automatic mutation.
-
-## Separate skill discovery, classification, and reporting
-
-`skill-discovery.ts` collects installations once per operation. `skill-classification.ts` evaluates freshness and compatibility. `skills.ts` reports findings and delegates installation.
-
-Problems solved:
-
-- Discovery rescanned the same directories separately for each skill and again for existence checks.
-- Local inspection, classification, registry remediation, and presentation were coupled.
-- Unavailable package-manager guidance could suppress otherwise useful compatibility-channel inspection.
-
-Search locations, first-match precedence, provenance acceptance, scope grouping, and informational exit behavior remain unchanged. Reporting additional physical copies would be a separate behavior change.
-
-## Plan managed instruction edits before applying them
-
-Agent instruction operations read each selected file once, construct edits, reject malformed markers across the selection, then apply the plan.
-
-Problems solved:
-
-- Validation and mutation read the same file independently.
-- The pure transformation and command preflight disagreed about malformed content.
-- A helper accepted an action argument that never varied.
-- Comments claimed generated single-sourcing or filesystem atomicity that the implementation did not provide.
-
-Outside content, empty-file deletion, and the no-staging rule remain unchanged. This is selection-wide validation, not a new rollback transaction.
-
-## Make tooling lifetimes and ownership explicit
-
-Beta metadata transformation is shared with verification fingerprinting. The metadata lifetime encloses child completion, including interruption. License collection retains physical package roots from the bundle graph. Test-layer scheduling is selected explicitly and waits for child stream closure.
-
-Problems solved:
-
-- Beta preparation and fingerprinting shared a hidden package-format/version-string protocol.
-- Restoration responsibility was split across metadata writes and signal handlers.
-- License lookup discarded physical package identity and could collapse nested dependency versions.
-- A hardcoded bundled-dependency list duplicated the bundle graph.
-- Prepack attached an unused property to errors, and verification-record reading repeated the same fallback.
-- The presence of `ownerOrder` implicitly selected a different test execution mode.
-- Benchmark tools separately scanned argument positions.
-
-Release publication, verified-result reuse, artifact rebuilding, version parity, channel restrictions, and stable-release recovery remain governed by the existing release documentation.
-
-## Let real test files own execution
-
-Test files contain the contracts they execute. Shared fixtures remain separate helpers; there is no environment-driven ordinal sharder. Inventory discovery assigns each contract to its source file.
-
-Problems solved:
-
-- Execution and inventory discovery separately interpreted wrapper/environment conventions.
-- Inserting one contract redistributed unrelated contracts by declaration ordinal.
-- Wrapper files had no responsibility beyond selecting a portion of another file.
-- The inventory generator embedded preparation-specific historical paths and timings in active logic.
-- Regeneration inferred process-boundary classifications from test-name keywords.
-- Static help wording, incidental formatting, unrealistic inherited registry objects, and duplicate command-label permutations caused maintenance without additional regression coverage.
-
-The inventory preserves historical baselines and records replacements or reasoned deletions. Existing process-boundary classifications survive regeneration. Crash recovery, credential input, streaming, interruption, source/root separation, and package gates remain behavioral regression surfaces. Fixture storage is allocated lazily.
-
-## Exceptional policies deliberately retained
-
-These cases express current requirements, not unfinished refactoring:
-
-- Nearest-manifest authority, root Git identity, legacy-layout refusal, and canonical versus managed-tree scope.
-- Explicit versus widened selection, default-No destructive confirmation, local-state requirements, and one registration offer per batch.
-- Recorded-commit preservation, staged-first source commits, scoped root commits, and independent add/remove partial-success rules.
-- Strict cleanup inspection versus permissive diagnostic/deletion probes; no universal reinterpretation of inspection failure.
-- Bounded fetch, lock, index-install, metadata-install, and chmod retries; best-effort cleanup that must not mask the primary outcome.
-- Git/platform layout variants, optional external skill metadata, informational registry failures, and justified permission/path test skips.
-- The existing recovery-marker format, lock-generation limitations, external-concurrency restrictions, and documented cache-miss beta limitation.
-
-No additional lock, retry framework, runtime cache, provider registry, or compatibility export layer was introduced.
-
-## Verification
-
-Verification ran locally on macOS arm64 with Node v24.21.0:
-
-- `npm test` passed all 385 contracts.
-- `npm pack --dry-run` passed, reused the matching canonical verification record, rebuilt the artifact, and inspected the six-file package.
-- A real CLI journey exercised sync, JSON status, source-only commit/push, root recording, tree protection/removal, confirmed branch cleanup, literal child arguments, and unsync/restoration.
-- Seven CLI scenarios retained identical exit codes, stdout, and stderr compared with the pre-refactor build.
-- The final CLI/library graph contained 55 modules and 209 internal runtime imports, with no cycles.
-- All contracts had exactly one physical source-file owner, and the 361-contract historical baseline remained unchanged.
-- Domain reviews and repeated final structural reviews passed after repairing the bootstrap fixture's transitive-module copy.
-
-Other platforms and runtimes were not exercised during this refactor. Test-runtime performance was not benchmarked.
+Performance evidence lives separately in [CLI inspection measurements](../tests/performance/untangle-inspection.json) and [suite benchmarks](../tests/performance/suite-benchmarks.json).

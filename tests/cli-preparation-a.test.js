@@ -160,7 +160,9 @@ test("a partial delegated sync does not ask a second preparation question", () =
 });
 
 test("fetch retries one transient failure and succeeds without an error", () => {
-  const { cwd } = workspaceWithApi();
+  const { cwd, wt } = workspaceWithApi();
+  const remoteHead = gitOut(wt, "rev-parse", "refs/remotes/origin/main");
+  git(wt, "update-ref", "-d", "refs/remotes/origin/main");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const stubDir = tempFixture("oms-fetch-retry-");
   const attempts = join(stubDir, "fetch-attempts");
@@ -180,6 +182,7 @@ test("fetch retries one transient failure and succeeds without an error", () => 
   assert.match(output, /api: fetched/);
   assert.doesNotMatch(output, /failed/);
   assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 2);
+  assert.equal(gitOut(wt, "rev-parse", "refs/remotes/origin/main"), remoteHead);
 });
 
 test("two fetch failures report the exit code and later aliases still run", () => {

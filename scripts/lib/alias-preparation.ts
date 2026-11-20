@@ -2,13 +2,13 @@ import { cancel, log } from "@clack/prompts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MANIFEST_FILENAME } from "./constants.js";
-import { aliasDir, currentBranch, listLocalBranches, localBranchOid, redactSensitiveUrls, redactingGitRunner, runGit, runSub, shortOid, submodulePath } from "./git.js";
+import { aliasDir, localBranchOid, redactSensitiveUrls, redactingGitRunner, runGit, runSub, shortOid, submodulePath } from "./git.js";
 import { parseManifest } from "./manifest.js";
 import { canPrompt, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
 import { syncWorkspace } from "./sync-workspace.js";
 import { attachBranch, gitmodulesBranch } from "./submodule-config.js";
 import type { OperationResult, Repo } from "./types.js";
-import { aliasRegistration, pendingRegistrationGuidance, type AliasRegistration } from "./alias-registration.js";
+import { aliasRegistration, aliasRegistrations, pendingRegistrationGuidance, type AliasRegistration } from "./alias-registration.js";
 import { assertRootTopologySafe } from "./workspace-state.js";
 
 
@@ -23,16 +23,8 @@ type PrepareOptions = {
    * local state a new clone cannot contain, so they refuse instead.
    */
   topologyOffer: boolean;
-};
-
-const PENDING_ELIGIBLE: Readonly<Record<string, true | undefined>> = {
-  fetch: true,
-  pull: true,
-  commit: true,
-  "branch list": true,
-  "branch switch": true,
-  "branch checkout": true,
-  "tree add": true,
+  /** Whether a canonical checkout can be used before its root registration is committed. */
+  allowPendingRegistration: boolean;
 };
 
 function readCommitOffer(repoRoot: string): boolean | null {
@@ -108,7 +100,7 @@ function prepareExistingAlias(
   const { command } = options;
   if (registration.kind === "initialized") return { ok: true };
   if (registration.kind === "pending registration") {
-    if (Object.hasOwn(PENDING_ELIGIBLE, command)) return { ok: true };
+    if (options.allowPendingRegistration) return { ok: true };
     log.error(`${repo.alias}: ${pendingRegistrationGuidance(repo.alias)}`);
     return { ok: false, code: 1 };
   }
@@ -116,7 +108,9 @@ function prepareExistingAlias(
     log.error(`${repo.alias}: ${registration.reason}; retry once Git is idle. Nothing was changed.`);
     return { ok: false, code: 1 };
   }
-  if (registration.kind === "registered-uninitialized") return initializeRegisteredAlias(repoRoot, repo, command);
+  if (registration.kind === "registered-uninitialized") {
+    return initializeRegisteredAlias(repoRoot, repo, command);
+  }
   if (registration.kind === "partially registered") {
     log.error(
       `${repo.alias}: inconsistent root registration (${registration.reason}). Repository state was preserved. Repair it with "oms sync ${repo.alias}", then retry.`,
@@ -126,18 +120,21 @@ function prepareExistingAlias(
   return null;
 }
 
+function syncProducedRegistration(outcome: OperationResult | undefined): boolean {
+  return outcome === "added" || outcome === "updated";
+}
+
 function prepareAfterSync(
   repoRoot: string,
   repo: Repo,
   options: PrepareOptions,
-  outcome: OperationResult | undefined,
+  registration: AliasRegistration | undefined,
   syncCode: number,
 ): PrepareResult {
-  if (outcome !== "added" && outcome !== "updated") {
+  if (!registration) {
     log.error(`${repo.alias}: sync and continue failed. Sync's partial state was preserved.`);
     return { ok: false, code: syncCode || 2 };
   }
-  const registration = aliasRegistration(repoRoot, repo.alias);
   if (registration.kind === "unregistered" || registration.kind === "registered-uninitialized") {
     log.error(`${repo.alias}: sync completed but did not produce an initialized registration. Run "oms sync ${repo.alias}" to repair it.`);
     return { ok: false, code: 2 };
@@ -185,7 +182,10 @@ export async function prepareAlias(
     log.error(`${repo.alias}: sync and continue failed; "oms ${command}" was not run.`);
     return { ok: false, code: sync.code || 2 };
   }
-  return prepareAfterSync(repoRoot, repo, options, sync.outcomes.get(repo.alias), sync.code);
+  const registration = syncProducedRegistration(sync.outcomes.get(repo.alias))
+    ? aliasRegistration(repoRoot, repo.alias)
+    : undefined;
+  return prepareAfterSync(repoRoot, repo, options, registration, sync.code);
 }
 
 type AttachVerdict =
@@ -201,14 +201,40 @@ type AttachVerdict =
  */
 function attachDetachedHead(repoRoot: string, alias: string): AttachVerdict {
   const dir = aliasDir(repoRoot, alias);
-  const current = currentBranch(dir);
-  if (current !== null) return { kind: "on-branch", branch: current };
+  const prefix = "refs/heads/";
+  const symbolic = runGit(dir, ["rev-parse", "--symbolic-full-name", "HEAD"]);
+  if (symbolic.success) {
+    const current = symbolic.stdout.replace(/\r?\n$/, "");
+    if (current.startsWith(prefix) && current.length > prefix.length) {
+      return { kind: "on-branch", branch: current.slice(prefix.length) };
+    }
+  }
 
-  const head = runGit(dir, ["rev-parse", "--verify", "HEAD^{commit}"]).stdout.trim();
-  const at = listLocalBranches(dir).find((branch) => localBranchOid(dir, branch) === head);
+  const head = runGit(dir, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const oid = head.stdout.trim();
+  let at: string | undefined;
+  if (head.success && /^[0-9a-f]{40}$/.test(oid)) {
+    const refs = runGit(dir, [
+      "for-each-ref", "--sort=refname", "--format=%(refname)%00%(objectname)", "refs/heads",
+    ]);
+    if (refs.success) {
+      // Read ref OIDs without opening unrelated objects; verify the decoded name before switching.
+      const field = `\0${oid}`;
+      for (let pos = refs.stdout.indexOf(field); pos >= 0; pos = refs.stdout.indexOf(field, pos + field.length)) {
+        const end = pos + field.length;
+        if (refs.stdout[end] !== "\n" && !refs.stdout.startsWith("\r\n", end)) continue;
+        const start = refs.stdout.lastIndexOf("\n", pos) + 1;
+        if (!refs.stdout.startsWith(prefix, start)) continue;
+        const candidate = refs.stdout.slice(start + prefix.length, pos);
+        if (localBranchOid(dir, candidate) !== oid) continue;
+        at = candidate;
+        break;
+      }
+    }
+  }
   if (at === undefined) return { kind: "needs-intent", oid: shortOid(dir, "HEAD") };
 
-  const switched = runSub(repoRoot, alias, ["switch", at], true);
+  const switched = runSub(repoRoot, alias, ["switch", "--", at], true);
   if (!switched.success) {
     log.error(`${alias}: could not attach detached HEAD to "${at}". Repository state was preserved.`);
     return { kind: "failed" };
@@ -226,10 +252,10 @@ export async function resolveDetachedHead(
   repoRoot: string,
   repo: Repo,
   command: string,
-): Promise<PrepareResult> {
+): Promise<{ ok: true; branch: string } | Extract<PrepareResult, { ok: false }>> {
   const verdict = attachDetachedHead(repoRoot, repo.alias);
   if (verdict.kind === "failed") return { ok: false, code: 2 };
-  if (verdict.kind !== "needs-intent") return { ok: true };
+  if (verdict.kind !== "needs-intent") return { ok: true, branch: verdict.branch };
 
   const baseline = repo.branch;
   if (!canPrompt()) {
@@ -269,13 +295,13 @@ export async function resolveDetachedHead(
     const created = runSub(repoRoot, repo.alias, ["switch", "-c", trimmed], true);
     if (!created.success) return { ok: false, code: 2 };
     log.success(`${repo.alias}: created ${trimmed} at ${verdict.oid}.`);
-    return { ok: true };
+    return { ok: true, branch: trimmed };
   }
 
-  const switched = runSub(repoRoot, repo.alias, ["switch", choice as string], true);
+  const switched = runSub(repoRoot, repo.alias, ["switch", "--", choice], true);
   if (!switched.success) return { ok: false, code: 2 };
   log.success(`${repo.alias}: on ${choice}.`);
-  return { ok: true };
+  return { ok: true, branch: choice };
 }
 
 type BatchPreparation = {
@@ -291,7 +317,7 @@ export async function prepareAliases(
 ): Promise<BatchPreparation> {
   const { command, topologyOffer, explicitSelection } = options;
   const result: BatchPreparation = { outcomes: new Map(), cancelled: false };
-  const registrations = new Map(repos.map((repo) => [repo.alias, aliasRegistration(repoRoot, repo.alias)]));
+  let registrations = aliasRegistrations(repoRoot, repos.map((repo) => repo.alias));
   const unregistered = repos.filter((repo) => registrations.get(repo.alias)!.kind === "unregistered");
 
   if (unregistered.length > 0 && topologyOffer) {
@@ -338,8 +364,14 @@ export async function prepareAliases(
           for (const repo of repos) result.outcomes.set(repo.alias, "failed");
           return result;
         }
+        // Sync may have changed shared root metadata. Observe successful targets and the rest of
+        // the original selection together, without reusing the pre-sync registration snapshot.
+        registrations = aliasRegistrations(repoRoot, repos
+          .filter((repo) => registrations.get(repo.alias)!.kind !== "unregistered"
+            || syncProducedRegistration(sync.outcomes.get(repo.alias)))
+          .map((repo) => repo.alias));
         for (const repo of unregistered) {
-          const prepared = prepareAfterSync(repoRoot, repo, options, sync.outcomes.get(repo.alias), sync.code);
+          const prepared = prepareAfterSync(repoRoot, repo, options, registrations.get(repo.alias), sync.code);
           result.outcomes.set(repo.alias, prepared.ok ? "ready" : "failed");
         }
       } else {

@@ -49,17 +49,33 @@ test("push lazily creates the remote branch without staging the root pointer", (
   git(wt, "add", "new.txt");
   git(wt, "commit", "-m", "work");
   const localSha = gitOut(wt, "rev-parse", "HEAD");
+  const exactBranch = "feature/x\u00a0";
+  git(wt, "branch", exactBranch);
+  git(wt, "switch", "--detach", localSha);
+  git(wt, "branch", "-f", "feature/x", "HEAD^");
+  git(wt, "tag", exactBranch, "HEAD^");
+  git(wt, "tag", `refs/heads/${exactBranch}`, "HEAD^");
 
   const result = run(["push", "api"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /pushed/);
 
-  const upstreamSha = gitOut(bare, "rev-parse", "refs/heads/feature/x");
+  const upstreamSha = gitOut(bare, "rev-parse", `refs/heads/${exactBranch}`);
   assert.equal(upstreamSha, localSha);
+  assert.equal(gitOut(bare, "for-each-ref", "--format=%(refname)", "refs/heads/feature/x"), "");
+  assert.equal(gitOut(bare, "for-each-ref", "--format=%(refname)", `refs/tags/${exactBranch}`), "");
+  assert.equal(gitOut(bare, "for-each-ref", "--format=%(refname)", `refs/tags/refs/heads/${exactBranch}`), "");
 
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
   assert.match(output, /oms record api/);
+
+  git(wt, "update-ref", "refs/heads/--all", localSha);
+  git(wt, "symbolic-ref", "HEAD", "refs/heads/--all");
+  const literal = run(["push", "api"], { cwd });
+  assert.equal(literal.status, 0, literal.stdout + literal.stderr);
+  assert.equal(gitOut(bare, "rev-parse", "refs/heads/--all"), localSha);
+  assert.equal(gitOut(bare, "for-each-ref", "--format=%(refname)", "refs/heads/feature/x"), "");
 });
 
 test("push fails clearly when detached HEAD has no local branch at its commit", () => {
@@ -320,13 +336,24 @@ test("pull advances the submodule branch without staging and hints record", () =
   git(scratch, "add", "-A");
   git(scratch, "commit", "-m", "upstream");
   git(scratch, "push", "origin", "main");
+  git(bare, "update-ref", "refs/tags/main", gitOut(scratch, "rev-parse", "HEAD^"));
+  git(join(cwd, "oms", "api"), "tag", "main", "HEAD");
 
   const result = run(["pull", "api"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /pulled/);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "rev-parse", "HEAD"), gitOut(scratch, "rev-parse", "HEAD"));
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
   assert.match(output, /oms record api/);
+
+  const pulled = gitOut(scratch, "rev-parse", "HEAD");
+  git(scratch, "commit", "--allow-empty", "-m", "tag-only descendant");
+  git(scratch, "push", "origin", "HEAD:refs/tags/refs/heads/main");
+  git(bare, "update-ref", "-d", "refs/heads/main");
+  const tagOnly = run(["pull", "api"], { cwd });
+  assert.equal(tagOnly.status, 2, tagOnly.stdout + tagOnly.stderr);
+  assert.equal(gitOut(join(cwd, "oms", "api"), "rev-parse", "HEAD"), pulled);
 });
 
 

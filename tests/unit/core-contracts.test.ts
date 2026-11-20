@@ -7,7 +7,7 @@ import {
   pendingRemovalTopology,
   partialRemovalTopology,
   recordVerdict,
-  rootFollowupHint,
+  rootFollowupAction,
   type GitlinkState,
 } from "../../scripts/lib/workspace-state.js";
 
@@ -66,7 +66,7 @@ test("status topology and record decisions distinguish add, removal, split, no-o
   assert.equal(pendingAddTopology(pendingAdd), true);
   const pendingAddVerdict = recordVerdict(pendingAdd, "api");
   assert.match(pendingAddVerdict.kind === "problem" ? pendingAddVerdict.message : "", /initial topology commit/);
-  assert.equal(rootFollowupHint("api", pendingAdd), 'Run "oms sync api --commit" to create the topology commit.');
+  assert.equal(rootFollowupAction(pendingAdd), "sync");
 
   const removal = state({ pathExists: false, gitmodulesEntry: false, initialized: false, worktreeOid: null, pin: "missing" });
   assert.equal(pendingRemovalTopology(removal), true);
@@ -79,8 +79,8 @@ test("status topology and record decisions distinguish add, removal, split, no-o
   assert.deepEqual(recordVerdict(state(), "api"), { kind: "benign", message: "Nothing to record for api." });
   const moved = state({ worktreeOid: "b".repeat(40), moved: true, pin: "moved" });
   assert.deepEqual(recordVerdict(moved, "api"), { kind: "recordable" });
-  assert.equal(rootFollowupHint("api", moved), 'Run "oms record api" to record the root pointer update.');
-  assert.equal(rootFollowupHint("api", { ...moved, conflict: true }), null);
+  assert.equal(rootFollowupAction(moved), "record");
+  assert.equal(rootFollowupAction({ ...moved, conflict: true }), null);
 });
 
 test("status path inference respects alias path segment boundaries", () => {

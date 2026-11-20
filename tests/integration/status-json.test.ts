@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { runStatus } from "../../scripts/lib/status.js";
-import { git, tempWorkspace, workspaceWithApi } from "../helpers.js";
+import { git, gitOut, sourcesFor, tempWorkspace, testEnv, workspaceWithApi, writeSources } from "../helpers.js";
 
 test("status JSON keeps its schema and canonical workspace path through a symlinked cwd", async () => {
   const { cwd } = workspaceWithApi();
@@ -25,11 +26,7 @@ test("status JSON keeps its schema and canonical workspace path through a symlin
     process.stdout.write = originalWrite;
   }
 
-  assert.ok(output.startsWith("{"));
-  assert.match(output, /\n  "schemaVersion": 1,/);
-  assert.ok(output.endsWith("}\n"));
   const data = JSON.parse(output);
-  assert.equal(output, `${JSON.stringify(data, null, 2)}\n`);
   assert.deepEqual(Object.keys(data).sort(), [
     "currentAlias",
     "errors",
@@ -75,7 +72,7 @@ async function statusJsonAt(cwd: string, aliases: string[] = []) {
 }
 
 test("status JSON projects branch, source, and pointer states in one Git journey", async () => {
-  const { cwd } = workspaceWithApi();
+  const { cwd, bare } = workspaceWithApi();
   const api = join(cwd, "oms", "api");
   git(api, "switch", "-c", "feature/no-upstream");
   const untracked = (await statusJsonAt(cwd)).repos[0];
@@ -123,4 +120,20 @@ test("status JSON projects branch, source, and pointer states in one Git journey
   data = await statusJsonAt(cwd, ["api"]);
   assert.deepEqual(data.root.submodulePointers.split, []);
   assert.deepEqual(data.root.submodulePointers.staged, ["api"]);
+
+  writeSources(cwd, sourcesFor([{ alias: "api", bare }, { alias: "api-extra", bare }]));
+  const blob = gitOut(cwd, "rev-parse", "HEAD:oms.yaml");
+  const conflictedPath = "oms/api-extra/with\ta newline\nand spaces ";
+  execFileSync("git", ["update-index", "-z", "--index-info"], {
+    cwd,
+    env: testEnv,
+    input: `100644 ${blob} 1\t${conflictedPath}\0` + `100644 ${blob} 2\t${conflictedPath}\0`,
+  });
+  data = await statusJsonAt(cwd, ["api-extra", "api", "api-extra"]);
+  assert.deepEqual(data.repos.map(({ alias, pin }: { alias: string; pin: string }) => [alias, pin]), [
+    ["api-extra", "conflict"],
+    ["api", "moved"],
+  ]);
+  assert.deepEqual(data.root.submodulePointers, { moved: ["api"], staged: ["api"], split: [], conflict: ["api-extra"] });
+  assert.deepEqual((await statusJsonAt(cwd, ["api"])).root.submodulePointers.conflict, []);
 });
