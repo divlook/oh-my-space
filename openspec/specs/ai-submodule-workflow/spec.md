@@ -117,11 +117,11 @@ The system SHALL provide `oms status --json` to report the root repository and c
 - **AND** stdout does not contain JSON
 
 ### Requirement: Shared alias preparation across commands
-The system SHALL prepare a selected alias through one shared implementation for every command that operates inside a submodule working tree — `oms commit`, `oms fetch`, `oms pull`, `oms push`, `oms branch list`, `oms branch switch`, `oms branch checkout`, `oms branch delete`, and `oms tree add` — classifying its root registration, initializing it automatically when that requires no root topology change, and offering topology-creating registration only for the commands a fresh registration could serve. `oms status`, `oms doctor`, `oms record`, `oms tree list`, and `oms tree remove` SHALL NOT perform this preparation. When automatic initialization cannot attach the resolved baseline because Git refuses the branch operation, preparation SHALL report the failure and exit non-zero instead of continuing the requested command. `oms tree add` SHALL NOT perform detached-HEAD attachment: its start point is the canonical checkout's current HEAD commit, and it leaves a detached canonical checkout detached without prompting.
+The system SHALL prepare a selected alias through one shared implementation for every command that operates inside a submodule working tree — `oms commit`, `oms fetch`, `oms pull`, `oms push`, `oms branch list`, `oms branch switch`, `oms branch checkout`, `oms branch delete`, and `oms tree add` — classifying its root registration, initializing it automatically when that requires no root topology change, and offering topology-creating registration only for the commands a fresh registration could serve. OMS SHALL distinguish valid pending source registrations from incomplete or conflicting registrations and apply the command-specific eligibility below. `oms status`, `oms doctor`, `oms record`, `oms tree list`, and `oms tree remove` SHALL NOT perform this preparation. When automatic initialization cannot attach the resolved baseline because Git refuses the branch operation, preparation SHALL report the failure and exit non-zero instead of continuing the requested command. `oms tree add` SHALL NOT perform detached-HEAD attachment: its start point is the canonical checkout's current HEAD commit, and it leaves a detached canonical checkout detached without prompting.
 
 #### Scenario: Registration is classified consistently for every command
 - **WHEN** any preparing command resolves an alias
-- **THEN** OMS classifies it as initialized, registered but uninitialized, partially registered, or unregistered
+- **THEN** OMS classifies it as initialized, registered but uninitialized, valid pending source registration, partially registered, or unregistered
 - **AND** the classification compares root HEAD, the root index, and the working tree for both the gitlink and the `.gitmodules` registration
 - **AND** every preparing command derives the same classification for the same repository state
 
@@ -144,7 +144,8 @@ The system SHALL prepare a selected alias through one shared implementation for 
 - **AND** the command is `oms fetch`, `oms pull`, `oms branch list`, `oms branch switch`, `oms branch checkout`, or `oms tree add`
 - **AND** stdin is interactive
 - **THEN** OMS offers to register the alias and continue, stating the root topology consequence
-- **AND** accepting delegates to the sync workflow and resumes the requested command
+- **AND** the offer states whether the workspace setting enables a root registration commit
+- **AND** accepting delegates to the sync workflow and resumes the requested command when registration succeeds, even if it remains pending
 - **AND** declining leaves root topology unchanged and exits non-zero
 
 #### Scenario: Unregistered alias is refused for commands presupposing local state
@@ -161,17 +162,46 @@ The system SHALL prepare a selected alias through one shared implementation for 
 - **AND** names `oms sync <alias>` and the command to retry
 
 #### Scenario: Partially registered alias is refused by every preparing command
-- **WHEN** root HEAD, the root index, and the working tree disagree about an alias's gitlink or `.gitmodules` registration
-- **OR** either registration element is conflicted or has a pending topology addition or removal
+- **WHEN** an alias has a conflicted gitlink or `.gitmodules` entry, a pending removal, or registration components that are inconsistent rather than a valid pending addition
 - **THEN** OMS exits non-zero without attempting automatic initialization or topology repair
 - **AND** identifies the inconsistent registration and provides sync repair guidance
+
+#### Scenario: A valid pending source registration is usable without committing
+- **WHEN** an alias not registered in the main project's current revision has an initialized canonical submodule checkout and a matching, unambiguous working-tree `.gitmodules` registration
+- **AND** the checkout's Git directory belongs to that alias's submodule in the main project
+- **AND** its root index has no conflicts or incompatible entries for the registration, whether the addition is unstaged or consistently staged
+- **THEN** OMS classifies it as a valid pending source registration, not as unregistered or broken
+- **AND** `oms fetch`, `oms pull`, `oms commit`, `oms branch list`, `oms branch switch`, `oms branch checkout`, and `oms tree add` accept it subject to their existing command-specific checks, without staging or committing the registration, offering to register again, or requiring a separate sync
+- **AND** this applies both immediately after delegated registration and on later invocations, whether or not stdin is a terminal
+
+#### Scenario: Independent clone is not a valid pending source registration
+- **WHEN** a declared alias has a checkout and a matching working-tree `.gitmodules` entry, but its Git directory does not belong to the main project's submodule for that alias
+- **THEN** OMS does not treat the checkout as a valid pending source registration
+- **AND** a command preparing that alias does not operate on the checkout or attempt to repair it and reports the registration mismatch
+
+#### Scenario: Commands outside the pending-registration scope refuse it
+- **WHEN** the user explicitly targets a valid pending source registration with `oms push`, `oms branch delete`, `oms branch clean`, `oms exec`, or `oms record`
+- **THEN** OMS does not perform that command's operation for the alias
+- **AND** it identifies the pending registration and points to `oms sync <alias> --commit` without changing the registration
+- **AND** `oms exec` still processes other eligible aliases and bulk `oms record` does not select the pending registration as a pointer-update candidate
 
 #### Scenario: Multi-alias preparation asks once and registers together
 - **WHEN** `oms fetch` or `oms pull` selects several aliases and more than one is unregistered
 - **AND** stdin is interactive
 - **THEN** OMS presents one choice naming every unregistered alias
-- **AND** accepting registers them in a single delegated sync producing one root topology commit
+- **AND** accepting registers them in a single delegated sync, creating one root registration commit only if `autoCommit` is enabled and the commit safety checks pass
 - **AND** OMS does not present the choice once per alias
+
+#### Scenario: Alias-specific registration failure does not block successful aliases
+- **WHEN** delegated multi-alias sync succeeds for `api` and fails for `web`, and shared root finalization succeeds
+- **THEN** the original command continues for `api` if eligible, whether the registration was committed or remains pending
+- **AND** the original command does not operate on `web`, even if its checkout was created before the failure
+- **AND** OMS reports per-alias outcomes and returns a non-zero exit code
+
+#### Scenario: Shared root finalization failure blocks the original command
+- **WHEN** delegated sync fails in shared root commit or index finalization, before or after root HEAD advances
+- **THEN** OMS does not run the requested source operation for any alias in the invocation
+- **AND** it returns a non-zero exit code and reports the failure, the retained state, and the applicable recovery action
 
 #### Scenario: Multi-alias preparation offers a skip that does not fail the run
 - **WHEN** OMS presents the multi-alias preparation choice
@@ -415,10 +445,13 @@ The system SHALL provide `oms branch list [alias]` to prepare one selected submo
 - **AND** explains the reason and provides `oms sync <alias>` guidance
 
 #### Scenario: Alias registration is partial
-- **WHEN** a declared alias's root HEAD, index, and working tree disagree about the presence of its gitlink or matching `.gitmodules` registration
-- **OR** either registration element is conflicted or has a pending topology addition or removal
+- **WHEN** a declared alias has a conflicted or incomplete registration, including a pending removal
 - **THEN** OMS exits 1 without attempting automatic initialization or topology repair
 - **AND** identifies the inconsistent registration and provides sync repair guidance
+
+#### Scenario: Branch inventory accepts a valid pending registration
+- **WHEN** the selected alias is a valid pending source registration
+- **THEN** OMS refreshes its declared remotes and lists its branches without requiring another sync or creating a root commit
 
 #### Scenario: Moved registered pointer remains preparable
 - **WHEN** root HEAD, index, and working tree agree that an alias's gitlink and `.gitmodules` registration exist
@@ -428,7 +461,7 @@ The system SHALL provide `oms branch list [alias]` to prepare one selected submo
 
 #### Scenario: Accepted sync retains its existing contract
 - **WHEN** the user accepts `sync and continue` for an unregistered alias
-- **THEN** OMS delegates topology, metadata, and commit-or-unstage decisions to the existing sync workflow
+- **THEN** OMS delegates topology, metadata, and root commit decisions to the existing sync workflow
 - **AND** resumes branch listing only after sync successfully initializes the alias
 - **AND** does not describe sync's explicitly accepted root changes as branch-list mutations
 - **AND** redacts credentials from every delegated sync diagnostic while retaining non-sensitive URL host/path and failure context
@@ -1244,13 +1277,13 @@ The system SHALL resolve every applicable declared, registered, or default basel
 - **THEN** the command exits 1 without deleting that branch
 
 ### Requirement: Existing submodule metadata reconciliation
-The system SHALL reconcile an existing or restored selected submodule's OMS-managed `.gitmodules` URL and branch metadata from `oms.yaml` after topology mutation and baseline validation, then include successful plans in the same root commit-or-unstage finalization as successful topology. When sync encounters a detached submodule `HEAD`, it SHALL attach the resolved baseline only when the attachment preserves the checked-out commit; otherwise it SHALL preserve the detached commit and root gitlink, report the divergent baseline, and provide explicit branch-switch and pull guidance. When Git refuses the branch operation instead, sync SHALL report that alias as failed rather than as a successful attachment.
+The system SHALL reconcile an existing or restored selected submodule's OMS-managed `.gitmodules` URL and branch metadata from `oms.yaml` after topology mutation and baseline validation, then include successful plans in the same root finalization as successful topology. When sync encounters a detached submodule `HEAD`, it SHALL attach the resolved baseline only when the attachment preserves the checked-out commit; otherwise it SHALL preserve the detached commit and root gitlink, report the divergent baseline, and provide explicit branch-switch and pull guidance. When Git refuses the branch operation instead, sync SHALL report that alias as failed rather than as a successful attachment.
 
 #### Scenario: User-owned Gitmodules state is rejected before mutation
-- **WHEN** `.gitmodules` is unmerged, the root has an in-progress Git operation, or a pre-staged selected OMS path differs in blob or mode from its validated commit result
+- **WHEN** `.gitmodules` is unmerged, the root has an in-progress Git operation, or a sync with commits enabled encounters a pre-staged selected OMS path that differs in blob or mode from its validated commit result
 - **THEN** sync exits 1 before changing any root path
 - **AND** does not commit, unstage, or overwrite the user-owned mismatched state
-- **AND** an exact-matching pre-staged selected OMS path may be consumed by the requested or accepted sync commit
+- **AND** an exact-matching pre-staged selected OMS path may be consumed by a sync commit enabled by the root finalization policy
 - **AND** unrelated staged root paths alone do not block path-limited OMS finalization
 
 #### Scenario: Explicit branch is validated after fetch
@@ -1307,20 +1340,19 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 
 #### Scenario: Reconciled metadata follows the root finalization decision
 - **WHEN** sync changes `.gitmodules` URL or branch metadata for an existing submodule
-- **AND** `--commit` was requested or the user accepts the default-Yes commit prompt
+- **AND** the root finalization policy enables a commit
 - **THEN** sync includes successful aliases' metadata and topology in the same path-limited OMS commit
 - **AND** sync reports the changed fields
 - **AND** does not print old or new URL values
 
 #### Scenario: No-commit result remains unstaged
-- **WHEN** metadata reconciliation succeeds without a requested or accepted commit
-- **THEN** sync unstages its successful topology and metadata paths
-- **AND** leaves the working-tree changes intact as the explicit no-commit result
+- **WHEN** metadata-only reconciliation succeeds with root commits disabled
+- **THEN** sync writes the reconciled metadata to the working tree without changing its staged version
 
 #### Scenario: Metadata-only interactive sync offers automatic completion
-- **WHEN** interactive sync has metadata drift but no pending topology and `--commit` was not supplied
-- **THEN** sync offers the same default-Yes root commit decision
-- **AND** an accepted decision commits the reconciled metadata without requiring a second command
+- **WHEN** interactive sync has managed metadata drift but no pending registration changes
+- **AND** a root commit is not enabled for the invocation
+- **THEN** sync reconciles the metadata, leaves the changes unstaged, and does not prompt to commit
 
 #### Scenario: Fetch failure does not reconcile metadata
 - **WHEN** origin fetch fails for an initialized existing submodule
@@ -1329,12 +1361,12 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 #### Scenario: Metadata uses the post-topology snapshot
 - **WHEN** one sync invocation has both pending topology changes and existing-submodule metadata drift
 - **THEN** sync completes topology mutation before taking the metadata snapshot
-- **AND** applies metadata reconciliation before the root commit-or-unstage decision
+- **AND** applies metadata reconciliation before root finalization
 - **AND** does not treat expected topology edits as concurrent modification
 - **AND** finalizes successful topology and metadata together
 
 #### Scenario: Working-tree manifest is captured for finalization
-- **WHEN** sync plans a requested or accepted root commit
+- **WHEN** sync plans an enabled root commit
 - **THEN** it captures the exact working-tree `oms.yaml` bytes during planning
 - **AND** stages the captured bytes rather than re-reading the path
 
@@ -1352,12 +1384,12 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 - **AND** sync exits 2 with an alias-level summary after finalizing the successful alias
 
 #### Scenario: Plain partial sync remains unstaged
-- **WHEN** a plain or interactive multi-alias sync partially fails without `--commit`
-- **THEN** sync does not open the root commit prompt
-- **AND** leaves successful aliases' OMS changes unstaged
+- **WHEN** a multi-alias sync partially fails with root commits disabled
+- **THEN** sync creates no root commit and does not reset staging left by Git
+- **AND** reports the failed aliases without a separate staging notice
 
 #### Scenario: Temporary commit index preserves the real index
-- **WHEN** sync creates a requested or accepted commit
+- **WHEN** sync creates an enabled root commit
 - **THEN** its owner-only temporary index starts from the verified `HEAD`
 - **AND** contains a `.gitmodules` synthesized from `HEAD` by applying only successful aliases' OMS-managed topology and `path`, `url`, and `branch` fields
 - **AND** preserves unrelated keys from `HEAD` without copying unrelated working-tree edits
@@ -1365,7 +1397,7 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 - **AND** atomically refreshes the real index against the new `HEAD` without losing pre-existing staged entries other than intentionally consumed `oms.yaml` and exact-matching committed OMS paths
 
 #### Scenario: Every sync commit includes its declarative manifest
-- **WHEN** a requested or accepted sync commit will be created
+- **WHEN** a sync commit is enabled and will be created
 - **AND** current `oms.yaml` differs from `HEAD`
 - **THEN** the commit includes the complete current working-tree `oms.yaml` rather than its staged blob
 - **AND** this intentionally includes failed-alias declarations and other current manifest edits
@@ -1396,6 +1428,11 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 - **AND** cleans unchanged prepared state, validates recorded parent and tree before promotion, and installs committed recovery only while the locked `HEAD` and real-index hash match
 - **AND** preserves and blocks on mismatched state, a malformed marker, or an owner-namespaced orphan artifact with comparison guidance
 
+#### Scenario: No-commit runs recover verified prior finalization before new changes
+- **WHEN** a `sync` or `unsync` run with root commits disabled encounters interrupted finalization from an earlier OMS operation
+- **THEN** OMS runs the same verified recovery before applying new changes, without creating a commit
+- **AND** an unverified recovery or an index that does not match the recorded recovery state stops the command before new changes, without overwriting that index
+
 #### Scenario: Record recovers or blocks before pointer finalization
 - **WHEN** the user runs `oms record <alias>` and durable finalization state exists
 - **THEN** OMS completes the same verified recovery preflight before staging or committing the root gitlink
@@ -1423,7 +1460,7 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 - **AND** owner-namespaced orphan artifacts without a valid marker are preserved and reported instead of being installed or deleted
 
 #### Scenario: Root state blocks metadata application
-- **WHEN** the root has an in-progress Git operation, `.gitmodules` is unmerged, or a staged selected OMS path does not exactly match its validated result before root mutation
+- **WHEN** the root has an in-progress Git operation, `.gitmodules` is unmerged, or a sync with commits enabled encounters a staged selected OMS path that does not exactly match its validated result before root mutation
 - **THEN** sync does not apply the metadata batch
 - **AND** does not mutate topology
 - **AND** exits 1 with guidance to resolve the user-owned root state
@@ -1457,7 +1494,8 @@ The system SHALL reconcile an existing or restored selected submodule's OMS-mana
 #### Scenario: Metadata failure preserves resumable topology
 - **WHEN** topology mutation completed before metadata planning, application, concurrent-change validation, replacement, or mode restoration fails
 - **THEN** sync does not create a root commit
-- **AND** leaves completed topology changes unstaged in the working tree as a resumable result
+- **AND** leaves completed topology changes available for retry and, with commits disabled, retains staging left by Git
+- **AND** with commits enabled, leaves completed topology changes unstaged in the working tree as a resumable result
 - **AND** treats the verified post-topology `.gitmodules` content as the original metadata snapshot
 - **AND** before replacement preserves that snapshot, while an exhausted post-replacement mode failure preserves reconciled owner-only content
 
@@ -1501,7 +1539,7 @@ The system SHALL treat `oms sync` for a selected alias with pending removal topo
 - **AND** the user runs `oms sync api`
 - **THEN** the command restores only the selected `api` submodule topology
 - **AND** unrelated alias topology and unrelated `.gitmodules` content edits are preserved
-- **AND** pre-existing staged `.gitmodules` state is rejected and preserved before restoration starts
+- **AND** when a root commit is enabled, existing staging safeguards for restoration still apply
 
 #### Scenario: Sync preserves unsafe pending removal guardrails
 - **WHEN** the selected alias has pending removal topology that cannot be restored safely because the root gitlink is conflicted, the required `.gitmodules` data cannot be recovered from `HEAD`, the current `.gitmodules` entry for the same alias contains edits that would be overwritten, `oms/api` is occupied by a non-submodule file or directory, or the root repository has a merge, rebase, cherry-pick, or similar operation in progress
@@ -1514,7 +1552,7 @@ The system SHALL treat `oms sync` for a selected alias with pending removal topo
 - **THEN** the command uses one root finalization decision for restored topology and reconciled metadata
 - **AND** a plain restore back to the topology and metadata recorded in root `HEAD` leaves nothing to commit
 - **AND** `oms sync api --commit` creates one path-limited root commit when topology or metadata changes remain after restore
-- **AND** interactive sync without `--commit` uses one default-Yes prompt when topology or metadata changes remain
+- **AND** with commits disabled, sync retains any staging produced by the restore and creates no root commit or commit prompt
 - **AND** the restore path does not add a separate confirmation prompt before restoring the selected alias
 
 #### Scenario: Sync restore reports without changing summary semantics
@@ -1535,8 +1573,8 @@ The system SHALL treat `oms sync` for a selected alias with pending removal topo
 - **WHEN** `oms sync api` restores a pending removal successfully
 - **AND** the restored `.gitmodules` section has a `url` or explicit `branch` value that differs from `oms.yaml`
 - **THEN** the command updates that selected alias metadata in `.gitmodules` from `oms.yaml`
-- **AND** finalizes those metadata edits together with restored topology when commit is requested or accepted
-- **AND** otherwise leaves both kinds of OMS changes unstaged
+- **AND** finalizes those metadata edits together with restored topology when the root finalization policy enables a commit
+- **AND** otherwise leaves the metadata reconciliation in the working tree without resetting any staging produced by the restore
 - **AND** the restore message indicates that `.gitmodules` metadata was updated
 
 ### Requirement: Root topology actions share a consistent safety preflight
@@ -1718,86 +1756,132 @@ The baseline for preservation SHALL be the behavior covered by the existing Open
 - **AND** success, usage/config failure, and git-operation failure exit codes retain their existing meanings
 
 ### Requirement: Root topology finalization
-The system SHALL finalize root topology and reconciled metadata changes from `oms sync` and `oms unsync` in one path-limited root commit. That commit SHALL be created by default whenever pending changes exist and the workflow's safety conditions allow it, SHALL be withheld only when `--no-commit` is passed, and SHALL be decided identically whether or not stdin is a terminal. A sync commit SHALL also include reconciled metadata and the complete current declarative `oms.yaml` source.
+The system SHALL make the source registration commit for `oms sync` and `oms unsync` opt-in. One optional boolean `autoCommit` in `oms.yaml` SHALL default to false and govern both commands, including delegated sync. On direct invocations, `--commit` or `--no-commit` SHALL override that setting for the invocation. The decision SHALL be independent of terminal availability and SHALL NOT prompt. Enabled commits remain path-limited and subject to the existing safety conditions. With commits disabled, OMS SHALL leave staging to the Git operations that perform registration, removal, or restoration. OMS SHALL NOT add a staging-only refusal, undo staging, or inspect and report staging separately at runtime. Existing conflict, in-progress operation, checkout safety, and prior commit recovery checks still apply. Help and user documentation SHALL explain that Git can change staging on affected paths, including paths that were already staged.
+
+#### Scenario: Sync leaves registration and metadata changes unstaged by default
+- **WHEN** the user runs `oms sync api` without a commit flag and `autoCommit` is omitted or false
+- **AND** synchronization succeeds with source registration or managed metadata changes
+- **THEN** the command creates no root commit, retains staging produced by Git, and does not emit a staging notice
+- **AND** unrelated staged root changes stay staged
+- **AND** the command tells the user that `oms sync api --commit` can finalize the changes
+
+#### Scenario: Unsync leaves removal unstaged by default
+- **WHEN** the user runs `oms unsync api` without a commit flag and `autoCommit` is omitted or false
+- **AND** the removal succeeds
+- **THEN** the command retains the staged removal, creates no root commit, and does not emit a staging notice
+- **AND** unrelated staged root changes stay staged
+- **AND** the command tells the user that `oms unsync api --commit` can finalize the removal
 
 #### Scenario: Sync creates one root commit by default
-- **WHEN** the user runs `oms sync api`
-- **AND** every requested alias succeeds with topology or metadata changes
-- **THEN** the command creates one root commit for those successful OMS changes without prompting
-- **AND** the commit includes topology, reconciled metadata, and the complete current `oms.yaml` when changed
+- **WHEN** the workspace has opted into automatic commits with `autoCommit: true` and the user runs `oms sync api` without a commit flag
+- **AND** synchronization succeeds with eligible registration or metadata changes
+- **THEN** sync creates one path-limited root commit without prompting
+- **AND** the commit includes successful registration and reconciled metadata changes and the complete current `oms.yaml` when changed
 
 #### Scenario: Unsync creates the topology commit by default
-- **WHEN** the user runs `oms unsync api` and topology changes succeed
-- **THEN** the command creates a root topology commit with message `chore(oms): remove api submodule` without prompting
+- **WHEN** the workspace has opted into automatic commits with `autoCommit: true` and the user runs `oms unsync api` without a commit flag
+- **AND** removal succeeds and passes the commit safety checks
+- **THEN** unsync creates one path-limited root commit without prompting with the message `chore(oms): remove api submodule`
 
-#### Scenario: Topology finalization does not depend on a terminal
-- **WHEN** the user runs `oms sync api` or `oms unsync api` in a non-interactive shell without `--no-commit`
-- **THEN** the command creates the same root commit it would create in an interactive terminal
-- **AND** the command does not skip the commit because stdin is not a TTY
-- **AND** the command does not leave the workspace requiring a follow-up invocation to record the topology
+#### Scenario: Commit flag overrides a disabled default
+- **WHEN** the user runs `oms sync api --commit` or `oms unsync api --commit` with `autoCommit` omitted or false
+- **AND** eligible changes exist and the commit safety checks pass
+- **THEN** the command creates the appropriate root registration commit without prompting
+
+#### Scenario: Conflicting commit flags are rejected before mutation
+- **WHEN** `oms sync` or `oms unsync` is invoked with both `--commit` and `--no-commit` in either order
+- **THEN** OMS exits non-zero and identifies the conflicting options before registering, removing, staging, or committing anything
+
+#### Scenario: No-commit operations leave affected staging to Git
+- **WHEN** a no-commit sync or unsync affects a path already staged or with pre-existing working-tree edits, such as a partially staged `.gitmodules`
+- **THEN** OMS does not refuse solely because of staging or the possibility of restaging those edits
+- **AND** accepts the resulting staging if Git succeeds, or reports the operation failure if Git refuses it
+
+#### Scenario: No-commit rerun does not rewrite existing staging
+- **WHEN** `oms sync api` with root commits disabled selects an already prepared registration and no operation needs to write its index entries
+- **THEN** existing staging does not by itself block the run or change the index
+- **AND** metadata-only reconciliation does not stage `.gitmodules`
+
+#### Scenario: No-commit sync can restore a staged pending removal
+- **WHEN** `oms sync api` with root commits disabled selects a staged pending removal
+- **AND** the existing operation safety checks pass
+- **THEN** OMS does not block solely because the removal is staged
+- **AND** leaves the staging outcome of restoration as-is without making a root commit
+
+#### Scenario: No-commit partial removal keeps Git staging
+- **WHEN** a no-commit `unsync` stages a removal for one alias and another alias fails
+- **THEN** OMS does not create a root commit or undo the staging
+- **AND** reports the failed aliases without a separate staging notice
 
 #### Scenario: Sync leaves OMS root changes unstaged with --no-commit
-- **WHEN** the user runs `oms sync api --no-commit` and the command changes topology or managed metadata
-- **THEN** those root working-tree changes remain available as the explicit no-commit result
-- **AND** the command does not leave those changes staged in the real root index
-- **AND** unrelated staged root changes remain staged
+- **WHEN** `autoCommit` is true and the user runs `oms sync api --no-commit`
+- **AND** sync succeeds with source registration or managed metadata changes
+- **THEN** sync retains staging produced by Git and creates no root commit
+- **AND** unrelated staged root changes stay staged
 
 #### Scenario: Unsync leaves topology changes unstaged with --no-commit
-- **WHEN** the user runs `oms unsync api --no-commit` and the command removes or updates root topology files such as `.gitmodules` or `oms/api`
-- **THEN** those root working tree changes remain available for review
-- **AND** the command does not leave those changes staged in the root index
-- **AND** unrelated staged root changes remain staged
-- **AND** the command prints guidance to review, stage, and commit root topology changes explicitly
+- **WHEN** `autoCommit` is true and the user runs `oms unsync api --no-commit`
+- **AND** the removal succeeds
+- **THEN** unsync retains the staged removal and creates no root commit
+- **AND** unrelated staged root changes stay staged
+- **AND** unsync tells the user that `oms unsync api --commit` can finalize the removal
+
+#### Scenario: Topology finalization does not depend on a terminal
+- **WHEN** a sync or unsync invocation with the same selection, flags, manifest, and repository state is run with or without a terminal
+- **THEN** the root commit decision is identical and never requires a commit confirmation
 
 #### Scenario: Sync commits detected pending state
-- **WHEN** a previous `oms sync api --no-commit` left pending topology or managed metadata without creating a root commit
-- **AND** the user later runs `oms sync api`
-- **THEN** the command detects the pending state from root HEAD, working tree, `.gitmodules`, and `oms.yaml`
+- **WHEN** an earlier sync left registration or managed metadata changes pending
+- **AND** the user reruns `oms sync api` with an enabled root commit
+- **THEN** the command validates the pending state against root HEAD, the working tree, `.gitmodules`, and `oms.yaml`
 - **AND** creates the root commit for that pending state after successful validation
-- **AND** does not ask whether to create it
 
 #### Scenario: Unsync commits detected pending topology
-- **WHEN** a previous `oms unsync api --no-commit` left pending topology without creating a topology commit
-- **AND** the user later runs `oms unsync api`
-- **THEN** the command detects the pending topology from root HEAD, working tree, and `.gitmodules` state
-- **AND** creates the root topology commit for it
+- **WHEN** an earlier unsync left the removal of api pending
+- **AND** the user reruns `oms unsync api` with an enabled root commit
+- **THEN** the command detects the pending removal and creates the root commit after successful validation
 
 #### Scenario: Sync commit flag is accepted as a no-op
-- **WHEN** the user runs `oms sync api --commit`
-- **THEN** the command creates one root commit containing successful `api` topology, reconciled metadata, and the complete current `oms.yaml` when changed
-- **AND** the result is identical to running `oms sync api` without the flag
+- **WHEN** `autoCommit` is true and the user runs `oms sync api --commit` with eligible changes
+- **THEN** sync makes the same commit decision it would make without the flag
 
 #### Scenario: Unsync commit flag is accepted as a no-op
-- **WHEN** the user runs `oms unsync api --commit`
-- **THEN** the command creates a root topology commit with message `chore(oms): remove api submodule`
-- **AND** the result is identical to running `oms unsync api` without the flag
+- **WHEN** `autoCommit` is true and the user runs `oms unsync api --commit` with eligible changes
+- **THEN** unsync makes the same commit decision it would make without the flag
 
 #### Scenario: Delegated preparation sync commits its topology
-- **WHEN** a command prepares an unregistered alias by delegating to the sync workflow without passing a commit option
-- **THEN** the delegated sync creates the root topology commit
-- **AND** the alias is left fully registered across root HEAD, the root index, and the working tree
-- **AND** immediately repeating the original command succeeds instead of failing with an inconsistent or pending registration
+- **WHEN** another command successfully delegates to sync after the user approves registration and `autoCommit` is true
+- **AND** the registration changes pass the commit safety checks
+- **THEN** sync creates a root registration commit and the requesting command can continue
+
+#### Scenario: Delegated preparation without opt-in does not commit
+- **WHEN** another command successfully delegates to sync after the user approves registration and `autoCommit` is omitted or false
+- **THEN** Git's staging is retained and a valid pending registration is usable by the requesting command, without a commit or a second prompt
+
+#### Scenario: Invalid commit setting is rejected before changes
+- **WHEN** `oms.yaml` supplies `autoCommit` with a non-boolean value
+- **THEN** OMS reports the invalid setting and performs no registration, removal, staging, or commit
 
 #### Scenario: Unsync commit rejects partial removal topology
 - **WHEN** root HEAD has an `oms/api` gitlink
 - **AND** exactly one of the working tree path or `.gitmodules` entry for `oms/api` has been removed
-- **AND** the current `oms unsync api` invocation cannot complete the matching cleanup
+- **AND** the current `oms unsync api --commit` invocation cannot complete the matching cleanup
 - **THEN** the command fails without creating a topology commit
 - **AND** the message explains that partial removal topology must be cleaned up before committing
 
 #### Scenario: Multi-alias sync commit uses plural message
-- **WHEN** the user runs `oms sync api web`
+- **WHEN** the user runs `oms sync api web --commit`
 - **AND** all requested aliases succeed
 - **THEN** the command creates one root commit for their topology, metadata, and changed `oms.yaml`
 - **AND** the commit message is `chore(oms): add submodules`
 
 #### Scenario: Multi-alias unsync commit uses plural message
-- **WHEN** the user runs `oms unsync api web`
+- **WHEN** the user runs `oms unsync api web --commit`
 - **THEN** the command creates one root topology commit when all requested aliases succeed
 - **AND** the commit message is `chore(oms): remove submodules`
 
 #### Scenario: Partial multi-alias sync commit finalizes successful aliases
-- **WHEN** the user runs `oms sync api web`
+- **WHEN** the user runs `oms sync api web --commit`
 - **AND** `api` succeeds while `web` fails
 - **THEN** the command uses a temporary index to commit only `api` topology and metadata plus the complete current `oms.yaml`
 - **AND** failed-alias `.gitmodules` metadata and gitlink changes and unrelated working-tree changes are not included
@@ -1806,7 +1890,7 @@ The system SHALL finalize root topology and reconciled metadata changes from `om
 - **AND** the command exits 2 with the alias-level summary
 
 #### Scenario: Partial multi-alias unsync commit is skipped
-- **WHEN** the user runs `oms unsync api web`
+- **WHEN** the user runs `oms unsync api web --commit`
 - **AND** any requested alias fails
 - **THEN** the command does not create a topology commit
 - **AND** successfully changed topology paths are returned to unstaged state
