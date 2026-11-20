@@ -140,11 +140,11 @@ test("status --json keeps valid JSON and exits non-zero when a repo read fails",
 test("unsync commit policy honors manifest defaults, overrides, and conflicting flags", () => {
   for (const [prefix, flags, expectedCommit] of [
     ["", [], false],
-    ["autoCommit: false\n", [], false],
-    ["autoCommit: true\n", [], true],
-    ["autoCommit: true\n", ["--commit"], true],
-    ["autoCommit: false\n", ["--commit"], true],
-    ["autoCommit: true\n", ["--no-commit"], false],
+    ["autoCommitRegistration: false\n", [], false],
+    ["autoCommitRegistration: true\n", [], true],
+    ["autoCommitRegistration: true\n", ["--commit"], true],
+    ["autoCommitRegistration: false\n", ["--commit"], true],
+    ["autoCommitRegistration: true\n", ["--no-commit"], false],
   ]) {
     const { cwd, bare } = workspaceWithApi();
     writeSources(cwd, prefix + sourceFor("api", bare));
@@ -172,7 +172,7 @@ test("unsync commit policy honors manifest defaults, overrides, and conflicting 
 test("delegated preparation sync commits its topology", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
-  writeSources(cwd, `autoCommit: true\n${sourceFor("api", bare)}`);
+  writeSources(cwd, `autoCommitRegistration: true\n${sourceFor("api", bare)}`);
 
   const result = run(["branch", "list", "api"], {
     cwd,

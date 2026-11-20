@@ -49,12 +49,16 @@ test("manifest validation normalizes valid repositories and rejects structural a
 test("manifest parses registration commit opt-in as an optional boolean", () => {
   const text = "repos:\n  - alias: api\n    remotes:\n      origin: https://example.com/api.git\n";
   const repos = [{ alias: "api", remotes: { origin: "https://example.com/api.git" }, branch: undefined }];
-  assert.deepEqual(parseManifest(text), { repos, autoCommit: false });
-  assert.deepEqual(parseManifest(`autoCommit: false\n${text}`), { repos, autoCommit: false });
-  assert.deepEqual(parseManifest(`autoCommit: true\n${text}`), { repos, autoCommit: true });
+  assert.deepEqual(parseManifest(text), { repos, autoCommitRegistration: false });
+  assert.deepEqual(parseManifest(`autoCommitRegistration: false\n${text}`), { repos, autoCommitRegistration: false });
+  assert.deepEqual(parseManifest(`autoCommitRegistration: true\n${text}`), { repos, autoCommitRegistration: true });
   for (const value of ['"true"', "1", "", "null", "[]", "{}"]) {
-    assert.throws(() => parseManifest(`autoCommit: ${value}\n${text}`), /"autoCommit" must be a boolean/);
+    assert.throws(() => parseManifest(`autoCommitRegistration: ${value}\n${text}`), /"autoCommitRegistration" must be a boolean/);
   }
+  assert.throws(
+    () => parseManifest(`autoCommit: true\n${text}`),
+    /rename the top-level key "autoCommit" to "autoCommitRegistration"/,
+  );
 });
 
 test("status topology and record decisions distinguish add, removal, split, no-op, and movement", () => {

@@ -69,7 +69,7 @@ oms status
 
 The repository is now available at `oms/api/`. The main project records its exact commit. `oms/api/` remains a normal Git working tree where you can create branches and make commits.
 
-If you want to review registration changes before committing, run `oms sync --all` with [`autoCommit` disabled](configure-your-workspace.md#autocommit). Git may still stage changes on affected paths. When ready, run `oms sync --all --commit` before continuing to the first push.
+If you want to review registration changes before committing, run `oms sync --all` with [`autoCommitRegistration` disabled](configure-your-workspace.md#autocommitregistration). Git may still stage changes on affected paths. When ready, run `oms sync --all --commit` before continuing to the first push.
 
 ## Complete the first change
 

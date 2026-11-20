@@ -81,7 +81,7 @@ You can run workspace-aware commands at the root or below it. Inside a declared 
 
 The remote baseline can advance beyond the recorded commit. In this case, synchronization preserves the checkout at the recorded commit and explains how to switch and pull. A fresh clone remains reproducible. Synchronization does not implicitly update source code.
 
-`oms sync` and `oms unsync` do not create a main-project commit by default. Pass `--commit` for one run or set `autoCommit: true` in `oms.yaml` for the workspace. Use `--no-commit` to override that setting. Git may stage changes on affected paths, including paths that were already staged, even when no commit is made. A failed baseline check leaves the alias's metadata unchanged. OMS reports the failure without printing remote URLs.
+`oms sync` and `oms unsync` do not create a main-project commit by default. Pass `--commit` for one run or set `autoCommitRegistration: true` in `oms.yaml` for the workspace. Use `--no-commit` to override that setting. Git may stage changes on affected paths, including paths that were already staged, even when no commit is made. A failed baseline check leaves the alias's metadata unchanged. OMS reports the failure without printing remote URLs.
 
 ## Registration and preparation
 

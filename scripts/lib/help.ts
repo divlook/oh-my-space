@@ -54,24 +54,24 @@ Sync reproduces the root repository's recorded submodule pointer. It attaches th
 that does not move the checkout; a newer baseline stays detached with explicit switch and pull
 guidance instead of being followed as an implicit pull.
 
-By default OMS does not commit registration or metadata changes. Set autoCommit: true in oms.yaml
+By default OMS does not commit registration or metadata changes. Set autoCommitRegistration: true in oms.yaml
 to enable commits for this workspace, including sync delegated by another command. --commit and
 --no-commit override the setting for this invocation; do not use both. OMS never prompts to commit.
 Without a commit, Git may change staging on affected paths, including paths already staged.
 Examples:
   $ oms sync api               # add, initialize, or refresh oms/api
   $ oms sync api --commit      # commit eligible registration or metadata changes in the root
-  $ oms sync api --no-commit   # skip the root commit even if autoCommit is true
+  $ oms sync api --no-commit   # skip the root commit even if autoCommitRegistration is true
 `;
 export const unsyncHelp = `
-By default OMS does not commit removals. Set autoCommit: true in oms.yaml to enable commits for this
+By default OMS does not commit removals. Set autoCommitRegistration: true in oms.yaml to enable commits for this
 workspace. --commit and --no-commit override the setting for this invocation; do not use both.
 OMS never prompts to commit. Without a commit, Git may change staging on affected paths, including
 paths already staged.
 Examples:
   $ oms unsync api             # remove oms/api and keep its declaration
   $ oms unsync api --commit    # commit eligible removals in the root
-  $ oms unsync api --no-commit # skip the root commit even if autoCommit is true
+  $ oms unsync api --no-commit # skip the root commit even if autoCommitRegistration is true
 `;
 export const execHelp = `
 Scope: runs only in initialized canonical checkouts at oms/<alias>/, never managed trees.
@@ -108,7 +108,7 @@ Exit codes: 0 all targets succeeded | 1 usage/workspace/selection error | 2 comm
 `;
 export const fetchHelp = `
 Preparation initializes existing registrations and accepts valid pending registrations. In a terminal,
-OMS offers to register missing aliases before fetching and states whether autoCommit in oms.yaml
+OMS offers to register missing aliases before fetching and states whether autoCommitRegistration in oms.yaml
 enables a root commit. A multi-alias selection asks once; --all and picker selections default to
 skipping unregistered aliases, while named aliases default to sync.
 The fetch itself changes only submodule remote-tracking refs.
@@ -119,7 +119,7 @@ export const pullHelp = `
 Scope: the pull itself moves the submodule branch without staging or committing the root gitlink.
 Use "oms record <alias>" after pulling if the registration is already committed. Preparation follows
 fetch, including support for valid pending registrations and one registration offer per batch.
-Approved registration commits only when autoCommit in oms.yaml is enabled.
+Approved registration commits only when autoCommitRegistration in oms.yaml is enabled.
 A detached HEAD attaches automatically when a local branch points at its commit; otherwise OMS asks before
 moving the checkout or reports branch-switch guidance.
 Example:
@@ -141,18 +141,18 @@ Examples:
 export const branchSwitchHelp = `
 Preparation initializes existing registrations and accepts valid pending registrations. In a terminal,
 OMS can offer to register a missing alias before switching branches. Approved registration commits
-only when autoCommit in oms.yaml is enabled.
+only when autoCommitRegistration in oms.yaml is enabled.
 `;
 export const branchCheckoutHelp = `
 Preparation initializes existing registrations and accepts valid pending registrations. In a terminal,
 OMS can offer to register a missing alias before fetching and checking out the branch. Approved
-registration commits only when autoCommit in oms.yaml is enabled.
+registration commits only when autoCommitRegistration in oms.yaml is enabled.
 `;
 export const branchListHelp = `
 Behavior:
   Initializes existing registrations and accepts valid pending registrations. In a terminal,
   OMS can offer to register a missing alias before listing. Approved registration commits only
-  when autoCommit in oms.yaml is enabled.
+  when autoCommitRegistration in oms.yaml is enabled.
   Reconciles and fetches every oms.yaml remote with prune, retries once, then shows cached refs as stale.
   Baseline state is known, incomplete, or unknown. The listing itself does not mutate a branch or root gitlink.
   Exit 0 includes degraded remote results; exit 1 is selection/preparation refusal; exit 2 is initialization/local inspection failure.
@@ -200,7 +200,7 @@ checks out branch <task> there. A new branch starts at the submodule's current H
 existing branch fails. The canonical checkout is never touched — a detached HEAD stays detached.
 Creating the worktree itself needs no network and changes no root registration. Preparation accepts a
 valid pending registration or can offer to register a missing alias first. Approved registration
-commits only when autoCommit in oms.yaml is enabled. The task name must be a valid branch name
+commits only when autoCommitRegistration in oms.yaml is enabled. The task name must be a valid branch name
 without "/" separators. Omitted arguments are prompted for interactively.
 Examples:
   $ oms tree add api fix-auth                # start fix-auth at the current HEAD

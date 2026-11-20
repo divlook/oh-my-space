@@ -122,7 +122,7 @@ export async function runSync(aliases: string[], options: SyncCommitOptions): Pr
     emitLegacyRenameHintWalkUp();
     return 1;
   }
-  const { repos, repoRoot, autoCommit } = loaded;
+  const { repos, repoRoot, autoCommitRegistration } = loaded;
   if (abortOnLegacyRenameAt(repoRoot)) return 1;
 
   if (options.list) {
@@ -135,14 +135,14 @@ export async function runSync(aliases: string[], options: SyncCommitOptions): Pr
 
   const picked = await selectRepos(repos, aliases, options, "sync");
   if (!picked || picked.length === 0) return 1;
-  return (await syncWorkspace(repoRoot, picked, { ...options, commit: options.commit ?? autoCommit })).code;
+  return (await syncWorkspace(repoRoot, picked, { ...options, commit: options.commit ?? autoCommitRegistration })).code;
 
 }
 
 export async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
-  const { repos, repoRoot, autoCommit } = loaded;
+  const { repos, repoRoot, autoCommitRegistration } = loaded;
 
   const picked = await selectRepos(repos, aliases, options, "unsync");
   if (!picked || picked.length === 0) return 1;
@@ -191,7 +191,7 @@ export async function runUnsync(aliases: string[], options: UnsyncOptions): Prom
     repoRoot,
     requested: picked.map((r) => r.alias),
     kind: "remove",
-    commit: options.commit ?? autoCommit,
+    commit: options.commit ?? autoCommitRegistration,
     allSucceeded: !results.includes("failed"),
     metadataPlans: [],
     omsYamlBytes: manifest.bytes,

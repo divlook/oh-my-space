@@ -19,7 +19,7 @@ import { inspectWorkspaceGitIdentity, resolveWorkspaceManifest } from "./workspa
 import type { Repo, WorkspaceOptions } from "./types.js";
 const ALLOWED_ITEM_KEYS = new Set(["alias", "remotes", "branch"]);
 
-type Manifest = { repos: Repo[]; autoCommit: boolean };
+type Manifest = { repos: Repo[]; autoCommitRegistration: boolean };
 type LoadedWorkspace = Manifest & { repoRoot: string };
 
 function validateManifest(data: unknown): Manifest {
@@ -28,13 +28,16 @@ function validateManifest(data: unknown): Manifest {
   }
   const obj = data as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
-    if (key !== "repos" && key !== "autoCommit") {
+    if (key === "autoCommit") {
+      throw new Error(`${MANIFEST_FILENAME}: rename the top-level key "autoCommit" to "autoCommitRegistration"`);
+    }
+    if (key !== "repos" && key !== "autoCommitRegistration") {
       throw new Error(`${MANIFEST_FILENAME}: unknown top-level key "${key}"`);
     }
   }
-  const { repos, autoCommit = false } = obj;
-  if (typeof autoCommit !== "boolean") {
-    throw new Error(`${MANIFEST_FILENAME}: "autoCommit" must be a boolean`);
+  const { repos, autoCommitRegistration = false } = obj;
+  if (typeof autoCommitRegistration !== "boolean") {
+    throw new Error(`${MANIFEST_FILENAME}: "autoCommitRegistration" must be a boolean`);
   }
   if (!Array.isArray(repos)) {
     throw new Error(`${MANIFEST_FILENAME}: "repos" must be an array`);
@@ -109,7 +112,7 @@ function validateManifest(data: unknown): Manifest {
     validated.push({ alias: r.alias, remotes, branch });
   });
 
-  return { repos: validated, autoCommit };
+  return { repos: validated, autoCommitRegistration };
 }
 
 export function validateSources(data: unknown): Repo[] {
