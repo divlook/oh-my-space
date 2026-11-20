@@ -16,7 +16,7 @@ oms init
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
-autoCommit: false # optional; omit to keep registration commits disabled
+autoCommitRegistration: false # optional; omit to keep registration commits disabled
 repos:
   - alias: service-a
     remotes:
@@ -30,9 +30,9 @@ repos:
 
 The schema comment is optional at runtime. Keep it to enable editor validation and completion from [`oms.schema.json`](../oms.schema.json).
 
-## `autoCommit`
+## `autoCommitRegistration`
 
-`autoCommit` is an optional top-level boolean. If omitted or `false`, `oms sync` and `oms unsync` do not create main-project commits. Set `autoCommit: true` to commit eligible registration, removal, and metadata changes automatically, including registrations you approve when another command offers to sync.
+`autoCommitRegistration` is an optional top-level boolean. If omitted or `false`, `oms sync` and `oms unsync` do not create main-project commits. Set `autoCommitRegistration: true` to commit eligible registration, removal, and metadata changes automatically, including registrations you approve when another command offers to sync. This setting does not change how `oms commit` or `oms record` works.
 
 On a direct `sync` or `unsync` invocation, pass `--commit` to enable the commit or `--no-commit` to disable it. Use only one flag. The decision is the same in a terminal and in a script; OMS does not prompt to commit.
 
@@ -106,7 +106,7 @@ Inspect the workspace state:
 oms status
 ```
 
-`oms sync` adds missing registrations and updates OMS-managed `.gitmodules` metadata. To commit eligible changes in the main project, add `--commit` or enable [`autoCommit`](#autocommit). You can also rerun with `--commit` after reviewing pending changes.
+`oms sync` adds missing registrations and updates OMS-managed `.gitmodules` metadata. To commit eligible changes in the main project, add `--commit` or enable [`autoCommitRegistration`](#autocommitregistration). You can also rerun with `--commit` after reviewing pending changes.
 
 To remove a checked-out repository while keeping its declaration for later use, use `oms unsync`. To remove it from the workspace definition, edit `oms.yaml` as a separate main-project change.
 

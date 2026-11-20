@@ -384,7 +384,7 @@ test("plain partial multi-alias sync commits the successful alias and still exit
   const cwd = initGitWorkspace();
   writeSources(
     cwd,
-    `autoCommit: true\n${sourceFor("api", a).trimEnd()}\n  - alias: web\n    remotes:\n      origin: file://${b}\n    branch: nope\n`,
+    `autoCommitRegistration: true\n${sourceFor("api", a).trimEnd()}\n  - alias: web\n    remotes:\n      origin: file://${b}\n    branch: nope\n`,
   );
 
   const result = run(["sync", "api", "web"], { cwd });

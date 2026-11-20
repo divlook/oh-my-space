@@ -82,7 +82,7 @@ test("commands that presuppose local state refuse an unregistered alias without 
 test("pull --all asks once and registers three aliases in one topology commit", () => {
   const origins = [initBareUpstream(), initBareUpstream(), initBareUpstream()];
   const cwd = initGitWorkspace();
-  writeSources(cwd, `autoCommit: true\n${sourcesFor([
+  writeSources(cwd, `autoCommitRegistration: true\n${sourcesFor([
     { alias: "api", bare: origins[0] },
     { alias: "web", bare: origins[1] },
     { alias: "core", bare: origins[2] },
@@ -100,7 +100,7 @@ test("pull --all asks once and registers three aliases in one topology commit", 
 
   for (const failure of ["commit-tree", "install-recovery-index"]) {
     const { cwd: failedCwd, bare } = workspaceWithApi();
-    writeSources(failedCwd, `autoCommit: true\n${sourcesFor([
+    writeSources(failedCwd, `autoCommitRegistration: true\n${sourcesFor([
       { alias: "api", bare }, { alias: "web", bare: origins[1] },
     ])}`);
     const before = gitOut(failedCwd, "rev-parse", "HEAD");

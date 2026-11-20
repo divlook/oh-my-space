@@ -113,11 +113,11 @@ test("sync commit policy honors manifest defaults, overrides, and conflicting fl
 
   for (const [prefix, flags, expectedCommit] of [
     ["", [], false],
-    ["autoCommit: false\n", [], false],
-    ["autoCommit: true\n", [], true],
-    ["autoCommit: true\n", ["--commit"], true],
-    ["autoCommit: false\n", ["--commit"], true],
-    ["autoCommit: true\n", ["--no-commit"], false],
+    ["autoCommitRegistration: false\n", [], false],
+    ["autoCommitRegistration: true\n", [], true],
+    ["autoCommitRegistration: true\n", ["--commit"], true],
+    ["autoCommitRegistration: false\n", ["--commit"], true],
+    ["autoCommitRegistration: true\n", ["--no-commit"], false],
   ]) {
     const cwd = initGitWorkspace();
     writeSources(cwd, prefix + sourceFor("api", bare));
@@ -146,7 +146,7 @@ test("opted-in multi-alias sync creates one plural registration commit", () => {
   const a = initBareUpstream();
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
-  writeSources(cwd, `autoCommit: true\n${sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }])}`);
+  writeSources(cwd, `autoCommitRegistration: true\n${sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }])}`);
   const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
 
   assert.equal(run(["sync", "api", "web"], { cwd }).status, 0);

@@ -189,7 +189,7 @@ The system SHALL prepare a selected alias through one shared implementation for 
 - **WHEN** `oms fetch` or `oms pull` selects several aliases and more than one is unregistered
 - **AND** stdin is interactive
 - **THEN** OMS presents one choice naming every unregistered alias
-- **AND** accepting registers them in a single delegated sync, creating one root registration commit only if `autoCommit` is enabled and the commit safety checks pass
+- **AND** accepting registers them in a single delegated sync, creating one root registration commit only if `autoCommitRegistration` is enabled and the commit safety checks pass
 - **AND** OMS does not present the choice once per alias
 
 #### Scenario: Alias-specific registration failure does not block successful aliases
@@ -1756,35 +1756,35 @@ The baseline for preservation SHALL be the behavior covered by the existing Open
 - **AND** success, usage/config failure, and git-operation failure exit codes retain their existing meanings
 
 ### Requirement: Root topology finalization
-The system SHALL make the source registration commit for `oms sync` and `oms unsync` opt-in. One optional boolean `autoCommit` in `oms.yaml` SHALL default to false and govern both commands, including delegated sync. On direct invocations, `--commit` or `--no-commit` SHALL override that setting for the invocation. The decision SHALL be independent of terminal availability and SHALL NOT prompt. Enabled commits remain path-limited and subject to the existing safety conditions. With commits disabled, OMS SHALL leave staging to the Git operations that perform registration, removal, or restoration. OMS SHALL NOT add a staging-only refusal, undo staging, or inspect and report staging separately at runtime. Existing conflict, in-progress operation, checkout safety, and prior commit recovery checks still apply. Help and user documentation SHALL explain that Git can change staging on affected paths, including paths that were already staged.
+The system SHALL make the source registration commit for `oms sync` and `oms unsync` opt-in. One optional boolean `autoCommitRegistration` in `oms.yaml` SHALL default to false and govern both commands, including delegated sync. On direct invocations, `--commit` or `--no-commit` SHALL override that setting for the invocation. The decision SHALL be independent of terminal availability and SHALL NOT prompt. Enabled commits remain path-limited and subject to the existing safety conditions. With commits disabled, OMS SHALL leave staging to the Git operations that perform registration, removal, or restoration. OMS SHALL NOT add a staging-only refusal, undo staging, or inspect and report staging separately at runtime. Existing conflict, in-progress operation, checkout safety, and prior commit recovery checks still apply. Help and user documentation SHALL explain that Git can change staging on affected paths, including paths that were already staged.
 
 #### Scenario: Sync leaves registration and metadata changes unstaged by default
-- **WHEN** the user runs `oms sync api` without a commit flag and `autoCommit` is omitted or false
+- **WHEN** the user runs `oms sync api` without a commit flag and `autoCommitRegistration` is omitted or false
 - **AND** synchronization succeeds with source registration or managed metadata changes
 - **THEN** the command creates no root commit, retains staging produced by Git, and does not emit a staging notice
 - **AND** unrelated staged root changes stay staged
 - **AND** the command tells the user that `oms sync api --commit` can finalize the changes
 
 #### Scenario: Unsync leaves removal unstaged by default
-- **WHEN** the user runs `oms unsync api` without a commit flag and `autoCommit` is omitted or false
+- **WHEN** the user runs `oms unsync api` without a commit flag and `autoCommitRegistration` is omitted or false
 - **AND** the removal succeeds
 - **THEN** the command retains the staged removal, creates no root commit, and does not emit a staging notice
 - **AND** unrelated staged root changes stay staged
 - **AND** the command tells the user that `oms unsync api --commit` can finalize the removal
 
 #### Scenario: Sync creates one root commit by default
-- **WHEN** the workspace has opted into automatic commits with `autoCommit: true` and the user runs `oms sync api` without a commit flag
+- **WHEN** the workspace has opted into automatic commits with `autoCommitRegistration: true` and the user runs `oms sync api` without a commit flag
 - **AND** synchronization succeeds with eligible registration or metadata changes
 - **THEN** sync creates one path-limited root commit without prompting
 - **AND** the commit includes successful registration and reconciled metadata changes and the complete current `oms.yaml` when changed
 
 #### Scenario: Unsync creates the topology commit by default
-- **WHEN** the workspace has opted into automatic commits with `autoCommit: true` and the user runs `oms unsync api` without a commit flag
+- **WHEN** the workspace has opted into automatic commits with `autoCommitRegistration: true` and the user runs `oms unsync api` without a commit flag
 - **AND** removal succeeds and passes the commit safety checks
 - **THEN** unsync creates one path-limited root commit without prompting with the message `chore(oms): remove api submodule`
 
 #### Scenario: Commit flag overrides a disabled default
-- **WHEN** the user runs `oms sync api --commit` or `oms unsync api --commit` with `autoCommit` omitted or false
+- **WHEN** the user runs `oms sync api --commit` or `oms unsync api --commit` with `autoCommitRegistration` omitted or false
 - **AND** eligible changes exist and the commit safety checks pass
 - **THEN** the command creates the appropriate root registration commit without prompting
 
@@ -1814,13 +1814,13 @@ The system SHALL make the source registration commit for `oms sync` and `oms uns
 - **AND** reports the failed aliases without a separate staging notice
 
 #### Scenario: Sync leaves OMS root changes unstaged with --no-commit
-- **WHEN** `autoCommit` is true and the user runs `oms sync api --no-commit`
+- **WHEN** `autoCommitRegistration` is true and the user runs `oms sync api --no-commit`
 - **AND** sync succeeds with source registration or managed metadata changes
 - **THEN** sync retains staging produced by Git and creates no root commit
 - **AND** unrelated staged root changes stay staged
 
 #### Scenario: Unsync leaves topology changes unstaged with --no-commit
-- **WHEN** `autoCommit` is true and the user runs `oms unsync api --no-commit`
+- **WHEN** `autoCommitRegistration` is true and the user runs `oms unsync api --no-commit`
 - **AND** the removal succeeds
 - **THEN** unsync retains the staged removal and creates no root commit
 - **AND** unrelated staged root changes stay staged
@@ -1842,24 +1842,24 @@ The system SHALL make the source registration commit for `oms sync` and `oms uns
 - **THEN** the command detects the pending removal and creates the root commit after successful validation
 
 #### Scenario: Sync commit flag is accepted as a no-op
-- **WHEN** `autoCommit` is true and the user runs `oms sync api --commit` with eligible changes
+- **WHEN** `autoCommitRegistration` is true and the user runs `oms sync api --commit` with eligible changes
 - **THEN** sync makes the same commit decision it would make without the flag
 
 #### Scenario: Unsync commit flag is accepted as a no-op
-- **WHEN** `autoCommit` is true and the user runs `oms unsync api --commit` with eligible changes
+- **WHEN** `autoCommitRegistration` is true and the user runs `oms unsync api --commit` with eligible changes
 - **THEN** unsync makes the same commit decision it would make without the flag
 
 #### Scenario: Delegated preparation sync commits its topology
-- **WHEN** another command successfully delegates to sync after the user approves registration and `autoCommit` is true
+- **WHEN** another command successfully delegates to sync after the user approves registration and `autoCommitRegistration` is true
 - **AND** the registration changes pass the commit safety checks
 - **THEN** sync creates a root registration commit and the requesting command can continue
 
 #### Scenario: Delegated preparation without opt-in does not commit
-- **WHEN** another command successfully delegates to sync after the user approves registration and `autoCommit` is omitted or false
+- **WHEN** another command successfully delegates to sync after the user approves registration and `autoCommitRegistration` is omitted or false
 - **THEN** Git's staging is retained and a valid pending registration is usable by the requesting command, without a commit or a second prompt
 
 #### Scenario: Invalid commit setting is rejected before changes
-- **WHEN** `oms.yaml` supplies `autoCommit` with a non-boolean value
+- **WHEN** `oms.yaml` supplies `autoCommitRegistration` with a non-boolean value
 - **THEN** OMS reports the invalid setting and performs no registration, removal, staging, or commit
 
 #### Scenario: Unsync commit rejects partial removal topology

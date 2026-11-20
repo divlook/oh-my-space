@@ -319,8 +319,8 @@ export async function syncWorkspace(
   }));
   if (options.delegated) {
     try {
-      if (parseManifest(omsYamlBytes.toString("utf8")).autoCommit !== options.commit) {
-        log.error("oms.yaml autoCommit changed after approval. No registration changes were made; rerun the command.");
+      if (parseManifest(omsYamlBytes.toString("utf8")).autoCommitRegistration !== options.commit) {
+        log.error("oms.yaml autoCommitRegistration changed after approval. No registration changes were made; rerun the command.");
         return { code: 1, outcomes, finalized: false };
       }
     } catch (error) {

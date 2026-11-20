@@ -37,22 +37,22 @@ const PENDING_ELIGIBLE: Readonly<Record<string, true | undefined>> = {
 
 function readCommitOffer(repoRoot: string): boolean | null {
   try {
-    return parseManifest(readFileSync(join(repoRoot, MANIFEST_FILENAME), "utf8")).autoCommit;
+    return parseManifest(readFileSync(join(repoRoot, MANIFEST_FILENAME), "utf8")).autoCommitRegistration;
   } catch (error) {
     const detail = error instanceof Error ? `: ${redactSensitiveUrls(error.message)}` : "";
-    log.error(`Could not determine autoCommit from ${MANIFEST_FILENAME}${detail}. No registration was attempted; fix the problem and rerun.`);
+    log.error(`Could not determine autoCommitRegistration from ${MANIFEST_FILENAME}${detail}. No registration was attempted; fix the problem and rerun.`);
     return null;
   }
 }
 
-function commitConsequence(autoCommit: boolean): string {
-  return autoCommit
-    ? "autoCommit is enabled: sync will try to create a root registration commit"
-    : "autoCommit is disabled: sync will not create a root registration commit";
+function commitConsequence(autoCommitRegistration: boolean): string {
+  return autoCommitRegistration
+    ? "autoCommitRegistration is enabled: sync will try to create a root registration commit"
+    : "autoCommitRegistration is disabled: sync will not create a root registration commit";
 }
 
-function syncForPreparation(repoRoot: string, repos: Repo[], autoCommit: boolean) {
-  return syncWorkspace(repoRoot, repos, { commit: autoCommit, delegated: true }, redactingGitRunner);
+function syncForPreparation(repoRoot: string, repos: Repo[], autoCommitRegistration: boolean) {
+  return syncWorkspace(repoRoot, repos, { commit: autoCommitRegistration, delegated: true }, redactingGitRunner);
 }
 
 
@@ -160,11 +160,11 @@ export async function prepareAlias(
     );
     return { ok: false, code: 1 };
   }
-  const autoCommit = readCommitOffer(repoRoot);
-  if (autoCommit === null) return { ok: false, code: 1 };
+  const autoCommitRegistration = readCommitOffer(repoRoot);
+  if (autoCommitRegistration === null) return { ok: false, code: 1 };
 
   const choice = await guardedSelect<string>({
-    message: `${repo.alias} is not registered; sync creates root submodule topology. ${commitConsequence(autoCommit)}.`,
+    message: `${repo.alias} is not registered; sync creates root submodule topology. ${commitConsequence(autoCommitRegistration)}.`,
     initialValue: "sync",
     options: [
       { value: "sync", label: "sync and continue", hint: `run oms sync ${repo.alias}, then ${command}` },
@@ -180,7 +180,7 @@ export async function prepareAlias(
     log.error(`${repo.alias}: sync cannot start because ${topology.reason} Root state was preserved. Repair it, then run "oms sync ${repo.alias}".`);
     return { ok: false, code: 1 };
   }
-  const sync = await syncForPreparation(repoRoot, [repo], autoCommit);
+  const sync = await syncForPreparation(repoRoot, [repo], autoCommitRegistration);
   if (!sync.finalized) {
     log.error(`${repo.alias}: sync and continue failed; "oms ${command}" was not run.`);
     return { ok: false, code: sync.code || 2 };
@@ -303,8 +303,8 @@ export async function prepareAliases(
         result.outcomes.set(repo.alias, "failed");
       }
     } else {
-      const autoCommit = readCommitOffer(repoRoot);
-      if (autoCommit === null) {
+      const autoCommitRegistration = readCommitOffer(repoRoot);
+      if (autoCommitRegistration === null) {
         for (const repo of repos) result.outcomes.set(repo.alias, "failed");
         return result;
       }
@@ -320,7 +320,7 @@ export async function prepareAliases(
         ? `${names} is not registered`
         : `${unregistered.length} aliases are not registered (${names})`;
       const choice = await guardedSelect<string>({
-        message: `${description}; sync creates root submodule topology. ${commitConsequence(autoCommit)}.`,
+        message: `${description}; sync creates root submodule topology. ${commitConsequence(autoCommitRegistration)}.`,
         initialValue: explicitSelection ? "sync" : "skip",
         options: explicitSelection
           ? [syncOption, skipOption, { value: "cancel", label: "cancel", hint: "perform no operation" }]
@@ -332,7 +332,7 @@ export async function prepareAliases(
         return result;
       }
       if (choice === "sync") {
-        const sync = await syncForPreparation(repoRoot, unregistered, autoCommit);
+        const sync = await syncForPreparation(repoRoot, unregistered, autoCommitRegistration);
         if (!sync.finalized) {
           log.error(`sync and continue failed; "oms ${command}" was not run for any alias.`);
           for (const repo of repos) result.outcomes.set(repo.alias, "failed");

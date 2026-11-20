@@ -45,7 +45,7 @@ For older or unverifiable skills, OMS recommends `npx skills update`. For incomp
 
 ## Add or remove repositories
 
-`oms sync` and `oms unsync` do not commit by default. Pass `--commit` for one invocation or set [`autoCommit: true`](configure-your-workspace.md#autocommit) in `oms.yaml`. Pass `--no-commit` to override that setting for one invocation. The flags are mutually exclusive, and OMS never prompts to commit.
+`oms sync` and `oms unsync` do not commit by default. Pass `--commit` for one invocation or set [`autoCommitRegistration: true`](configure-your-workspace.md#autocommitregistration) in `oms.yaml`. Pass `--no-commit` to override that setting for one invocation. The flags are mutually exclusive, and OMS never prompts to commit.
 
 Without a commit, Git can change staging on affected paths, including paths you already staged. Review or save any staged selection you need to preserve before running either command. See [migration and rollback guidance](migrations/README.md#opt-in-registration-commits) if you use an older OMS version or depend on automatic commits.
 
@@ -65,7 +65,7 @@ Use `oms sync` and `oms unsync` for repository additions and removals. `oms reco
 
 A valid registration can be usable before it is committed. `oms fetch`, `oms pull`, `oms commit`, `oms branch list`, `oms branch switch`, `oms branch checkout`, and `oms tree add` accept it, subject to their usual safety checks. Before `oms push`, `oms branch delete`, `oms branch clean`, `oms exec`, or `oms record` can operate on that repository, finalize its registration with `oms sync <alias> --commit`.
 
-When a command offers to register missing repositories, the offer states whether `autoCommit` enables a main-project commit. If you accept, only eligible repositories that prepared successfully or needed no preparation continue. An error finalizing shared root state stops the original command for the whole selection.
+When a command offers to register missing repositories, the offer states whether `autoCommitRegistration` enables a main-project commit. If you accept, only eligible repositories that prepared successfully or needed no preparation continue. An error finalizing shared root state stops the original command for the whole selection.
 
 ## Work with source commits
 
