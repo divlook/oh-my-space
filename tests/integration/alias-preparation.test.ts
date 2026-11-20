@@ -109,9 +109,38 @@ test("preparation registers an offered alias once and continues with its manifes
       topologyOffer: true,
     });
     assert.deepEqual(result, { ok: true }, command);
-    assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount + 1, command);
-    assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
-    assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+    assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount, command);
+    assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^oms\/api$/m);
+    assert.deepEqual(
+      await prepareAlias(loaded.repoRoot, loaded.repos[0]!, { command, topologyOffer: true }),
+      { ok: true },
+    );
+    const before = rootSnapshot(cwd);
+    assert.deepEqual(
+      await prepareAlias(loaded.repoRoot, loaded.repos[0]!, { command: "push", topologyOffer: false }),
+      { ok: false, code: 1 },
+    );
+    assert.deepEqual(rootSnapshot(cwd), before);
+
+    git(join(cwd, "oms", "api"), "commit", "--allow-empty", "-m", "move the pending checkout");
+    assert.deepEqual(
+      await prepareAlias(loaded.repoRoot, loaded.repos[0]!, { command, topologyOffer: true }),
+      { ok: true },
+    );
+    git(cwd, "restore", "--staged", "--", ".gitmodules", "oms/api");
+    assert.deepEqual(
+      await prepareAlias(loaded.repoRoot, loaded.repos[0]!, { command, topologyOffer: true }),
+      { ok: true },
+    );
+
+    const moduleBlob = gitOut(cwd, "hash-object", "-w", "oms.yaml");
+    git(cwd, "update-index", "--add", "--cacheinfo", `100644,${moduleBlob},oms/api`);
+    for (const [blocked, topologyOffer] of [["commit", false], ["tree add", true]] as const) {
+      assert.deepEqual(
+        await prepareAlias(loaded.repoRoot, loaded.repos[0]!, { command: blocked, topologyOffer }),
+        { ok: false, code: 1 },
+      );
+    }
   } finally {
     __resetPromptQueueForTests();
     process.chdir(originalCwd);

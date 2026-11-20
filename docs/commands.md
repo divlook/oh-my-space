@@ -45,17 +45,27 @@ For older or unverifiable skills, OMS recommends `npx skills update`. For incomp
 
 ## Add or remove repositories
 
+`oms sync` and `oms unsync` do not commit by default. Pass `--commit` for one invocation or set [`autoCommit: true`](configure-your-workspace.md#autocommit) in `oms.yaml`. Pass `--no-commit` to override that setting for one invocation. The flags are mutually exclusive, and OMS never prompts to commit.
+
+Without a commit, Git can change staging on affected paths, including paths you already staged. Review or save any staged selection you need to preserve before running either command. See [migration and rollback guidance](migrations/README.md#opt-in-registration-commits) if you use an older OMS version or depend on automatic commits.
+
 ### `oms sync`
 
 `oms sync` registers missing repositories, initializes existing registrations, and fetches source history. It attaches the configured starting branch, called the baseline, only when this preserves the recorded commit. It reconciles OMS-managed remote and branch metadata from `oms.yaml`.
 
-OMS commits registration and metadata changes in the main project by default. Choose no-commit mode to leave those changes unstaged. Partial failures isolate successful aliases and preserve unrelated staged paths. See [How OMS works](how-oms-works.md#synchronization) for safety and recovery behavior.
+Rerun `oms sync <alias> --commit` to finalize pending registration or managed metadata changes. A sync commit includes eligible changes for successful aliases and the complete current `oms.yaml` if it changed. OMS refuses before syncing if a staged registration path differs from the planned commit. It preserves unrelated staged paths except that it consumes any existing `oms.yaml` staging. See [How OMS works](how-oms-works.md#synchronization) for safety and recovery behavior.
 
 ### `oms unsync`
 
-`oms unsync` deinitializes and removes selected submodules but keeps their declarations in `oms.yaml`. It refuses to discard uncommitted source changes unless you explicitly choose force. OMS commits the removal in the main project by default. No-commit mode leaves the removal unstaged.
+`oms unsync` deinitializes and removes selected submodules but keeps their declarations in `oms.yaml`. It refuses to discard uncommitted source changes unless you explicitly choose force. Rerun `oms unsync <alias> --commit` to finalize a pending removal.
 
-Use `oms sync` and `oms unsync` for repository additions and removals. `oms record` is only for an existing registered repository whose checked-out commit moved.
+Use `oms sync` and `oms unsync` for repository additions and removals. `oms record` only commits a moved source pointer for a repository whose registration is already in the main project's current commit.
+
+### Pending registrations
+
+A valid registration can be usable before it is committed. `oms fetch`, `oms pull`, `oms commit`, `oms branch list`, `oms branch switch`, `oms branch checkout`, and `oms tree add` accept it, subject to their usual safety checks. Before `oms push`, `oms branch delete`, `oms branch clean`, `oms exec`, or `oms record` can operate on that repository, finalize its registration with `oms sync <alias> --commit`.
+
+When a command offers to register missing repositories, the offer states whether `autoCommit` enables a main-project commit. If you accept, only eligible repositories that prepared successfully or needed no preparation continue. An error finalizing shared root state stops the original command for the whole selection.
 
 ## Work with source commits
 
@@ -85,7 +95,7 @@ Push the source commit before recording it so collaborators can fetch the record
 
 `oms branch list` refreshes every remote declared for one alias. It lists local and remote-tracking branches, baseline certainty, upstream divergence, and detached state. OMS retries each fetch once. Cached refs remain visible as `stale` after a failed refresh. A remote with no usable refs is `unavailable`.
 
-Listing does not switch, create, delete, merge, or push branches. It does not change the recorded commit unless you explicitly accept a required synchronization.
+Listing itself does not switch, create, delete, merge, or push branches, and does not update the main project's recorded commit.
 
 ### `oms branch delete`
 
@@ -124,9 +134,7 @@ Results distinguish deleted, already absent, preserved, failed, and not run. Del
 
 `oms tree add` creates a disposable Git worktree of an initialized repository at `.oms-tree/<alias>/<task>/`. It uses branch `<task>` there. A new branch starts at the submodule's current HEAD. `--from` overrides the start point. An existing branch resumes at its tip. `--from` fails with an existing branch.
 
-OMS never moves the canonical checkout. A detached HEAD stays detached. Creation needs no network.
-
-Creating a tree makes no root commit or `.gitmodules` entry. OMS excludes `.oms-tree/` from root status through the root's local exclude file. Trees are machine-local.
+Creating the tree itself needs no network, does not move the canonical checkout, and makes no root commit or `.gitmodules` entry. A detached HEAD stays detached. OMS may offer to register a missing repository first. OMS excludes `.oms-tree/` from root status through the root's local exclude file. Trees are machine-local.
 
 ### `oms tree list`
 
@@ -218,9 +226,8 @@ A missing separator or an empty executable causes failure before selection.
 `oms exec --help` needs no separator or command.
 
 OMS does not initialize, register, fetch, switch branches, record pointers, or repair targets as preparation.
-Missing, uninitialized, occupied, or inconsistently registered targets fail individually.
-OMS gives `oms sync <alias>` guidance for each failed target.
-It preserves that target and continues with later eligible targets.
+Missing, uninitialized, occupied, or inconsistently registered targets fail individually with `oms sync <alias>` guidance. Valid pending registrations also fail, with `oms sync <alias> --commit` guidance.
+OMS preserves failed targets and continues with later eligible targets.
 Other commands retain their preparation rules.
 
 ### Input, output, and results

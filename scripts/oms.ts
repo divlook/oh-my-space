@@ -90,6 +90,19 @@ async function exitWith(action: Promise<number>): Promise<void> {
   }
 }
 
+function withRegistrationCommitOptions(command: Command): Command {
+  // Commander stores both flags in `commit`. Check the previous value before it is replaced.
+  const parseFlag = (enabled: boolean) => (_value: string, previous: boolean | undefined) => {
+    if (previous === !enabled) {
+      command.error("error: options '--commit' and '--no-commit' cannot be used together");
+    }
+    return enabled;
+  };
+  return command
+    .option("--commit", "commit eligible registration changes in the main project", parseFlag(true))
+    .option("--no-commit", "skip the main-project commit; Git may change staging on affected paths", parseFlag(false));
+}
+
 const collectRepeatable = (value: string, acc: string[]): string[] => [...acc, value];
 const execSeparator = process.argv[2] === "exec" ? process.argv.indexOf("--", 3) : -1;
 const execCommand = execSeparator === -1 ? [] : process.argv.slice(execSeparator + 1);
@@ -134,16 +147,13 @@ program
     await exitWith(runExec(aliases, options, execCommand));
   });
 
-program
-  .command("sync")
+withRegistrationCommitOptions(program.command("sync"))
   .description(
     `Register each repo as a submodule at ${DATA_DIRNAME}/<alias>/ (or initialize and refresh an existing one), checked out on its baseline branch.`,
   )
   .argument("[aliases...]", "repo aliases to sync (omit for interactive multi-select)")
   .option("--all", "sync every registered source repo")
   .option("--list", "print registered repos")
-  .option("--commit", "accepted for compatibility; the root topology commit (chore(oms): add ...) is created by default")
-  .option("--no-commit", "leave the root topology changes unstaged instead of committing them")
   .addHelpText("after", `${syncHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: SyncCommitOptions) => {
     await exitWith(runSync(aliases, options));
@@ -344,16 +354,13 @@ program
     await exitWith(runPush(aliases, options));
   });
 
-program
-  .command("unsync")
+withRegistrationCommitOptions(program.command("unsync"))
   .description(
     `Deinitialize and remove the submodule for each alias (keeps ${MANIFEST_FILENAME} entry).`,
   )
   .argument("[aliases...]", "repo aliases to unsync (omit for interactive multi-select)")
   .option("--all", "unsync every registered source repo")
   .option("--force", "discard uncommitted changes in the submodule")
-  .option("--commit", "accepted for compatibility; the root topology commit (chore(oms): remove ...) is created by default")
-  .option("--no-commit", "leave the root topology changes unstaged instead of committing them")
   .addHelpText("after", `${unsyncHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: UnsyncOptions) => {
     await exitWith(runUnsync(aliases, options));

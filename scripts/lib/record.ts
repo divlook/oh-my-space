@@ -1,4 +1,5 @@
 import { log } from "@clack/prompts";
+import { aliasRegistration, pendingRegistrationGuidance } from "./alias-registration.js";
 import { aliasDir, currentBranch, isDirty, runGit, shortSha, stagedRootPaths, submodulePath } from "./git.js";
 import { loadForSubmodules } from "./manifest.js";
 import { exitFromResults, printSummary } from "./operation-results.js";
@@ -18,6 +19,32 @@ function recordCommitMessage(repoRoot: string, aliases: string[]): string {
 function unrelatedStagedRecordPaths(repoRoot: string, aliases: string[]): string[] {
   const selected = new Set(aliases.map(submodulePath));
   return stagedRootPaths(repoRoot).filter((p) => !selected.has(p));
+}
+
+function inspectRecordVerdict(repoRoot: string, alias: string) {
+  const state = gitlinkState(repoRoot, alias);
+  const verdict = recordVerdict(state, alias);
+  // Keep existing no-op and pointer safety decisions before inspecting registration.
+  if (state.headOid !== null && verdict.kind !== "recordable") return verdict;
+
+  const registration = aliasRegistration(repoRoot, alias);
+  if (registration.kind === "pending registration") {
+    return {
+      kind: "problem" as const,
+      message: `${alias}: the root HEAD has no recorded gitlink. "oms record" only updates existing root gitlinks; ${pendingRegistrationGuidance(alias)}`,
+    };
+  }
+  if (registration.kind === "indeterminate") {
+    return { kind: "problem" as const, message: `${alias}: ${registration.reason}; retry once Git is idle.` };
+  }
+  if (registration.kind === "partially registered" || (verdict.kind === "recordable" && registration.kind !== "initialized")) {
+    const reason = registration.kind === "partially registered" ? ` (${registration.reason})` : "";
+    return {
+      kind: "problem" as const,
+      message: `${alias}: inconsistent root registration${reason}. "oms record" only updates existing root gitlinks. Repair it with "oms sync ${alias}", then retry.`,
+    };
+  }
+  return verdict;
 }
 /**
  * Record an existing root gitlink pointer update for the selected submodule with a path-limited root
@@ -57,7 +84,7 @@ export async function runRecord(aliases: string[], options: SourcesOptions): Pro
 
   const verdicts = selectedAliases.map((alias) => ({
     alias,
-    verdict: recordVerdict(gitlinkState(repoRoot, alias), alias),
+    verdict: inspectRecordVerdict(repoRoot, alias),
   }));
 
   // A named alias that cannot be recorded is an error, reported in record's original order — before

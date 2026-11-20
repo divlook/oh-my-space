@@ -7,6 +7,11 @@
   "additionalProperties": false,
   "required": ["repos"],
   "properties": {
+    "autoCommit": {
+      "type": "boolean",
+      "default": false,
+      "description": "Create a main-project commit for eligible registration or metadata changes from oms sync and oms unsync, including sync delegated by another command. Direct invocations can override this setting with --commit or --no-commit."
+    },
     "repos": {
       "type": "array",
       "minItems": 1,

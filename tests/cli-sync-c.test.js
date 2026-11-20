@@ -128,7 +128,7 @@ test("sync --commit creates a single-alias add topology commit", () => {
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
 });
 
-test("--no-commit leaves topology unstaged and preserves unrelated staged paths", () => {
+test("--no-commit retains Git's registration staging and preserves unrelated staged paths", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
@@ -139,8 +139,8 @@ test("--no-commit leaves topology unstaged and preserves unrelated staged paths"
   assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), headBefore);
   assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^unrelated\.txt$/m);
-  assert.doesNotMatch(gitOut(cwd, "diff", "--cached", "--name-only"), /\.gitmodules/);
-  assert.match(gitOut(cwd, "status", "--porcelain"), /\.gitmodules/);
+  assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^\.gitmodules$/m);
+  assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^oms\/api$/m);
 });
 
 test("sync --commit records pending add topology left by an earlier no-commit sync", () => {
@@ -148,7 +148,7 @@ test("sync --commit records pending add topology left by an earlier no-commit sy
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
   assert.equal(run(["sync", "api", "--no-commit"], { cwd }).status, 0);
-  assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
+  assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^oms\/api$/m);
   const before = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
 
   const result = run(["sync", "api", "--commit"], { cwd });
@@ -237,6 +237,27 @@ test("sync restore reconciles manifest metadata as unstaged .gitmodules edits", 
   assert.match(readFileSync(join(cwd, ".gitmodules"), "utf8"), new RegExp(`url = file://${bare.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}/`));
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), "");
   assert.match(gitOut(cwd, "diff", "--name-only"), /^\.gitmodules$/m);
+
+  const path = join(cwd, ".gitmodules");
+  const head = gitOut(cwd, "rev-parse", "HEAD");
+  writeFileSync(path, `${readFileSync(path, "utf8")}# staged user note\n`);
+  git(cwd, "add", ".gitmodules");
+  const stagedBlob = gitOut(cwd, "rev-parse", ":.gitmodules");
+  const blocked = run(["sync", "api", "--commit"], { cwd });
+  assert.equal(blocked.status, 1, blocked.stdout + blocked.stderr);
+  assert.match(blocked.stdout + blocked.stderr, /Staged \.gitmodules does not match/);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), head);
+  assert.equal(gitOut(cwd, "rev-parse", ":.gitmodules"), stagedBlob);
+  assert.match(readFileSync(path, "utf8"), /# staged user note/);
+
+  git(cwd, "restore", "--staged", ".gitmodules");
+  const pin = gitOut(cwd, "rev-parse", "HEAD:oms/api");
+  git(join(cwd, "oms", "api"), "commit", "--allow-empty", "-m", "unrecorded source work");
+  const committed = run(["sync", "api", "--commit"], { cwd });
+  assert.equal(committed.status, 0, committed.stdout + committed.stderr);
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): reconcile api submodule metadata");
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD:oms/api"), pin);
+  assert.match(readFileSync(path, "utf8"), /# staged user note/);
 });
 
 test("sync restore fails safely when oms/<alias> is unreadable", skipUnreadable, () => {
@@ -277,8 +298,8 @@ test("unsync refuses before deinit/rm when the root gitlink is conflicted", () =
 
   const result = run(["unsync", "api"], { cwd });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 2, output);
-  assert.match(output, /conflicted/);
+  assert.equal(result.status, 1, output);
+  assert.match(output, /merge in progress/);
   assert.doesNotMatch(output, /uncommitted or untracked changes/);
   assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
 });

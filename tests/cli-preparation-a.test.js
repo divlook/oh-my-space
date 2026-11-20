@@ -65,16 +65,28 @@ test("commands that presuppose local state refuse an unregistered alias without 
     assertRootSnapshot(cwd, before);
     assert.equal(existsSync(join(cwd, ".gitmodules")), false);
   }
+
+  const cwd = initGitWorkspace();
+  const source = initBareUpstream();
+  writeSources(cwd, sourceFor("api", source));
+  execFileSync("git", ["clone", source, join(cwd, "oms", "api")], { stdio: "ignore", env: testEnv });
+  writeFileSync(join(cwd, ".gitmodules"), '[submodule "oms/api"]\n\tpath = oms/api\n');
+  const before = rootSnapshot(cwd);
+  const foreign = run(["fetch", "api"], { cwd });
+  assert.equal(foreign.status, 2, foreign.stdout + foreign.stderr);
+  assert.match(foreign.stdout + foreign.stderr, /does not belong to the declared canonical submodule/);
+  assert.doesNotMatch(foreign.stdout + foreign.stderr, /api: fetched/);
+  assertRootSnapshot(cwd, before);
 });
 
 test("pull --all asks once and registers three aliases in one topology commit", () => {
   const origins = [initBareUpstream(), initBareUpstream(), initBareUpstream()];
   const cwd = initGitWorkspace();
-  writeSources(cwd, sourcesFor([
+  writeSources(cwd, `autoCommit: true\n${sourcesFor([
     { alias: "api", bare: origins[0] },
     { alias: "web", bare: origins[1] },
     { alias: "core", bare: origins[2] },
-  ]));
+  ])}`);
   const beforeCount = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
   const result = run(["pull", "--all"], {
     cwd,
@@ -85,6 +97,23 @@ test("pull --all asks once and registers three aliases in one topology commit", 
   assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount + 1);
   assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add submodules");
   assert.match(output, /pulled 3/);
+
+  for (const failure of ["commit-tree", "install-recovery-index"]) {
+    const { cwd: failedCwd, bare } = workspaceWithApi();
+    writeSources(failedCwd, `autoCommit: true\n${sourcesFor([
+      { alias: "api", bare }, { alias: "web", bare: origins[1] },
+    ])}`);
+    const before = gitOut(failedCwd, "rev-parse", "HEAD");
+    const failed = run(["pull", "--all"], {
+      cwd: failedCwd,
+      env: queueEnv([{ type: "select", value: "sync" }], { OMS_TEST_FAIL_AT: failure }),
+    });
+    const failedOutput = failed.stdout + failed.stderr;
+    assert.notEqual(failed.status, 0, failedOutput);
+    assert.match(failedOutput, /was not run for any alias/);
+    assert.doesNotMatch(failedOutput, /(?:api|web): pulled/);
+    assert.equal(gitOut(failedCwd, "rev-parse", "HEAD") === before, failure === "commit-tree");
+  }
 });
 
 test("a partial delegated sync does not ask a second preparation question", () => {
@@ -105,7 +134,29 @@ test("a partial delegated sync does not ask a second preparation question", () =
   assert.match(output, /api: fetched/);
   assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
   assert.equal(existsSync(join(cwd, "oms", "web", ".git")), false);
-  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount + 1);
+  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount);
+  assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^oms\/api$/m);
+  assert.equal(run(["fetch", "api"], { cwd }).status, 0);
+  for (const command of [
+    ["push", "api"], ["branch", "delete", "api", "unused"], ["branch", "clean", "api"],
+    ["exec", "api", "--", "true"], ["record", "api"],
+  ]) {
+    const blocked = run(command, { cwd });
+    assert.notEqual(blocked.status, 0, command.join(" "));
+    assert.match(blocked.stdout + blocked.stderr, /oms sync api --commit/);
+  }
+
+  const source = join(cwd, "oms", "api");
+  const registration = run(["sync", "api", "--commit"], { cwd });
+  assert.equal(registration.status, 0, registration.stdout + registration.stderr);
+  const registrationHead = gitOut(cwd, "rev-parse", "HEAD");
+  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
+  git(source, "commit", "--allow-empty", "-m", "source work after registration");
+  git(source, "push", "origin", "main");
+  const record = run(["record", "api"], { cwd });
+  assert.equal(record.status, 0, record.stdout + record.stderr);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD^"), registrationHead);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD:oms/api"), gitOut(source, "rev-parse", "HEAD"));
 });
 
 test("fetch retries one transient failure and succeeds without an error", () => {

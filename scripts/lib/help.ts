@@ -27,17 +27,19 @@ Examples:
 export const commitHelp = `
 Scope: commits inside the selected oms/<alias>/ submodule only — never the root gitlink. Existing staged
 changes are committed as-is (staged-first); otherwise all changes are staged with git add -A.
-Preparation initializes an existing registration automatically, but refuses an unregistered alias because
-a fresh clone has no source changes to commit. A detached HEAD attaches automatically when a local branch
-points at the same commit; otherwise OMS asks before moving the checkout or reports branch-switch guidance.
+Preparation initializes existing registrations and accepts valid pending registrations. It refuses an
+unregistered alias because a fresh clone has no source changes to commit. A detached HEAD attaches
+automatically when a local branch points at the same commit; otherwise OMS asks before moving the
+checkout or reports branch-switch guidance.
 An explicit alias takes precedence over an alias inferred from the current configured oms/<alias>/ path.
 Examples:
   $ oms commit api -m "feat: add login"   # commit submodule source changes
   $ oms commit -m "fix: typo"             # infer the alias from the current oms/<alias>/ directory
 `;
 export const recordHelp = `
-Scope: commits an existing root gitlink pointer update for one alias in the ROOT repository only
-(chore(oms): update <alias> submodule to <sha>). It never adds or removes a submodule registration.
+Scope: commits root gitlink pointer updates only for submodules registered in root HEAD
+(chore(oms): update <alias> submodule to <sha>). It never commits registration or metadata changes.
+Finalize a pending registration first with "oms sync <alias> --commit".
 An explicit alias takes precedence over an alias inferred from the current configured oms/<alias>/ path.
 Several aliases are recorded in one root commit (chore(oms): update submodules). A named alias that
 cannot be recorded fails; with --all an unrecordable alias is reported and skipped (exit 2) while the
@@ -52,26 +54,31 @@ Sync reproduces the root repository's recorded submodule pointer. It attaches th
 that does not move the checkout; a newer baseline stays detached with explicit switch and pull
 guidance instead of being followed as an implicit pull.
 
-Root topology changes (.gitmodules, oms/<alias>) are committed by default, identically whether or not
-stdin is a terminal. Pass --no-commit to leave them unstaged for review instead.
+By default OMS does not commit registration or metadata changes. Set autoCommit: true in oms.yaml
+to enable commits for this workspace, including sync delegated by another command. --commit and
+--no-commit override the setting for this invocation; do not use both. OMS never prompts to commit.
+Without a commit, Git may change staging on affected paths, including paths already staged.
 Examples:
-  $ oms sync api               # add/initialize/refresh oms/api, then chore(oms): add api submodule
-  $ oms sync api --no-commit   # leave the topology changes unstaged
-  $ oms sync api --commit      # same as the default; accepted for compatibility
+  $ oms sync api               # add, initialize, or refresh oms/api
+  $ oms sync api --commit      # commit eligible registration or metadata changes in the root
+  $ oms sync api --no-commit   # skip the root commit even if autoCommit is true
 `;
 export const unsyncHelp = `
-Removal topology changes are committed by default, identically whether or not stdin is a terminal.
-Pass --no-commit to leave them unstaged for review instead.
+By default OMS does not commit removals. Set autoCommit: true in oms.yaml to enable commits for this
+workspace. --commit and --no-commit override the setting for this invocation; do not use both.
+OMS never prompts to commit. Without a commit, Git may change staging on affected paths, including
+paths already staged.
 Examples:
-  $ oms unsync api             # remove oms/api, then chore(oms): remove api submodule
-  $ oms unsync api --no-commit # leave the removal topology unstaged
-  $ oms unsync api --commit    # same as the default; accepted for compatibility
+  $ oms unsync api             # remove oms/api and keep its declaration
+  $ oms unsync api --commit    # commit eligible removals in the root
+  $ oms unsync api --no-commit # skip the root commit even if autoCommit is true
 `;
 export const execHelp = `
 Scope: runs only in initialized canonical checkouts at oms/<alias>/, never managed trees.
 OMS performs no preparation: no initialization, registration, fetching, branch switching, pointer
 recording, or repair. Dirty files and detached HEAD are allowed. Unavailable targets fail individually
-with "oms sync <alias>" guidance; later eligible targets still run.
+with "oms sync <alias>" guidance; later eligible targets still run. Pending registrations require
+"oms sync <alias> --commit" first.
 
 The first -- separates OMS options from the executable and literal arguments. Child --help, --all,
 and additional -- arguments are passed unchanged. OMS does not interpret shell syntax; invoke an
@@ -100,17 +107,19 @@ Exit codes: 0 all targets succeeded | 1 usage/workspace/selection error | 2 comm
             130 invocation interrupted
 `;
 export const fetchHelp = `
-Preparation initializes existing registrations automatically. An unregistered alias is offered an explicit
-sync; accepting creates a root topology commit, then fetch continues. A multi-alias selection asks once;
---all and picker selections default to skipping unregistered aliases, while named aliases default to sync.
+Preparation initializes existing registrations and accepts valid pending registrations. In a terminal,
+OMS offers to register missing aliases before fetching and states whether autoCommit in oms.yaml
+enables a root commit. A multi-alias selection asks once; --all and picker selections default to
+skipping unregistered aliases, while named aliases default to sync.
 The fetch itself changes only submodule remote-tracking refs.
 Example:
   $ oms fetch api
 `;
 export const pullHelp = `
-Scope: pulls the submodule branch only — it never stages or commits the root gitlink. Record a moved
-root pointer afterward with "oms record <alias>". Preparation follows fetch: automatic initialization,
-an explicit registration offer whose acceptance creates a root topology commit, and one offer per batch.
+Scope: the pull itself moves the submodule branch without staging or committing the root gitlink.
+Use "oms record <alias>" after pulling if the registration is already committed. Preparation follows
+fetch, including support for valid pending registrations and one registration offer per batch.
+Approved registration commits only when autoCommit in oms.yaml is enabled.
 A detached HEAD attaches automatically when a local branch points at its commit; otherwise OMS asks before
 moving the checkout or reports branch-switch guidance.
 Example:
@@ -119,9 +128,9 @@ Example:
 export const pushHelp = `
 Scope: pushes the submodule branch only — it never stages or commits the root gitlink. Preparation
 initializes an existing registration automatically, but refuses an unregistered alias because a fresh clone
-has no commits to push. A detached HEAD follows the same attach-or-choose rule as pull. Staging a pointer
-for review is not the same as recording a pointer commit: "--commit" is unsupported, so push with
-"oms push <alias>", then record the existing root pointer update with "oms record <alias>".
+has no commits to push. Pending registrations require "oms sync <alias> --commit" first.
+A detached HEAD follows the same attach-or-choose rule as pull. Push with "oms push <alias>", then
+record the existing root pointer update with "oms record <alias>". "--commit" is unsupported here.
 Examples:
   $ oms push api
   $ oms push api web           # push several aliases
@@ -130,19 +139,22 @@ Examples:
   $ oms record api             # record the moved root pointer
 `;
 export const branchSwitchHelp = `
-Preparation initializes an existing registration automatically or offers to sync an unregistered alias.
-Accepting that offer creates a root topology commit before the local branch switch continues.
+Preparation initializes existing registrations and accepts valid pending registrations. In a terminal,
+OMS can offer to register a missing alias before switching branches. Approved registration commits
+only when autoCommit in oms.yaml is enabled.
 `;
 export const branchCheckoutHelp = `
-Preparation initializes an existing registration automatically or offers to sync an unregistered alias.
-Accepting that offer creates a root topology commit before origin is fetched and checked out.
+Preparation initializes existing registrations and accepts valid pending registrations. In a terminal,
+OMS can offer to register a missing alias before fetching and checking out the branch. Approved
+registration commits only when autoCommit in oms.yaml is enabled.
 `;
 export const branchListHelp = `
 Behavior:
-  Initializes an existing registration automatically; an unregistered alias requires an accepted sync,
-  which creates a root topology commit before listing continues.
+  Initializes existing registrations and accepts valid pending registrations. In a terminal,
+  OMS can offer to register a missing alias before listing. Approved registration commits only
+  when autoCommit in oms.yaml is enabled.
   Reconciles and fetches every oms.yaml remote with prune, retries once, then shows cached refs as stale.
-  Baseline state is known, incomplete, or unknown. Listing never switches or mutates a branch or root gitlink.
+  Baseline state is known, incomplete, or unknown. The listing itself does not mutate a branch or root gitlink.
   Exit 0 includes degraded remote results; exit 1 is selection/preparation refusal; exit 2 is initialization/local inspection failure.
 
 Examples:
@@ -152,6 +164,7 @@ Examples:
 export const branchDeleteHelp = `
 Preparation initializes an existing registration automatically, but refuses an unregistered alias because a
 fresh clone has no deletable local branch. Partial registration is refused with oms sync repair guidance.
+A valid pending registration requires "oms sync <alias> --commit" before deletion.
 Deletion remains local to the submodule and never changes root topology.
 `;
 
@@ -164,15 +177,16 @@ Deletes local branches only, with interactive confirmation that defaults to No.
 The default base is the configured local branch, or the local branch named by
 cached origin/HEAD. Refs are not refreshed after preparation.
 OMS initializes existing registrations when needed; those effects remain on decline.
+Pending registrations require "oms sync <alias> --commit" first.
 
 Detailed safety and recovery:
   https://github.com/divlook/oh-my-space/blob/HEAD/docs/how-oms-works.md#merged-branch-cleanup-safety
 `;
 export const treeHelp = `
 Task trees are disposable Git worktrees of an initialized oms/<alias>/ submodule, stored under
-.oms-tree/<alias>/<task>/. Creating and removing trees creates no root commit and no .gitmodules
-entry: the tree shares the submodule's Git directory, and .oms-tree/ is kept out of root git
-status through the root's local exclude file (.git/info/exclude), so trees are machine-local.
+.oms-tree/<alias>/<task>/. Trees share the submodule's Git directory without adding a root gitlink
+or .gitmodules entry for the tree itself. OMS keeps .oms-tree/ out of root Git status through the
+root's local exclude file (.git/info/exclude).
 Work inside a tree with plain Git; run oms commands from the canonical checkout or the root.
 Examples:
   $ oms tree add api fix-auth   # worktree at .oms-tree/api/fix-auth/ on new branch fix-auth
@@ -184,8 +198,10 @@ Creates a Git worktree of the initialized submodule oms/<alias>/ at .oms-tree/<a
 checks out branch <task> there. A new branch starts at the submodule's current HEAD commit (--from
 <ref> overrides the start point); an existing branch is resumed at its tip, and --from with an
 existing branch fails. The canonical checkout is never touched — a detached HEAD stays detached.
-Creation needs no network and creates no root commit and no .gitmodules entry. The task name must
-be a valid branch name without "/" separators. Omitted arguments are prompted for interactively.
+Creating the worktree itself needs no network and changes no root registration. Preparation accepts a
+valid pending registration or can offer to register a missing alias first. Approved registration
+commits only when autoCommit in oms.yaml is enabled. The task name must be a valid branch name
+without "/" separators. Omitted arguments are prompted for interactively.
 Examples:
   $ oms tree add api fix-auth                # start fix-auth at the current HEAD
   $ oms tree add api fix-auth --from origin/feature

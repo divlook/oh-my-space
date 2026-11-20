@@ -7,6 +7,7 @@ import {
   hasRegisteredSubmodules,
   isDirty,
   isRegisteredSubmodule,
+  redactSensitiveUrls,
   runGit,
   submoduleInitialized,
   submodulePath,
@@ -63,16 +64,28 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
   }
 
   runGit(repoRoot, ["submodule", "deinit", ...(force ? ["-f"] : []), "--", path]);
-  const rm = runGit(repoRoot, ["rm", "-f", "--", path], true);
+  const rm = runGit(repoRoot, ["rm", "-f", "--", path]);
   if (!rm.success) {
-    // git rm couldn't stage the removal (e.g. the submodule was never initialized).
-    runGit(repoRoot, ["rm", "-f", "--cached", "--", path]);
+    // Git may be able to remove the index entry even when the checkout is already absent.
+    const cached = runGit(repoRoot, ["rm", "-f", "--cached", "--ignore-unmatch", "--", path]);
+    if (!cached.success) {
+      const diagnostic = redactSensitiveUrls(cached.stderr.trim() || rm.stderr.trim());
+      log.error(`${alias}: Git could not remove ${path}. Resolve the Git error and retry "oms unsync ${alias}".${diagnostic ? ` ${diagnostic}` : ""}`);
+      return "failed";
+    }
   }
   // Always strip the registration explicitly: git rm's implicit .gitmodules edit is unreliable
   // across git versions/states, and when it silently no-ops the section is orphaned for good.
   // A missing section just makes these exit non-zero — harmless, output stays captured.
   runGit(repoRoot, ["config", "--file", ".gitmodules", "--remove-section", `submodule.${path}`]);
-  if (existsSync(join(repoRoot, ".gitmodules"))) runGit(repoRoot, ["add", ".gitmodules"]);
+  if (existsSync(join(repoRoot, ".gitmodules"))) {
+    const staged = runGit(repoRoot, ["add", "--", ".gitmodules"]);
+    if (!staged.success) {
+      const diagnostic = redactSensitiveUrls(staged.stderr.trim());
+      log.error(`${alias}: Git could not stage .gitmodules after removal. Resolve the Git error and retry "oms unsync ${alias}".${diagnostic ? ` ${diagnostic}` : ""}`);
+      return "failed";
+    }
+  }
   runGit(repoRoot, ["config", "--remove-section", `submodule.${path}`]);
   try {
     rmSync(join(repoRoot, ".git", "modules", DATA_DIRNAME, alias), { recursive: true, force: true });
@@ -91,9 +104,13 @@ function unsyncRepo(repo: Repo, repoRoot: string, force: boolean): RemoveOutcome
 
   const gitmodules = join(repoRoot, ".gitmodules");
   if (existsSync(gitmodules) && !hasRegisteredSubmodules(repoRoot)) {
-    if (!runGit(repoRoot, ["rm", "-f", "--", ".gitmodules"]).success) {
-      rmSync(gitmodules, { force: true });
+    const removed = runGit(repoRoot, ["rm", "-f", "--ignore-unmatch", "--", ".gitmodules"]);
+    if (!removed.success) {
+      const diagnostic = redactSensitiveUrls(removed.stderr.trim());
+      log.error(`${alias}: Git could not remove .gitmodules. Resolve the Git error and retry "oms unsync ${alias}".${diagnostic ? ` ${diagnostic}` : ""}`);
+      return "failed";
     }
+    rmSync(gitmodules, { force: true });
   }
 
   return "removed";
@@ -105,7 +122,7 @@ export async function runSync(aliases: string[], options: SyncCommitOptions): Pr
     emitLegacyRenameHintWalkUp();
     return 1;
   }
-  const { repos, repoRoot } = loaded;
+  const { repos, repoRoot, autoCommit } = loaded;
   if (abortOnLegacyRenameAt(repoRoot)) return 1;
 
   if (options.list) {
@@ -118,14 +135,14 @@ export async function runSync(aliases: string[], options: SyncCommitOptions): Pr
 
   const picked = await selectRepos(repos, aliases, options, "sync");
   if (!picked || picked.length === 0) return 1;
-  return syncWorkspace(repoRoot, picked, options);
+  return (await syncWorkspace(repoRoot, picked, { ...options, commit: options.commit ?? autoCommit })).code;
 
 }
 
 export async function runUnsync(aliases: string[], options: UnsyncOptions): Promise<number> {
   const loaded = loadForSubmodules();
   if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
+  const { repos, repoRoot, autoCommit } = loaded;
 
   const picked = await selectRepos(repos, aliases, options, "unsync");
   if (!picked || picked.length === 0) return 1;
@@ -174,7 +191,7 @@ export async function runUnsync(aliases: string[], options: UnsyncOptions): Prom
     repoRoot,
     requested: picked.map((r) => r.alias),
     kind: "remove",
-    commit: options.commit,
+    commit: options.commit ?? autoCommit,
     allSucceeded: !results.includes("failed"),
     metadataPlans: [],
     omsYamlBytes: manifest.bytes,

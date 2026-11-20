@@ -5050,8 +5050,8 @@
       "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
-      "id": "tests/cli-sync-a.test.js::multi-alias sync still produces one plural topology commit by default",
-      "name": "multi-alias sync still produces one plural topology commit by default",
+      "id": "tests/cli-sync-a.test.js::opted-in multi-alias sync creates one plural registration commit",
+      "name": "opted-in multi-alias sync creates one plural registration commit",
       "source": "tests/cli-sync-a.test.js",
       "layer": "blackbox",
       "owners": [
@@ -5215,8 +5215,8 @@
       "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
-      "id": "tests/cli-sync-a.test.js::the topology commit default does not depend on stdin being a terminal",
-      "name": "the topology commit default does not depend on stdin being a terminal",
+      "id": "tests/cli-sync-a.test.js::sync commit policy honors manifest defaults, overrides, and conflicting flags",
+      "name": "sync commit policy honors manifest defaults, overrides, and conflicting flags",
       "source": "tests/cli-sync-a.test.js",
       "layer": "blackbox",
       "owners": [
@@ -5479,8 +5479,8 @@
       "processBoundaryRationale": "Uses the production process with owned Git/filesystem state to prove exit status, diagnostics, and preserved-state behavior."
     },
     {
-      "id": "tests/cli-sync-b.test.js::unsync commits the removal topology by default",
-      "name": "unsync commits the removal topology by default",
+      "id": "tests/cli-sync-b.test.js::unsync commit policy honors manifest defaults, overrides, and conflicting flags",
+      "name": "unsync commit policy honors manifest defaults, overrides, and conflicting flags",
       "source": "tests/cli-sync-b.test.js",
       "layer": "blackbox",
       "owners": [
@@ -5523,8 +5523,8 @@
       "processBoundaryRationale": "Exercises an independently owned end-to-end workspace journey through the production CLI bundle."
     },
     {
-      "id": "tests/cli-sync-c.test.js::--no-commit leaves topology unstaged and preserves unrelated staged paths",
-      "name": "--no-commit leaves topology unstaged and preserves unrelated staged paths",
+      "id": "tests/cli-sync-c.test.js::--no-commit retains Git's registration staging and preserves unrelated staged paths",
+      "name": "--no-commit retains Git's registration staging and preserves unrelated staged paths",
       "source": "tests/cli-sync-c.test.js",
       "layer": "blackbox",
       "owners": [
@@ -7294,6 +7294,17 @@
       "processBoundaryRationale": null
     },
     {
+      "id": "tests/unit/core-contracts.test.ts::manifest parses registration commit opt-in as an optional boolean",
+      "name": "manifest parses registration commit opt-in as an optional boolean",
+      "source": "tests/unit/core-contracts.test.ts",
+      "layer": "unit",
+      "owners": [
+        "tests/unit/core-contracts.test.ts"
+      ],
+      "boundary": "in-process-decision",
+      "processBoundaryRationale": null
+    },
+    {
       "id": "tests/unit/core-contracts.test.ts::status path inference respects alias path segment boundaries",
       "name": "status path inference respects alias path segment boundaries",
       "source": "tests/unit/core-contracts.test.ts",
@@ -8634,7 +8645,7 @@
     {
       "baselineId": "tests/cli-sync.contracts.js::--no-commit leaves topology unstaged and preserves unrelated staged paths",
       "finalIds": [
-        "tests/cli-sync-c.test.js::--no-commit leaves topology unstaged and preserves unrelated staged paths"
+        "tests/cli-sync-c.test.js::--no-commit retains Git's registration staging and preserves unrelated staged paths"
       ]
     },
     {
@@ -8709,7 +8720,7 @@
     {
       "baselineId": "tests/cli-sync.contracts.js::multi-alias sync still produces one plural topology commit by default",
       "finalIds": [
-        "tests/cli-sync-a.test.js::multi-alias sync still produces one plural topology commit by default"
+        "tests/cli-sync-a.test.js::opted-in multi-alias sync creates one plural registration commit"
       ]
     },
     {
@@ -9069,7 +9080,7 @@
     {
       "baselineId": "tests/cli-sync.contracts.js::the topology commit default does not depend on stdin being a terminal",
       "finalIds": [
-        "tests/cli-sync-a.test.js::the topology commit default does not depend on stdin being a terminal"
+        "tests/cli-sync-a.test.js::sync commit policy honors manifest defaults, overrides, and conflicting flags"
       ]
     },
     {
@@ -9099,7 +9110,7 @@
     {
       "baselineId": "tests/cli-sync.contracts.js::unsync commits the removal topology by default",
       "finalIds": [
-        "tests/cli-sync-b.test.js::unsync commits the removal topology by default"
+        "tests/cli-sync-b.test.js::unsync commit policy honors manifest defaults, overrides, and conflicting flags"
       ]
     },
     {

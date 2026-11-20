@@ -224,7 +224,7 @@ test("push --remote targets the chosen remote and keeps origin as upstream", () 
   const upstream = initEmptyBare();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", origin, "main", { upstream }));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
 
   writeFileSync(join(cwd, "oms", "api", "feature.txt"), "x");
   git(join(cwd, "oms", "api"), "add", "-A");
@@ -247,7 +247,7 @@ test("push --all pushes every declared repo and summarizes the result", () => {
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--commit"], { cwd }).status, 0);
 
   const heads = {};
   for (const alias of ["api", "web"]) {
@@ -275,7 +275,7 @@ test("an unknown remote fails only its repo and others still push", () => {
     cwd,
     `${sourceFor("a", originA).trimEnd()}\n  - alias: b\n    remotes:\n      origin: file://${originB}\n      upstream: file://${upstreamB}\n    branch: main\n`,
   );
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--commit"], { cwd }).status, 0);
 
   writeFileSync(join(cwd, "oms", "b", "f.txt"), "x");
   git(join(cwd, "oms", "b"), "add", "-A");
@@ -384,7 +384,7 @@ test("plain partial multi-alias sync commits the successful alias and still exit
   const cwd = initGitWorkspace();
   writeSources(
     cwd,
-    `${sourceFor("api", a).trimEnd()}\n  - alias: web\n    remotes:\n      origin: file://${b}\n    branch: nope\n`,
+    `autoCommit: true\n${sourceFor("api", a).trimEnd()}\n  - alias: web\n    remotes:\n      origin: file://${b}\n    branch: nope\n`,
   );
 
   const result = run(["sync", "api", "web"], { cwd });

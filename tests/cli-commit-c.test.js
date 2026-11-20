@@ -110,6 +110,7 @@ test("record --all skips a pending removal and a staged pointer split", () => {
   git(cwd, "add", "oms/web");
   movePointer(cwd, "web", "second");
   assert.equal(run(["unsync", "core", "--no-commit"], { cwd }).status, 0);
+  git(cwd, "restore", "--staged", "--", ".gitmodules", "oms/core");
 
   const result = run(["record", "--all"], { cwd });
   const output = result.stdout + result.stderr;
@@ -202,7 +203,7 @@ test("push with an omitted alias list resolves through the multi-select prompt",
   const b = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: a }, { alias: "web", bare: b }]));
-  assert.equal(run(["sync", "--all"], { cwd }).status, 0);
+  assert.equal(run(["sync", "--all", "--commit"], { cwd }).status, 0);
 
   const before = { api: gitOut(a, "rev-parse", "main"), web: gitOut(b, "rev-parse", "main") };
   const heads = {};
@@ -268,6 +269,7 @@ test("sync restore reconciles .gitmodules metadata through the unified finalizat
   // The removal must stay uncommitted, or the root gitlink disappears from HEAD and the next sync
   // takes the fresh-add path instead of restorePendingRemoval — silently voiding this test's subject.
   assert.equal(run(["unsync", "api", "--no-commit"], { cwd }).status, 0);
+  git(cwd, "restore", "--staged", "--", ".gitmodules", "oms/api");
   writeFileSync(cwd + "/oms.yaml", `repos:\n  - alias: api\n    remotes:\n      origin: file://${bare}\n    branch: develop\n`);
 
   const result = run(["sync", "api", "--commit"], { cwd });

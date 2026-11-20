@@ -26,15 +26,16 @@ type TopologyInput = {
   repoRoot: string;
   requested: string[];
   kind: TopologyKind;
-  commit: boolean | undefined;
+  commit: boolean;
   allSucceeded: boolean;
   metadataPlans?: AliasMetadataPlan[];
   omsYamlBytes?: Buffer | null;
   metadataAliases?: string[];
+  staged?: ReadonlyMap<string, string>;
 };
 
 export async function finalizeTopology(input: TopologyInput): Promise<number> {
-  const { repoRoot, requested, kind, commit, allSucceeded, metadataPlans = [], omsYamlBytes = null, metadataAliases = [] } = input;
+  const { repoRoot, requested, kind, commit, allSucceeded, metadataPlans = [], omsYamlBytes = null, metadataAliases = [], staged } = input;
   const topoPending: string[] = [];
   const partial: string[] = [];
   for (const alias of requested) {
@@ -59,13 +60,11 @@ export async function finalizeTopology(input: TopologyInput): Promise<number> {
         ? `chore(oms): reconcile ${pending[0]} submodule metadata`
         : "chore(oms): reconcile submodule metadata";
 
-  // The topology commit is the default; only an explicit --no-commit declines it. Resolving here
-  // rather than at the flag keeps the default identical for piped shells and programmatic callers.
-  const createCommit = commit ?? true;
-
-  if (!createCommit) {
-    unstageTopologyPaths(repoRoot, involved);
-    log.info("Root topology changes left unstaged. Review and commit them, or re-run without --no-commit.");
+  if (!commit) {
+    if (pending.length > 0) {
+      const command = kind === "add" ? "sync" : "unsync";
+      log.info(`To commit the root changes, run "oms ${command} ${pending.join(" ")} --commit".`);
+    }
     return 0;
   }
 
@@ -116,6 +115,7 @@ export async function finalizeTopology(input: TopologyInput): Promise<number> {
     metadataPlans: metadataPlans.filter((p) => pendingSet.has(p.alias)),
     message,
     omsYamlBytes,
+    ...(staged ? { staged } : {}),
   });
   if (!fin.ok) {
     const retry = kind === "remove" ? "oms unsync <alias> --commit" : "oms sync <alias> --commit";

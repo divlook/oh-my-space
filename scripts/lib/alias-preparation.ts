@@ -1,12 +1,15 @@
 import { cancel, log } from "@clack/prompts";
-import { aliasDir, currentBranch, listLocalBranches, localBranchOid, redactSensitiveUrls, runGit, runSub, shortOid, submoduleInitialized, submodulePath } from "./git.js";
-import { redactingGitRunner } from "./git.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { MANIFEST_FILENAME } from "./constants.js";
+import { aliasDir, currentBranch, listLocalBranches, localBranchOid, redactSensitiveUrls, redactingGitRunner, runGit, runSub, shortOid, submodulePath } from "./git.js";
+import { parseManifest } from "./manifest.js";
 import { canPrompt, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
 import { syncWorkspace } from "./sync-workspace.js";
 import { attachBranch, gitmodulesBranch } from "./submodule-config.js";
+import type { OperationResult, Repo } from "./types.js";
+import { aliasRegistration, pendingRegistrationGuidance, type AliasRegistration } from "./alias-registration.js";
 import { assertRootTopologySafe } from "./workspace-state.js";
-import type { Repo } from "./types.js";
-import { aliasRegistration, type AliasRegistration } from "./alias-registration.js";
 
 
 
@@ -20,14 +23,37 @@ type PrepareOptions = {
    * local state a new clone cannot contain, so they refuse instead.
    */
   topologyOffer: boolean;
-  /**
-   * Whether an incomplete root registration blocks the command. Commands that read or change root
-   * topology need it settled first; commands confined to the submodule working tree do not, and
-   * pending add/remove topology must not stop them — `oms commit` is documented to commit source
-   * changes and merely hint about the pending topology afterwards.
-   */
-  requiresSettledTopology?: boolean;
 };
+
+const PENDING_ELIGIBLE: Readonly<Record<string, true | undefined>> = {
+  fetch: true,
+  pull: true,
+  commit: true,
+  "branch list": true,
+  "branch switch": true,
+  "branch checkout": true,
+  "tree add": true,
+};
+
+function readCommitOffer(repoRoot: string): boolean | null {
+  try {
+    return parseManifest(readFileSync(join(repoRoot, MANIFEST_FILENAME), "utf8")).autoCommit;
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${redactSensitiveUrls(error.message)}` : "";
+    log.error(`Could not determine autoCommit from ${MANIFEST_FILENAME}${detail}. No registration was attempted; fix the problem and rerun.`);
+    return null;
+  }
+}
+
+function commitConsequence(autoCommit: boolean): string {
+  return autoCommit
+    ? "autoCommit is enabled: sync will try to create a root registration commit"
+    : "autoCommit is disabled: sync will not create a root registration commit";
+}
+
+function syncForPreparation(repoRoot: string, repos: Repo[], autoCommit: boolean) {
+  return syncWorkspace(repoRoot, repos, { commit: autoCommit, delegated: true }, redactingGitRunner);
+}
 
 
 function initializeRegisteredAlias(repoRoot: string, repo: Repo, command: string): PrepareResult {
@@ -80,27 +106,43 @@ function prepareExistingAlias(
   registration: AliasRegistration,
 ): PrepareResult | null {
   const { command } = options;
-  if (registration === "initialized") return { ok: true };
-  if (registration === "indeterminate") {
-    // Transient, so the remedy is to retry — not to repair a registration that may be perfectly fine.
-    log.error(
-      `${repo.alias}: the index .gitmodules sources could not be listed; retry once Git is idle. Nothing was changed.`,
-    );
+  if (registration.kind === "initialized") return { ok: true };
+  if (registration.kind === "pending registration") {
+    if (Object.hasOwn(PENDING_ELIGIBLE, command)) return { ok: true };
+    log.error(`${repo.alias}: ${pendingRegistrationGuidance(repo.alias)}`);
     return { ok: false, code: 1 };
   }
-  if (registration === "registered-uninitialized") return initializeRegisteredAlias(repoRoot, repo, command);
-  if (registration === "partially registered") {
-    // A submodule-only command can work in a usable checkout even while root topology is pending;
-    // blocking it here would break `oms commit` under pending add topology.
-    if (options.requiresSettledTopology === false && submoduleInitialized(repoRoot, repo.alias)) {
-      return { ok: true };
-    }
+  if (registration.kind === "indeterminate") {
+    log.error(`${repo.alias}: ${registration.reason}; retry once Git is idle. Nothing was changed.`);
+    return { ok: false, code: 1 };
+  }
+  if (registration.kind === "registered-uninitialized") return initializeRegisteredAlias(repoRoot, repo, command);
+  if (registration.kind === "partially registered") {
     log.error(
-      `${repo.alias}: root gitlink and .gitmodules registration are inconsistent or pending addition/removal. Repository state was preserved. Repair it with "oms sync ${repo.alias}", then retry.`,
+      `${repo.alias}: inconsistent root registration (${registration.reason}). Repository state was preserved. Repair it with "oms sync ${repo.alias}", then retry.`,
     );
     return { ok: false, code: 1 };
   }
   return null;
+}
+
+function prepareAfterSync(
+  repoRoot: string,
+  repo: Repo,
+  options: PrepareOptions,
+  outcome: OperationResult | undefined,
+  syncCode: number,
+): PrepareResult {
+  if (outcome !== "added" && outcome !== "updated") {
+    log.error(`${repo.alias}: sync and continue failed. Sync's partial state was preserved.`);
+    return { ok: false, code: syncCode || 2 };
+  }
+  const registration = aliasRegistration(repoRoot, repo.alias);
+  if (registration.kind === "unregistered" || registration.kind === "registered-uninitialized") {
+    log.error(`${repo.alias}: sync completed but did not produce an initialized registration. Run "oms sync ${repo.alias}" to repair it.`);
+    return { ok: false, code: 2 };
+  }
+  return prepareExistingAlias(repoRoot, repo, options, registration)!;
 }
 
 export async function prepareAlias(
@@ -118,9 +160,11 @@ export async function prepareAlias(
     );
     return { ok: false, code: 1 };
   }
+  const autoCommit = readCommitOffer(repoRoot);
+  if (autoCommit === null) return { ok: false, code: 1 };
 
   const choice = await guardedSelect<string>({
-    message: `${repo.alias} is not registered; sync creates root submodule topology`,
+    message: `${repo.alias} is not registered; sync creates root submodule topology. ${commitConsequence(autoCommit)}.`,
     initialValue: "sync",
     options: [
       { value: "sync", label: "sync and continue", hint: `run oms sync ${repo.alias}, then ${command}` },
@@ -133,21 +177,15 @@ export async function prepareAlias(
   }
   const topology = assertRootTopologySafe(repoRoot, repo.alias);
   if (!topology.safe) {
-    log.error(
-      `${repo.alias}: sync cannot start because ${topology.reason} Root state was preserved. Repair it, then run "oms sync ${repo.alias}".`,
-    );
+    log.error(`${repo.alias}: sync cannot start because ${topology.reason} Root state was preserved. Repair it, then run "oms sync ${repo.alias}".`);
     return { ok: false, code: 1 };
   }
-  const code = await syncWorkspace(repoRoot, [repo], {}, redactingGitRunner);
-  if (code !== 0) {
-    log.error(`${repo.alias}: sync and continue failed. Sync's partial state and exit code were preserved.`);
-    return { ok: false, code };
+  const sync = await syncForPreparation(repoRoot, [repo], autoCommit);
+  if (!sync.finalized) {
+    log.error(`${repo.alias}: sync and continue failed; "oms ${command}" was not run.`);
+    return { ok: false, code: sync.code || 2 };
   }
-  if (!submoduleInitialized(repoRoot, repo.alias)) {
-    log.error(`${repo.alias}: sync completed but the submodule is not initialized. Run "oms sync ${repo.alias}" to repair it.`);
-    return { ok: false, code: 2 };
-  }
-  return { ok: true };
+  return prepareAfterSync(repoRoot, repo, options, sync.outcomes.get(repo.alias), sync.code);
 }
 
 type AttachVerdict =
@@ -245,11 +283,7 @@ type BatchPreparation = {
   cancelled: boolean;
 };
 
-/**
- * Prepare a whole selection with at most one topology decision. Hoisting the choice out of the
- * per-alias loop keeps `oms pull --all` from asking once per alias and producing one root commit
- * each, which is what a per-alias `prepareAlias` would do.
- */
+/** Prepare a whole selection with at most one topology decision and one delegated sync. */
 export async function prepareAliases(
   repoRoot: string,
   repos: Repo[],
@@ -257,14 +291,9 @@ export async function prepareAliases(
 ): Promise<BatchPreparation> {
   const { command, topologyOffer, explicitSelection } = options;
   const result: BatchPreparation = { outcomes: new Map(), cancelled: false };
-  const unregistered: Repo[] = [];
-
   const registrations = new Map(repos.map((repo) => [repo.alias, aliasRegistration(repoRoot, repo.alias)]));
-  for (const repo of repos) {
-    if (registrations.get(repo.alias) === "unregistered") unregistered.push(repo);
-  }
+  const unregistered = repos.filter((repo) => registrations.get(repo.alias)!.kind === "unregistered");
 
-  let registerUnregistered = false;
   if (unregistered.length > 0 && topologyOffer) {
     if (!canPrompt()) {
       for (const repo of unregistered) {
@@ -274,15 +303,24 @@ export async function prepareAliases(
         result.outcomes.set(repo.alias, "failed");
       }
     } else {
+      const autoCommit = readCommitOffer(repoRoot);
+      if (autoCommit === null) {
+        for (const repo of repos) result.outcomes.set(repo.alias, "failed");
+        return result;
+      }
       const names = unregistered.map((r) => r.alias).join(", ");
-      // A named alias carries unambiguous intent, so registering is the default. A --all or
-      // multi-select sweep named nothing, so a reflexive Enter must not clone and commit topology.
-      const syncOption = { value: "sync", label: `sync ${unregistered.length > 1 ? "all" : ""}and continue`.replace("  ", " "), hint: `register ${names}, then ${command}` };
+      // Register by default only when the selection named an alias rather than widening the request.
+      const syncOption = {
+        value: "sync",
+        label: unregistered.length > 1 ? "sync all and continue" : "sync and continue",
+        hint: `register ${names}, then ${command}`,
+      };
       const skipOption = { value: "skip", label: "skip them, continue with the rest", hint: "leave root topology unchanged" };
+      const description = unregistered.length === 1
+        ? `${names} is not registered`
+        : `${unregistered.length} aliases are not registered (${names})`;
       const choice = await guardedSelect<string>({
-        message: unregistered.length === 1
-          ? `${names} is not registered; sync creates root submodule topology`
-          : `${unregistered.length} aliases are not registered (${names}); sync creates root submodule topology`,
+        message: `${description}; sync creates root submodule topology. ${commitConsequence(autoCommit)}.`,
         initialValue: explicitSelection ? "sync" : "skip",
         options: explicitSelection
           ? [syncOption, skipOption, { value: "cancel", label: "cancel", hint: "perform no operation" }]
@@ -293,48 +331,31 @@ export async function prepareAliases(
         result.cancelled = true;
         return result;
       }
-      registerUnregistered = choice === "sync";
-    }
-  }
-
-  if (registerUnregistered) {
-    for (const repo of unregistered) {
-      const topology = assertRootTopologySafe(repoRoot, repo.alias);
-      if (topology.safe) continue;
-      log.error(`${repo.alias}: sync cannot start because ${topology.reason} Root state was preserved.`);
-      result.outcomes.set(repo.alias, "failed");
-    }
-    const syncable = unregistered.filter((repo) => !result.outcomes.has(repo.alias));
-    if (syncable.length > 0) {
-      const code = await syncWorkspace(repoRoot, syncable, {}, redactingGitRunner);
-      if (code !== 0) {
-        log.error(`sync and continue failed. Sync's partial state and exit code were preserved.`);
-      }
-      // Never ask a second topology question after delegated sync. Complete registrations can
-      // continue; aliases left unregistered or partial retain the sync failure and are excluded.
-      for (const repo of syncable) {
-        const registration = aliasRegistration(repoRoot, repo.alias);
-        registrations.set(repo.alias, registration);
-        if (registration === "initialized" || registration === "registered-uninitialized") continue;
-        log.error(`${repo.alias}: sync and continue did not produce a complete registration.`);
-        result.outcomes.set(repo.alias, "failed");
+      if (choice === "sync") {
+        const sync = await syncForPreparation(repoRoot, unregistered, autoCommit);
+        if (!sync.finalized) {
+          log.error(`sync and continue failed; "oms ${command}" was not run for any alias.`);
+          for (const repo of repos) result.outcomes.set(repo.alias, "failed");
+          return result;
+        }
+        for (const repo of unregistered) {
+          const prepared = prepareAfterSync(repoRoot, repo, options, sync.outcomes.get(repo.alias), sync.code);
+          result.outcomes.set(repo.alias, prepared.ok ? "ready" : "failed");
+        }
+      } else {
+        for (const repo of unregistered) {
+          log.warn(`${repo.alias}: skipped (not registered).`);
+          result.outcomes.set(repo.alias, "skipped");
+        }
       }
     }
   }
 
   for (const repo of repos) {
     if (result.outcomes.has(repo.alias)) continue;
-    if (!registerUnregistered && registrations.get(repo.alias) === "unregistered") {
-      if (topologyOffer && canPrompt()) {
-        log.warn(`${repo.alias}: skipped (not registered).`);
-        result.outcomes.set(repo.alias, "skipped");
-      } else if (!topologyOffer) {
-        refuseUnregistered(repo, command);
-        result.outcomes.set(repo.alias, "failed");
-      }
-      continue;
-    }
-    const prepared = prepareExistingAlias(repoRoot, repo, options, registrations.get(repo.alias)!)!;
+    const registration = registrations.get(repo.alias)!;
+    const prepared = prepareExistingAlias(repoRoot, repo, options, registration)
+      ?? refuseUnregistered(repo, command);
     result.outcomes.set(repo.alias, prepared.ok ? "ready" : "failed");
   }
   return result;
