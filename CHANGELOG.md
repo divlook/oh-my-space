@@ -1,5 +1,11 @@
 # oh-my-space
 
+## 2.0.5
+
+### Patch Changes
+
+- [#107](https://github.com/divlook/oh-my-space/pull/107) [`f106125`](https://github.com/divlook/oh-my-space/commit/f106125842721b5e37f0f5ecec704cc307f5a54c) Thanks [@divlook](https://github.com/divlook)! - Reduce Git subprocess calls in workspace status, multi-alias preparation, branch cleanup, and root finalization. Preserve command output, recorded pointers, and fresh safety checks before mutations.
+
 ## 2.0.4
 
 ### Patch Changes
