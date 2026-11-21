@@ -17,12 +17,14 @@ if (write) {
     process.exit(1);
   }
   const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));
+  const overrides = existsSync(migrationOverridesPath) ? JSON.parse(readFileSync(migrationOverridesPath, "utf8")) : {};
+  const boundaries = overrides.processBoundaries ?? {};
   const previousContracts = new Map((previous?.contracts ?? []).map((contract) => [contract.id, contract]));
   const contracts = discovered.map((contract) => ({
     ...contract,
-    boundary: previousContracts.get(contract.id)?.boundary ?? boundaryFor(contract),
+    boundary: previousContracts.get(contract.id)?.boundary ?? boundaries[contract.id]?.boundary ?? boundaryFor(contract),
     processBoundaryRationale: contract.layer === "blackbox"
-      ? previousContracts.get(contract.id)?.processBoundaryRationale ?? null
+      ? previousContracts.get(contract.id)?.processBoundaryRationale ?? boundaries[contract.id]?.reason ?? null
       : null,
   }));
   const baseline = previous?.baseline ?? {
@@ -38,7 +40,6 @@ if (write) {
       measuredOwnerDurationMs: evidence.owners[contract.owners[0]]?.durationMs,
     })),
   };
-  const overrides = existsSync(migrationOverridesPath) ? JSON.parse(readFileSync(migrationOverridesPath, "utf8")) : {};
   const currentIds = new Set(contracts.map((contract) => contract.id));
   const previousMigrations = new Map((previous?.migrations ?? []).map((entry) => [entry.baselineId, entry]));
   const migrations = baseline.contracts.map((contract) => {

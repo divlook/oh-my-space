@@ -1,11 +1,11 @@
 ---
 name: oms-branch
 description: Use to inspect, create, switch, or delete source branches in OMS, or to choose a separate task checkout.
-compatibility: Requires oh-my-space >=1.0.0-0.
+compatibility: Requires oh-my-space >=3.0.0-0.
 metadata:
   author: oh-my-space
-  version: "1.2.0"
-  oh-my-space-version: ">=1.0.0-0"
+  version: "2.0.0"
+  oh-my-space-version: ">=3.0.0-0"
 ---
 
 # Choose a source branch
@@ -16,16 +16,15 @@ Use a branch for new source commits.
 
 ## Scope guardrail
 
-- Run `oms status --json` before Git work involving `oms/` to identify the main project and each source repository.
-- Treat each `oms/<alias>/` directory as a separate Git repository.
-- Use `oms` commands for workflows in `oms/<alias>/`.
-- Create main-project commits for existing pointer updates only when the user explicitly runs `oms record <alias>`.
+- Run `oms status --json` before Git work involving `oms/` and check `schemaVersion: 2`. Use `oms status --help` for the installed version's fields.
+- Choose the repository that owns the change: the workspace root for shared files, or the independent `oms/<alias>/` checkout for source work.
+- Commit and push in the intended source checkout without a root pointer step.
+- Use plain Git inside managed trees at `.oms-tree/<alias>/<task>/`.
 
 ## Choose the command
 
 1. Run `oms branch list <alias>` to inspect local and remote branches.
-   OMS prepares existing registration when safe.
-   It refreshes the declared remotes.
+   OMS refreshes the declared remotes in the selected checkout.
 2. Select the command that matches the task:
    - For a new or existing local branch, run `oms branch switch <alias> <branch>`.
      OMS creates a missing local branch.
@@ -56,14 +55,11 @@ Use the managed-tree procedure in the `oms-workspace` skill for work inside the 
    Force still protects the current branch and baseline branches.
 
 OMS deletes neither remote branches nor remote-tracking references.
-It does not change the recorded pointer.
 Use this command instead of raw `git branch -d` or `git branch -D` to retain baseline protection.
 For a remote branch deletion, use Git directly against the remote.
 
 ## Command reference
 
-These instructions use `oms status --json` schemaVersion 1.
-For another schemaVersion, read `oms status --help` for the installed version's field definitions.
 Read the relevant command's help for fields, preparation, freshness, options, and exit behavior:
 
 - `oms branch list --help`

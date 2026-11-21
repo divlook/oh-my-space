@@ -2,25 +2,23 @@
 
 [![npm version](https://img.shields.io/npm/v/oh-my-space.svg)](https://www.npmjs.com/package/oh-my-space)
 
-`oh-my-space` (OMS) manages multi-repository workspaces with Git submodules. Source repositories use normal branches. The main project records each source repository's exact commit.
+`oh-my-space` (OMS) is a small CLI for managing multi-repository workspaces with independent Git clones. Share one repository list with your team and keep your own source branches on each computer.
 
 ## Who it helps
 
 Use OMS when you:
 
 - develop one product across several repositories and need adjacent checkouts.
-- need reproducible workspaces with exact source commits recorded in the main project.
 - need branch, commit, pull, and push workflows that avoid accidental detached checkouts.
-- need source-commit changes to remain visible until you record them in the main project.
 - use AI coding tools that need a clear boundary between the main project and source repositories.
 
-OMS preserves Git's reproducibility and automates routine submodule setup and bounded recovery. OMS asks when a choice depends on your intent.
+OMS provisions missing repositories without moving existing checkouts. The workspace root tracks the repository list, not the exact source commits.
 
 ## Requirements
 
 - [Node.js](https://nodejs.org) `^24 || >=26`
 - Git `>=2.40`
-- A Git repository with `oms.yaml` at its top level before you synchronize repositories
+- A Git repository with `oms.yaml` at its top level before you clone repositories
 
 Node 24 is the minimum supported line and the development, release, and required CI baseline.
 Node 26 and later are permitted, but not every future version is verified.
@@ -57,10 +55,10 @@ repos:
     branch: main # optional; defaults to the remote's default branch
 ```
 
-Synchronize the workspace:
+Clone the declared repositories:
 
 ```bash
-oms sync --all
+oms clone --all
 ```
 
 Inspect its state:
@@ -69,12 +67,14 @@ Inspect its state:
 oms status
 ```
 
-The source repository is now available at `oms/api/`. With the default settings, syncing does not commit its registration. Follow [Getting started](https://github.com/divlook/oh-my-space/blob/main/docs/getting-started.md) to commit the registration and complete your first source change.
+The source repository is now available at `oms/api/`. Commit `oms.yaml` in the root to share the declaration. See [Getting started](https://github.com/divlook/oh-my-space/blob/main/docs/getting-started.md) to complete your first branch, commit, and push.
+
+Upgrading an existing workspace? Follow [Migrate from OMS 2.x to 3.0.0](https://github.com/divlook/oh-my-space/blob/main/docs/migrations/2.x-to-3.0.0.md) before cloning over any old source location.
 
 ## Documentation
 
 - [Getting started](https://github.com/divlook/oh-my-space/blob/main/docs/getting-started.md): Read for workspace setup and your first source change.
-- [How OMS works](https://github.com/divlook/oh-my-space/blob/main/docs/how-oms-works.md): Read for layout, repository boundaries, recorded commits, managed trees, synchronization, status, safety, and recovery.
+- [How OMS works](https://github.com/divlook/oh-my-space/blob/main/docs/how-oms-works.md): Read for layout, repository boundaries, managed trees, status, safety, and recovery.
 - [Commands](https://github.com/divlook/oh-my-space/blob/main/docs/commands.md): Read to choose a command and Git scope. Use `oms <command> --help` for exact arguments, options, and exit behavior.
 - [Configure your workspace](https://github.com/divlook/oh-my-space/blob/main/docs/configure-your-workspace.md): Read to define repositories, remotes, and starting branches in `oms.yaml`.
 - [AI coding tools](https://github.com/divlook/oh-my-space/blob/main/docs/ai-coding-tools.md): Read to install agent instructions and workspace skills that preserve repository boundaries.

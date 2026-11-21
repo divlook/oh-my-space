@@ -1,24 +1,23 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { runExec } from "../../scripts/lib/exec.js";
-import { configIdentity, git, gitOut, initBareUpstream, initGitWorkspace, sourceFor, syncedSubmodule, tempFixture, testEnv } from "../helpers.js";
+import { runIndependentExec as runExec } from "../../scripts/lib/exec.js";
+import { git, gitOut, sourcesFor, tempFixture, testEnv, workspaceWithApi, writeSources } from "../helpers.js";
 Object.assign(process.env, testEnv);
 
 function workspace() {
-  const cwd = initGitWorkspace();
-  const bare = initBareUpstream();
-  syncedSubmodule(cwd, "api", bare);
-  syncedSubmodule(cwd, "web", bare);
-  writeSources(cwd, bare, ["api", "web"]);
+  const { cwd, bare } = workspaceWithApi();
+  git(cwd, "clone", "--branch", "main", `file://${bare}`, "oms/web");
+  appendFileSync(join(cwd, ".git", "info", "exclude"), "\n/oms/web/\n");
+  declareSources(cwd, bare, ["api", "web"]);
   git(cwd, "add", "oms.yaml");
   git(cwd, "commit", "-m", "declare both");
   return { cwd, bare };
 }
-function writeSources(cwd: string, bare: string, aliases: string[]) {
-  writeFileSync(join(cwd, "oms.yaml"), "repos:\n" + aliases.map(alias => sourceFor(alias, bare).replace("repos:\n", "")).join(""));
+function declareSources(cwd: string, bare: string, aliases: string[]) {
+  writeSources(cwd, sourcesFor(aliases.map((alias) => ({ alias, bare }))));
 }
 function snapshot(cwd: string) {
   return { head: gitOut(cwd, "rev-parse", "HEAD"), index: gitOut(cwd, "ls-files", "--stage"),
@@ -31,11 +30,11 @@ async function at(cwd: string, action: () => Promise<number>) {
 }
 
 test("exec accepts dirty detached canonical targets without changing root or source Git state", async () => {
-  const { cwd } = workspace();
+  const { cwd, bare } = workspace();
   const api = join(cwd, "oms", "api");
   git(api, "checkout", "--detach");
   writeFileSync(join(api, "dirty.txt"), "keep");
-  git(api, "remote", "set-url", "origin", "/unreachable/exec-test");
+  renameSync(bare, `${bare}-offline`);
   const paths = [cwd, api, join(cwd, "oms", "web")];
   const before = paths.map(snapshot);
   assert.equal(await at(cwd, () => runExec(["api", "web"], {}, [process.execPath, "-e", "console.log(process.cwd())"])), 0);
@@ -46,7 +45,6 @@ test("exec fails unavailable and foreign targets individually without preparatio
   const { cwd, bare } = workspace();
   const cloned = tempFixture("exec-uninit-");
   execFileSync("git", ["clone", cwd, cloned], { env: testEnv, stdio: "ignore" });
-  configIdentity(cloned);
   const beforeClone = snapshot(cloned);
   assert.equal(await at(cloned, () => runExec([], { all: true }, [process.execPath, "-e", "require('fs').writeFileSync('ran','bad')"])), 2);
   assert.equal(existsSync(join(cloned, "oms", "api", ".git")), false);
@@ -55,14 +53,14 @@ test("exec fails unavailable and foreign targets individually without preparatio
   mkdirSync(join(cwd, "oms", "api"));
   git(join(cwd, "oms", "api"), "init");
   writeFileSync(join(cwd, "oms", "api", "foreign"), "keep");
-  writeSources(cwd, bare, ["api", "missing", "web"]);
+  declareSources(cwd, bare, ["api", "missing", "web"]);
   const before = snapshot(cwd);
   assert.equal(await at(cwd, () => runExec([], { all: true }, [process.execPath, "-e", "require('fs').writeFileSync('ran','yes')"])), 2);
   assert.equal(existsSync(join(cwd, "oms", "api", "ran")), false);
   assert.equal(readFileSync(join(cwd, "oms", "api", "foreign"), "utf8"), "keep");
   assert.equal(existsSync(join(cwd, "oms", "missing")), false);
   assert.equal(readFileSync(join(cwd, "oms", "web", "ran"), "utf8"), "yes");
-  assert.deepEqual({ ...snapshot(cwd), status: before.status }, before);
+  assert.deepEqual(snapshot(cwd), before);
 });
 
 test("exec preserves literal arguments and failure effects while running unique aliases sequentially", async () => {
@@ -79,7 +77,7 @@ test("exec preserves literal arguments and failure effects while running unique 
   assert.equal(await at(cwd, () => runExec(["api", "web"], {}, [join(cwd, "no-such-executable")])), 2);
 });
 
-test("exec rechecks later targets after a child changes their registration", async () => {
+test("exec rechecks later targets after a child moves their checkout", async () => {
   const { cwd } = workspace();
   const script = "const fs=require('fs');fs.renameSync('../web','../saved-web');fs.writeFileSync('ran','yes')";
   assert.equal(await at(cwd, () => runExec(["api", "web"], {}, [process.execPath, "-e", script])), 2);

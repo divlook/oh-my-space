@@ -1,8 +1,6 @@
 # AI coding tools
 
-An AI coding agent can accidentally commit in the main project instead of `oms/<alias>/`.
-It can also record a source commit before it pushes that commit.
-OMS provides machine-readable status, repository instructions, and installable skills to make that Git boundary explicit.
+An AI coding agent can accidentally commit in the workspace root instead of `oms/<alias>/`. OMS provides machine-readable status, repository instructions, and installable skills so agents can choose the repository that owns each change.
 
 ## Inspect workspace scope
 
@@ -16,16 +14,17 @@ For the installed CLI's authoritative field contract, run `oms status --help`.
 
 ### Status reference
 
-The command prints one schema-versioned JSON object with these fields:
+The command prints one JSON object with `schemaVersion: 2`:
 
-- Workspace root
-- Inferred current alias
-- Recorded commits
-- Source branches
-- Dirtiness
-- Ahead/behind state
+- `workspaceRoot` is the absolute workspace path. `currentAlias` is the declared alias at the current directory, if any.
+- `root` reports the main project's branch, short HEAD SHA, detached state, and working changes.
+- `repos` reports only current declarations. Each entry includes checkout availability, branch and HEAD, local tracking divergence, and working changes. Unavailable state is reported in `error` when inspection fails.
+- `trees` lists managed trees under `.oms-tree/`, including broken links and foreign directories.
+- `errors` summarizes inspection failures. The command still prints valid JSON for partial failures and exits with code 2.
 
-The `trees` array lists managed trees under `.oms-tree/`, including broken links and foreign directories.
+The `root.changes` and `repos[].changes` objects contain numeric `staged`, `unstaged`, and `untracked` path counts. A path changed in both the index and the working tree contributes to both counts. `ahead` and `behind` are `null` when there is no tracking branch.
+
+Pass aliases, for example `oms status api --json`, to narrow the source and tree lists. Root and current-alias context are still included.
 
 ## Install repository instructions
 
@@ -57,12 +56,12 @@ Sessions under `oms/` can see the marker block.
 Use project scope by default.
 Project scope is the recommended choice because the skills apply only in an OMS workspace.
 
-OMS publishes three skills through the external Vercel Labs `skills` tool:
+OMS publishes two skills through the external Vercel Labs `skills` tool:
 
 ```bash
 npx skills add divlook/oh-my-space/skills
 npx skills add divlook/oh-my-space/skills -g
-npx skills add divlook/oh-my-space/skills --skill oms-pointer
+npx skills add divlook/oh-my-space/skills --skill oms-branch
 npx skills add divlook/oh-my-space/skills --list
 ```
 
@@ -74,8 +73,7 @@ It forwards supported arguments to `npx skills`.
 
 | Skill | Use it when | Guardrail |
 | --- | --- | --- |
-| `oms-workspace` | Git scope is ambiguous, a pointer moves, repository registration changes, or commands must run across source repositories. | Separates main-project and source changes. Separates registration from recorded-commit updates. Selects canonical checkouts for `oms exec`. Keeps task commands inside managed trees. |
-| `oms-pointer` | `oms commit` or `oms pull` moves a source checkout. | Pushes and records the moved commit deliberately. Excludes unrelated main-project paths. |
+| `oms-workspace` | Git scope is ambiguous, a checkout is unavailable, or commands must run across sources. | Separates root changes from source work, selects canonical checkouts for `oms exec`, and keeps task commands inside managed trees. |
 | `oms-branch` | You start or switch a branch in a source repository. | Chooses a new local branch versus an existing remote branch. Avoids an unintended detached checkout. |
 
 Skill loading is best-effort.
@@ -88,8 +86,7 @@ Skills do not replace either source of instructions.
 Use the `oms-workspace` skill when a task needs tests, builds, or inspections across canonical source checkouts.
 A **canonical checkout** is the declared source repository at `oms/<alias>/`.
 The skill selects these checkouts for `oms exec`.
-`oms-workspace` version 1.4.0 requires OMS >=1.2.0-0.
-This range includes beta releases of OMS 1.2.0.
+The independent-checkout skills require OMS `>=3.0.0-0`, including OMS 3.0 betas.
 
 1. Read `oms exec --help`.
 2. Select only the aliases that the task includes.
@@ -102,7 +99,7 @@ oms exec api web -- npm test
 4. Check the result for every selected alias.
 
 OMS does not prepare unavailable targets.
-Do not treat the printed `oms sync <alias>` guidance as permission to change repository registration.
+The `oms clone <alias>` guidance does not authorize provisioning. Clone only if the request includes it.
 OMS continues after command or target failures.
 Ctrl+C stops later targets, but OMS preserves effects from commands that already ran.
 See [Run commands across repositories](commands.md#run-commands-across-repositories) for arguments, exit codes, and interruption limits.
@@ -177,9 +174,7 @@ A registry lookup failure preserves the local mismatch report with explicit stab
 6. Run checks inside `oms/<alias>/`. Use `oms exec` from the root for checks across selected canonical checkouts.
 7. Use `oms commit <alias>` for the source repository.
 8. Use `oms push <alias>` for the source repository.
-9. Use `oms record <alias>` to commit the new recorded commit in the main project.
-10. Run `oms status --json` again.
-11. Check that no unintended Git scope changed.
+9. Run `oms status --json` again and check that no unintended repository changed.
 
 For a second task in the same repository, use a managed tree instead of switching the canonical checkout:
 
@@ -190,8 +185,7 @@ For a second task in the same repository, use a managed tree instead of switchin
 5. Use plain Git inside the tree to push the `<task>` branch.
 6. Open a pull request from the pushed branch.
 7. After the pull request merges, run `oms pull <alias>`.
-8. Then run `oms record <alias>`.
-9. When the task ends, remove the tree with `oms tree remove <alias> <task>`.
+8. When the task ends, remove the tree with `oms tree remove <alias> <task>`.
 
 ### Managed tree reference
 

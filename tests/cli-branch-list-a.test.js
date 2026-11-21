@@ -1,9 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { testEnv, run, queueEnv, tempFixture, writeSources, git, initBareUpstream, initGitWorkspace, gitOut, initEmptyBare, sourceFor, syncedSubmodule, workspaceWithApi } from "./helpers.js";
+import { testEnv, run, queueEnv, tempFixture, writeSources, git, initBareUpstream, initGitWorkspace, gitOut, initEmptyBare, sourceFor, sourcesFor, workspaceWithApi, workspaceWithMovedApi } from "./helpers.js";
 
 function gitFailureEnv(command, diagnostic) {
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
@@ -18,41 +18,45 @@ function gitFailureEnv(command, diagnostic) {
   return { ...testEnv, PATH: `${stubDir}${delimiter}${process.env.PATH}` };
 }
 
-test("branch list auto-selects and initializes the sole registered alias using the manifest URL without rewriting metadata", () => {
+test("branch list auto-selects the sole eligible clone without rewriting root Git state or the manifest", () => {
   const { cwd, wt: dir } = workspaceWithApi();
-  git(cwd, "config", "--file", ".gitmodules", "submodule.oms/api.url", "https://wrong.invalid/private.git");
-  const metadataBefore = readFileSync(join(cwd, ".gitmodules"), "utf8");
-  assert.equal(spawnSync("git", ["-C", cwd, "submodule", "deinit", "-f", "oms/api"], { env: testEnv }).status, 0);
+  const manifest = join(cwd, "oms.yaml");
+  const metadataBefore = readFileSync(manifest, "utf8");
+  const root = gitOut(cwd, "rev-parse", "HEAD");
+  const rootIndex = gitOut(cwd, "ls-files", "--stage");
+  const head = gitOut(dir, "rev-parse", "HEAD");
 
   const result = run(["branch", "list"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.equal(existsSync(join(dir, ".git")), true);
-  assert.equal(readFileSync(join(cwd, ".gitmodules"), "utf8"), metadataBefore);
   assert.match(result.stdout + result.stderr, /Branch inventory: api/);
+  assert.equal(readFileSync(manifest, "utf8"), metadataBefore);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), root);
+  assert.equal(gitOut(cwd, "ls-files", "--stage"), rootIndex);
+  assert.equal(gitOut(dir, "rev-parse", "HEAD"), head);
 });
 
-test("branch list rejects unknown, ambiguous, unregistered, and partial aliases with actionable guidance", () => {
-  const origin = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${origin}\n    branch: main\n  - alias: web\n    remotes:\n      origin: file://${origin}\n    branch: main\n`);
+test("branch list rejects unknown, ambiguous, missing, and blocked aliases with actionable guidance", () => {
+  const { cwd, bare } = workspaceWithApi();
+  writeSources(cwd, sourcesFor([{ alias: "api", bare }, { alias: "web", bare }]));
+  git(cwd, "clone", `file://${bare}`, "oms/web");
 
-  const unknown = run(["branch", "list", "missing"], { cwd });
+  const unknown = run(["branch", "list", "unknown"], { cwd });
   assert.equal(unknown.status, 1, unknown.stdout + unknown.stderr);
-  assert.match(unknown.stdout + unknown.stderr, /Unknown alias|sync --list/);
+  assert.match(unknown.stdout + unknown.stderr, /Unknown alias.*oms clone --list/);
   const ambiguous = run(["branch", "list"], { cwd });
   assert.equal(ambiguous.status, 1, ambiguous.stdout + ambiguous.stderr);
   assert.match(ambiguous.stdout + ambiguous.stderr, /oms branch list <alias>/);
-  const unregistered = run(["branch", "list", "api"], { cwd });
-  assert.equal(unregistered.status, 1, unregistered.stdout + unregistered.stderr);
-  assert.match(unregistered.stdout + unregistered.stderr, /oms sync api/);
 
-  writeFileSync(join(cwd, ".gitmodules"), `[submodule "oms/api"]\n\tpath = oms/api\n\turl = file://${origin}\n`);
-  const partial = run(["branch", "list"], {
-    cwd,
-    env: queueEnv([{ type: "select", value: "api" }]),
-  });
-  assert.equal(partial.status, 1, partial.stdout + partial.stderr);
-  assert.match(partial.stdout + partial.stderr, /inconsistent|pending/);
+  writeSources(cwd, sourcesFor([{ alias: "api", bare }, { alias: "web", bare }, { alias: "missing", bare }]));
+  const missing = run(["branch", "list", "missing"], { cwd });
+  assert.equal(missing.status, 1, missing.stdout + missing.stderr);
+  assert.match(missing.stdout + missing.stderr, /oms clone missing/);
+  assert.equal(existsSync(join(cwd, "oms", "missing")), false);
+
+  git(join(cwd, "oms", "web"), "remote", "set-url", "origin", `file://${initBareUpstream()}`);
+  const blocked = run(["branch", "list", "web"], { cwd, env: queueEnv([]) });
+  assert.equal(blocked.status, 1, blocked.stdout + blocked.stderr);
+  assert.match(blocked.stdout + blocked.stderr, /origin does not match.*declaration.*Check oms\/web/);
 });
 
 test("bare branch routes list through the guarded action selector without leftover responses", () => {
@@ -68,25 +72,29 @@ test("bare branch routes list through the guarded action selector without leftov
 test("branch list marks failed fetch cached refs stale, redacts credentials, and preserves branch and root state", () => {
   const origin = initBareUpstream({ branches: ["main", "cached"] });
   const cwd = initGitWorkspace();
-  const dir = syncedSubmodule(cwd, "api", origin);
+  git(cwd, "clone", `file://${origin}`, "oms/api");
+  const dir = join(cwd, "oms", "api");
+  const credentialUrl = "https://secret:token@example.invalid/private.git";
+  git(dir, "remote", "set-url", "origin", credentialUrl);
+  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: ${credentialUrl}\n    branch: main\n`);
   const rootHead = gitOut(cwd, "rev-parse", "HEAD");
   const rootIndex = gitOut(cwd, "diff", "--cached", "--name-only");
-  const subHead = gitOut(dir, "rev-parse", "HEAD");
+  const sourceHead = gitOut(dir, "rev-parse", "HEAD");
   const branch = gitOut(dir, "branch", "--show-current");
-  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: https://secret:token@example.invalid/private.git\n    branch: main\n`);
 
   const result = run(["branch", "list", "api"], {
     cwd,
-    env: gitFailureEnv(["fetch", "origin"], "https://secret:token@example.invalid/private.git is unavailable"),
+    env: gitFailureEnv(["fetch", "origin"], `${credentialUrl}?token=query-secret is unavailable`),
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /origin\tstale\tcached/);
   assert.match(output, /example\.invalid\/private\.git/);
   assert.doesNotMatch(output, /secret:token/);
+  assert.doesNotMatch(output, /query-secret/);
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), rootHead);
   assert.equal(gitOut(cwd, "diff", "--cached", "--name-only"), rootIndex);
-  assert.equal(gitOut(dir, "rev-parse", "HEAD"), subHead);
+  assert.equal(gitOut(dir, "rev-parse", "HEAD"), sourceHead);
   assert.equal(gitOut(dir, "branch", "--show-current"), branch);
 });
 
@@ -95,7 +103,7 @@ test("branch list reports fresh empty remote groups and detached HEAD", () => {
   const empty = initEmptyBare();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", origin, "main", { empty }));
-  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  git(cwd, "clone", `file://${origin}`, "oms/api");
   const dir = join(cwd, "oms", "api");
   const oid = gitOut(dir, "rev-parse", "--short", "HEAD");
   git(dir, "checkout", "--detach");
@@ -108,25 +116,30 @@ test("branch list reports fresh empty remote groups and detached HEAD", () => {
   assert.doesNotMatch(output, /main\tcurrent/);
 });
 
-test("branch list degrades malformed baseline metadata instead of failing closed", () => {
-  const { cwd } = workspaceWithApi();
-  writeFileSync(join(cwd, ".gitmodules"), '[submodule "oms/api"\n\tpath = oms/api\n');
-
-  const result = run(["branch", "list", "api"], { cwd });
+test("branch list shows local refs when it cannot refresh the omitted origin default", () => {
+  const { cwd, bare, wt: dir } = workspaceWithApi();
+  writeSources(cwd, sourceFor("api", bare).replace("    branch: main\n", ""));
+  git(dir, "symbolic-ref", "-d", "refs/remotes/origin/HEAD");
+  const result = run(["branch", "list", "api"], {
+    cwd,
+    env: gitFailureEnv(["remote", "set-head", "origin"], "cannot refresh origin HEAD"),
+  });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.match(output, /BASELINE \[incomplete\]: main/);
-  assert.match(output, /invalid Git config syntax/);
+  assert.match(output, /BASELINE \[unknown\]: \(none\)/);
+  assert.match(output, /origin\/HEAD is not reliable/);
+  assert.match(output, /cannot refresh origin HEAD/);
   assert.match(output, /LOCAL/);
+  assert.match(output, /main\tcurrent/);
 });
 
-test("branch list can sync an unregistered alias interactively, continue listing, or cancel without topology", () => {
+test("branch list can clone a missing alias interactively, continue listing, or cancel without root changes", () => {
   const origin = initBareUpstream();
   const acceptedCwd = initGitWorkspace();
   writeSources(acceptedCwd, sourceFor("api", origin));
   const accepted = run(["branch", "list", "api"], {
     cwd: acceptedCwd,
-    env: queueEnv([{ type: "select", value: "sync" }]),
+    env: queueEnv([{ type: "select", value: "clone" }]),
   });
   assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
   assert.match(accepted.stdout + accepted.stderr, /Branch inventory: api/);
@@ -134,7 +147,7 @@ test("branch list can sync an unregistered alias interactively, continue listing
   const rerun = run(["branch", "list", "api"], { cwd: acceptedCwd });
   assert.equal(rerun.status, 0, rerun.stdout + rerun.stderr);
   assert.match(rerun.stdout + rerun.stderr, /Branch inventory: api/);
-  assert.doesNotMatch(rerun.stdout + rerun.stderr, /inconsistent|pending/);
+  assert.equal(gitOut(acceptedCwd, "ls-files", "--stage"), "");
 
   const cancelledCwd = initGitWorkspace();
   writeSources(cancelledCwd, sourceFor("api", origin));
@@ -143,11 +156,11 @@ test("branch list can sync an unregistered alias interactively, continue listing
     env: queueEnv([{ type: "select", value: "cancel" }]),
   });
   assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
-  assert.equal(existsSync(join(cancelledCwd, ".gitmodules")), false);
-  assert.equal(existsSync(join(cancelledCwd, "oms", "api", ".git")), false);
+  assert.equal(existsSync(join(cancelledCwd, "oms", "api")), false);
+  assert.equal(gitOut(cancelledCwd, "status", "--porcelain"), "?? oms.yaml");
 });
 
-test("branch list preserves stdin for credential prompts during delegated sync redaction", () => {
+test("branch list preserves stdin for credential prompts during delegated clone redaction", () => {
   const origin = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", origin));
@@ -155,13 +168,13 @@ test("branch list preserves stdin for credential prompts during delegated sync r
   const stubDir = tempFixture("oms-git-stub-");
   const marker = join(stubDir, "stdin-read");
   const stubGit = join(stubDir, "git");
-  writeFileSync(stubGit, `#!/usr/bin/env bash\nif [ "$1" = "submodule" ] && [ "$2" = "add" ]; then IFS= read -r credential; [ "$credential" = "credential-value" ] || exit 88; printf '%s' "$credential" > "${marker}"; fi\nexec "${realGit}" "$@"\n`);
+  writeFileSync(stubGit, `#!/usr/bin/env bash\nif [ "$1" = "clone" ]; then IFS= read -r credential; [ "$credential" = "credential-value" ] || exit 88; printf '%s' "$credential" > "${marker}"; fi\nexec "${realGit}" "$@"\n`);
   chmodSync(stubGit, 0o755);
 
   const result = run(["branch", "list", "api"], {
     cwd,
     input: "credential-value\n",
-    env: queueEnv([{ type: "select", value: "sync" }], { PATH: `${stubDir}${delimiter}${process.env.PATH}` }),
+    env: queueEnv([{ type: "select", value: "clone" }], { PATH: `${stubDir}${delimiter}${process.env.PATH}` }),
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(readFileSync(marker, "utf8"), "credential-value");
@@ -173,7 +186,7 @@ test("branch list retries a transient fetch once and processes declared remotes 
   const backup = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", origin, "main", { backup }));
-  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  git(cwd, "clone", `file://${origin}`, "oms/api");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const stubDir = tempFixture("oms-git-stub-");
   const countFile = join(stubDir, "origin-fetch-count");
@@ -199,7 +212,9 @@ test("branch list treats remote configuration and ref inspection failures as una
   const replacement = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", origin, "main", { backup, configfail }));
-  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  git(cwd, "clone", `file://${origin}`, "oms/api");
+  git(join(cwd, "oms", "api"), "remote", "add", "configfail", `file://${configfail}`);
+  git(join(cwd, "oms", "api"), "fetch", "configfail");
   writeSources(cwd, sourceFor("api", origin, "main", { backup, configfail: replacement }));
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const stubDir = tempFixture("oms-git-stub-");
@@ -248,14 +263,14 @@ test("branch list refreshes an omitted origin default and distrusts cached origi
   const origin = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${origin}\n`);
-  assert.equal(run(["sync", "api", "--commit"], { cwd }).status, 0);
+  git(cwd, "clone", `file://${origin}`, "oms/api");
+  git(join(cwd, "oms", "api"), "symbolic-ref", "-d", "refs/remotes/origin/HEAD");
 
   const fresh = run(["branch", "list", "api"], { cwd });
   assert.equal(fresh.status, 0, fresh.stdout + fresh.stderr);
   assert.match(fresh.stdout + fresh.stderr, /BASELINE \[known\]: main/);
 
-  const missingOrigin = join(tempFixture("missing-origin-"), "missing.git");
-  writeSources(cwd, `repos:\n  - alias: api\n    remotes:\n      origin: file://${missingOrigin}\n`);
+  renameSync(origin, `${origin}.offline`);
   const stale = run(["branch", "list", "api"], { cwd });
   const output = stale.stdout + stale.stderr;
   assert.equal(stale.status, 0, output);
@@ -264,60 +279,54 @@ test("branch list refreshes an omitted origin default and distrusts cached origi
   assert.match(output, /origin\/HEAD is not reliable/);
 });
 
-test("branch list allows pointer OID movement but rejects pending topology removal", () => {
-  const { cwd: movedCwd, wt: movedDir } = workspaceWithApi();
-  git(movedDir, "commit", "--allow-empty", "-m", "move pointer");
-  git(movedCwd, "add", "oms/api");
-  const moved = run(["branch", "list", "api"], { cwd: movedCwd });
+test("branch list allows independent local commits but rejects a source tracked by the workspace", () => {
+  const { cwd, wt: dir } = workspaceWithMovedApi();
+  const local = gitOut(dir, "rev-parse", "HEAD");
+  const moved = run(["branch", "list", "api"], { cwd });
   assert.equal(moved.status, 0, moved.stdout + moved.stderr);
+  assert.match(moved.stdout + moved.stderr, /main\t[^\n]*origin\/main\t1\t0/);
+  assert.equal(gitOut(dir, "rev-parse", "HEAD"), local);
 
-  const { cwd: removalCwd } = workspaceWithApi();
-  git(removalCwd, "rm", "--cached", "oms/api");
-  const removal = run(["branch", "list", "api"], { cwd: removalCwd });
-  assert.equal(removal.status, 1, removal.stdout + removal.stderr);
-  assert.match(removal.stdout + removal.stderr, /inconsistent|pending/);
-  assert.match(removal.stdout + removal.stderr, /oms sync api/);
-
-  const { cwd: conflictCwd } = workspaceWithApi();
-  const oid = gitOut(conflictCwd, "rev-parse", "HEAD:oms/api");
-  const conflict = spawnSync("git", ["update-index", "--index-info"], {
-    cwd: conflictCwd,
-    env: testEnv,
-    encoding: "utf8",
-    input: `0 ${"0".repeat(40)}\toms/api\n160000 ${oid} 1\toms/api\n160000 ${oid} 2\toms/api\n160000 ${oid} 3\toms/api\n`,
-  });
-  assert.equal(conflict.status, 0, conflict.stderr);
-  const conflicted = run(["branch", "list", "api"], { cwd: conflictCwd });
-  assert.equal(conflicted.status, 1, conflicted.stdout + conflicted.stderr);
-  assert.match(conflicted.stdout + conflicted.stderr, /inconsistent|conflict/);
-
-  const { cwd: missingMetadataCwd } = workspaceWithApi();
-  rmSync(join(missingMetadataCwd, ".gitmodules"));
-  const missingMetadata = run(["branch", "list", "api"], { cwd: missingMetadataCwd });
-  assert.equal(missingMetadata.status, 1, missingMetadata.stdout + missingMetadata.stderr);
-  assert.match(missingMetadata.stdout + missingMetadata.stderr, /inconsistent|pending/);
+  const workspaceFile = join("oms", "api", "root-file");
+  writeFileSync(join(cwd, workspaceFile), "root-owned\n");
+  git(cwd, "update-index", "--add", "--cacheinfo", `100644,${gitOut(cwd, "hash-object", "-w", workspaceFile)},${workspaceFile}`);
+  const blocked = run(["branch", "list", "api"], { cwd });
+  assert.equal(blocked.status, 1, blocked.stdout + blocked.stderr);
+  assert.match(blocked.stdout + blocked.stderr, /tracked by the workspace root/);
+  assert.equal(gitOut(dir, "rev-parse", "HEAD"), local);
 });
 
-test("branch list initialization failure preserves partial state and redacts manifest credentials", () => {
-  const { cwd, wt: dir } = workspaceWithApi();
-  assert.equal(spawnSync("git", ["-C", cwd, "submodule", "deinit", "-f", "oms/api"], { env: testEnv }).status, 0);
-  rmSync(join(cwd, ".git", "modules", "oms", "api"), { recursive: true, force: true });
+test("branch list cleans up its failed temporary clone and redacts manifest credentials", () => {
+  const cwd = initGitWorkspace();
+  const origin = initBareUpstream();
   writeSources(cwd, "repos:\n  - alias: api\n    remotes:\n      origin: https://secret:token@example.invalid/private.git\n    branch: main\n");
-
+  const rootIndex = gitOut(cwd, "ls-files", "--stage");
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const stubDir = tempFixture("oms-git-stub-");
+  const stubGit = join(stubDir, "git");
+  writeFileSync(stubGit, `#!/usr/bin/env bash
+if [[ "$1" == clone ]]; then
+  ${JSON.stringify(realGit)} clone ${JSON.stringify(`file://${origin}`)} "\${@: -1}" || exit 88
+  echo 'fatal: https://secret:token@example.invalid/private.git is unavailable' >&2
+  exit 128
+fi
+exec ${JSON.stringify(realGit)} "$@"
+`);
+  chmodSync(stubGit, 0o755);
   const result = run(["branch", "list", "api"], {
     cwd,
-    env: gitFailureEnv(["submodule", "add"], "https://secret:token@example.invalid/private.git is unavailable"),
+    env: queueEnv([{ type: "select", value: "clone" }], { PATH: `${stubDir}${delimiter}${process.env.PATH}` }),
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
-  assert.match(output, /automatic initialization failed/);
-  assert.match(output, /partial state was preserved/);
+  assert.match(output, /git clone failed \(exit 128\)/);
   assert.match(output, /example\.invalid\/private\.git/);
-  assert.doesNotMatch(output, /secret:token/);
-  assert.equal(existsSync(join(dir, ".git")), false);
+  assert.doesNotMatch(output, /secret:token|Branch inventory/);
+  assert.deepEqual(readdirSync(join(cwd, "oms")), []);
+  assert.equal(gitOut(cwd, "ls-files", "--stage"), rootIndex);
 });
 
-test("branch list preserves accepted sync precondition and operational exit codes", () => {
+test("branch list preserves blocked-checkout and operational clone exit codes", () => {
   const origin = initBareUpstream();
   const preconditionCwd = initGitWorkspace();
   writeSources(preconditionCwd, sourceFor("api", origin));
@@ -326,22 +335,22 @@ test("branch list preserves accepted sync precondition and operational exit code
   writeFileSync(join(preconditionCwd, "oms", "api", "occupied.txt"), "keep\n");
   const precondition = run(["branch", "list", "api"], {
     cwd: preconditionCwd,
-    env: queueEnv([{ type: "select", value: "sync" }]),
+    env: queueEnv([]),
   });
   assert.equal(precondition.status, 1, precondition.stdout + precondition.stderr);
-  assert.match(precondition.stdout + precondition.stderr, /occupied|preserved/);
+  assert.match(precondition.stdout + precondition.stderr, /not an independent Git checkout.*left it unchanged/);
   assert.equal(readFileSync(join(preconditionCwd, "oms", "api", "occupied.txt"), "utf8"), "keep\n");
 
   const operationalCwd = initGitWorkspace();
   writeSources(operationalCwd, "repos:\n  - alias: api\n    remotes:\n      origin: https://secret:token@example.invalid/private.git\n    branch: main\n");
-  const failureEnv = gitFailureEnv(["submodule", "add"], "https://secret:token@example.invalid/private.git is unavailable");
+  const failureEnv = gitFailureEnv(["clone"], "https://secret:token@example.invalid/private.git is unavailable");
   const operational = run(["branch", "list", "api"], {
     cwd: operationalCwd,
-    env: queueEnv([{ type: "select", value: "sync" }], { PATH: failureEnv.PATH }),
+    env: queueEnv([{ type: "select", value: "clone" }], { PATH: failureEnv.PATH }),
   });
   const output = operational.stdout + operational.stderr;
   assert.equal(operational.status, 2, output);
-  assert.match(output, /sync and continue failed|submodule add failed/);
+  assert.match(output, /git clone failed/);
   assert.match(output, /example\.invalid\/private\.git/);
   assert.doesNotMatch(output, /secret:token/);
 });

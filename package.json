@@ -1,7 +1,7 @@
 {
   "name": "oh-my-space",
   "version": "2.0.5",
-  "description": "Manage multi-repo workspaces with Git submodules.",
+  "description": "CLI for managing multi-repository workspaces with independent Git clones.",
   "license": "MIT",
   "homepage": "https://github.com/divlook/oh-my-space",
   "repository": {
@@ -16,8 +16,7 @@
     "oh-my-space",
     "git",
     "cli",
-    "git-submodule",
-    "submodule",
+    "git-clone",
     "workspace",
     "multi-repo",
     "monorepo",
@@ -53,7 +52,7 @@
     "test:blackbox": "npm run test:inventory && npm run build && node scripts/run-test-layer.mjs tests blackbox",
     "test:preparation": "npm run test:inventory && npm run build && node --test tests/cli-preparation-*.test.js",
     "test:scaffold": "npm run test:inventory && npm run build && node --test tests/cli-scaffold.test.js",
-    "test:sync": "npm run test:inventory && npm run build && node --test tests/cli-sync-*.test.js",
+    "test:sync": "npm run test:inventory && npm run build && node --test tests/cli-sync-*.test.js tests/cli-source-lifecycle.test.js",
     "test:commit": "npm run test:inventory && npm run build && node --test tests/cli-commit-*.test.js",
     "test:branch": "npm run test:inventory && npm run build && node --test tests/cli-branch*.test.js",
     "test:tools": "npm run test:inventory && npm run build && node --test tests/cli-tools.test.js",

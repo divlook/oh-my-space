@@ -4,7 +4,7 @@
     "reason": "Duplicates static help wording; command journeys and root-identity refusal contracts exercise the actual scope restrictions."
   },
   "tests/cli-branch-list.contracts.js::branch list redacts credential-bearing query parameters from Git diagnostics": [
-    "tests/unit/git.test.ts::Git version and sensitive URL parsers reject malformed input without leaking credentials"
+    "tests/cli-branch-list-a.test.js::branch list marks failed fetch cached refs stale, redacts credentials, and preserves branch and root state"
   ],
   "tests/cli-sync.contracts.js::fetch updates origin refs inside the submodule": [
     "tests/cli-preparation-a.test.js::fetch retries one transient failure and succeeds without an error"
@@ -16,9 +16,834 @@
     "tests/cli-tools.test.js::agent uninstall leaves the file unchanged when the managed block is duplicated"
   ],
   "tests/cli-tools.test.js::update fails cleanly when registry latest is unavailable": [
-    "tests/unit/package-channels.test.ts::update version and channel decisions reject malformed registry or semver inputs"
+    "tests/integration/update-failure.test.ts::update refuses unavailable or invalid registry metadata before installation"
   ],
   "tests/cli-tools.test.js::update treats invalid registry semver as a failure": [
-    "tests/unit/package-channels.test.ts::update version and channel decisions reject malformed registry or semver inputs"
-  ]
+    "tests/integration/update-failure.test.ts::update refuses unavailable or invalid registry metadata before installation"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list allows pointer OID movement but rejects pending topology removal": [
+    "tests/cli-branch-list-a.test.js::branch list allows independent local commits but rejects a source tracked by the workspace"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list auto-selects and initializes the sole registered alias using the manifest URL without rewriting metadata": [
+    "tests/cli-branch-list-a.test.js::branch list auto-selects the sole eligible clone without rewriting root Git state or the manifest"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list can sync an unregistered alias interactively, continue listing, or cancel without topology": [
+    "tests/cli-branch-list-a.test.js::branch list can clone a missing alias interactively, continue listing, or cancel without root changes"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list degrades malformed baseline metadata instead of failing closed": [
+    "tests/cli-branch-list-a.test.js::branch list shows local refs when it cannot refresh the omitted origin default"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list initialization failure preserves partial state and redacts manifest credentials": [
+    "tests/cli-branch-list-a.test.js::branch list cleans up its failed temporary clone and redacts manifest credentials"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list preserves accepted sync precondition and operational exit codes": [
+    "tests/cli-branch-list-a.test.js::branch list preserves blocked-checkout and operational clone exit codes"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list preserves stdin for credential prompts during delegated sync redaction": [
+    "tests/cli-branch-list-a.test.js::branch list preserves stdin for credential prompts during delegated clone redaction"
+  ],
+  "tests/cli-branch-list.contracts.js::branch list rejects unknown, ambiguous, unregistered, and partial aliases with actionable guidance": [
+    "tests/cli-branch-list-a.test.js::branch list rejects unknown, ambiguous, missing, and blocked aliases with actionable guidance"
+  ],
+  "tests/cli-branch.contracts.js::branch delete auto-initializes a registered-but-uninitialized alias, then revalidates": [
+    "tests/cli-branch-a.test.js::branch delete rejects a missing declared clone with clone guidance, without provisioning"
+  ],
+  "tests/cli-branch.contracts.js::branch delete fails closed on a duplicate selected-alias section": [
+    "tests/cli-branch-a.test.js::branch delete refuses a clone whose origin differs from the declaration"
+  ],
+  "tests/cli-branch.contracts.js::branch delete fails closed on malformed .gitmodules and identifies the source": [
+    "tests/cli-branch-a.test.js::branch deletion fails closed when workspace tracking cannot be inspected"
+  ],
+  "tests/cli-branch.contracts.js::branch delete keeps the deletion local: no remote ref removed, root pointer unchanged": [
+    "tests/cli-branch-a.test.js::branch delete keeps the deletion local: remote refs and root Git state are unchanged"
+  ],
+  "tests/cli-branch.contracts.js::branch delete rejects an in-progress submodule operation and an unanchored detached HEAD": [
+    "tests/cli-branch-a.test.js::branch delete rejects an in-progress source operation and detached HEAD"
+  ],
+  "tests/cli-branch.contracts.js::branch delete rejects an unregistered alias with sync guidance": [
+    "tests/cli-branch-a.test.js::branch delete rejects a missing declared clone with clone guidance, without provisioning"
+  ],
+  "tests/cli-branch.contracts.js::branch delete warns on baseline drift and protects both recorded branches": [
+    "tests/integration/branch-clean.test.ts::cleanup protects the manifest baseline and all external and managed worktree branches"
+  ],
+  "tests/cli-commit.contracts.js::a committed recovery whose index no longer matches is preserved and blocks": [
+    "tests/cli-source-lifecycle.test.js::built CLI resumes migration after process loss at Git data and index boundaries"
+  ],
+  "tests/cli-commit.contracts.js::a crash after index installation is recognized as completed recovery": [
+    "tests/cli-source-lifecycle.test.js::built CLI resumes migration after process loss at Git data and index boundaries"
+  ],
+  "tests/cli-commit.contracts.js::a crash after the real index rename cleans the retained recovery artifact": [
+    "tests/cli-source-lifecycle.test.js::built CLI resumes migration after process loss at Git data and index boundaries"
+  ],
+  "tests/cli-commit.contracts.js::a dangling OMS state symlink blocks sync before topology mutation": {
+    "deleted": true,
+    "reason": "The 2.x registration and pointer finalization transaction was removed. The production migration recovery journey covers interruption of the replacement root workflow."
+  },
+  "tests/cli-commit.contracts.js::a malformed finalization marker blocks root-mutating commands": {
+    "deleted": true,
+    "reason": "The 2.x registration and pointer finalization transaction was removed. The production migration recovery journey covers interruption of the replacement root workflow."
+  },
+  "tests/cli-commit.contracts.js::a named alias that cannot be recorded fails instead of being skipped": {
+    "deleted": true,
+    "reason": "The former submodule-specific behavior no longer exists. Current command and migration contracts exercise the independent checkout boundary."
+  },
+  "tests/cli-commit.contracts.js::a staged gitlink for a skipped alias is not an unrelated staged path": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::a structurally incomplete finalization marker is rejected as malformed": {
+    "deleted": true,
+    "reason": "The 2.x registration and pointer finalization transaction was removed. The production migration recovery journey covers interruption of the replacement root workflow."
+  },
+  "tests/cli-commit.contracts.js::a temporary-commit failure before HEAD advances preserves the real index byte-for-byte": {
+    "deleted": true,
+    "reason": "The 2.x registration and pointer finalization transaction was removed. The production migration recovery journey covers interruption of the replacement root workflow."
+  },
+  "tests/cli-commit.contracts.js::an active finalization lock blocks a concurrent sync before shared state is changed": {
+    "deleted": true,
+    "reason": "The 2.x registration and pointer finalization transaction was removed. The production migration recovery journey covers interruption of the replacement root workflow."
+  },
+  "tests/cli-commit.contracts.js::an index-install failure after HEAD advances preserves recovery state for the next command": [
+    "tests/cli-source-lifecycle.test.js::built CLI resumes migration after process loss at Git data and index boundaries"
+  ],
+  "tests/cli-commit.contracts.js::an interrupted commit after HEAD advances is recovered by the next command's preflight": [
+    "tests/cli-source-lifecycle.test.js::built CLI resumes migration after process loss at Git data and index boundaries"
+  ],
+  "tests/cli-commit.contracts.js::an interruption before HEAD advances preserves the real index and is cleaned on the next run": [
+    "tests/cli-source-lifecycle.test.js::built CLI resumes migration after process loss at Git data and index boundaries"
+  ],
+  "tests/cli-commit.contracts.js::an orphaned finalization artifact without a marker blocks and is preserved": {
+    "deleted": true,
+    "reason": "The 2.x registration and pointer finalization transaction was removed. The production migration recovery journey covers interruption of the replacement root workflow."
+  },
+  "tests/cli-commit.contracts.js::branch deletion fails closed when index baselines cannot be inspected": [
+    "tests/cli-branch-a.test.js::branch deletion fails closed when workspace tracking cannot be inspected"
+  ],
+  "tests/cli-commit.contracts.js::commit gives an explicit alias precedence over the current submodule context": [
+    "tests/cli-commit-c.test.js::commit gives an explicit alias precedence over the current source context"
+  ],
+  "tests/cli-commit.contracts.js::commit infers the alias and initializes it before evaluating preconditions": [
+    "tests/cli-commit-a.test.js::commit infers the alias inside an existing independent checkout"
+  ],
+  "tests/cli-commit.contracts.js::commit no-op prints a record hint when the pointer already moved": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::commit prints a topology hint instead of record when the root gitlink is unrecorded": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::commit rejects an in-progress merge inside the submodule": [
+    "tests/cli-commit-b.test.js::commit rejects an in-progress merge inside the source checkout"
+  ],
+  "tests/cli-commit.contracts.js::commit rejects an unanchored detached submodule HEAD without touching the root": [
+    "tests/cli-commit-a.test.js::commit rejects an unanchored detached source HEAD without touching the root"
+  ],
+  "tests/cli-commit.contracts.js::every sync commit discloses and includes the complete working-tree oms.yaml": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-commit.contracts.js::metadata reconciliation preserves the current working branch": [
+    "tests/cli-sync-c.test.js::clone does not disturb an already-attached working branch"
+  ],
+  "tests/cli-commit.contracts.js::plain partial multi-alias sync commits the successful alias and still exits non-zero": [
+    "tests/cli-sync-b.test.js::multi-alias clone keeps the successful alias when another fails"
+  ],
+  "tests/cli-commit.contracts.js::pull aggregates the record hint when it moves more than one pointer": [
+    "tests/cli-commit-b.test.js::pull --all advances multiple source branches and leaves root staging alone"
+  ],
+  "tests/cli-commit.contracts.js::re-syncing adds a remote declared after the initial sync": [
+    "tests/cli-commit-c.test.js::clone configures every declared remote on the source checkout"
+  ],
+  "tests/cli-commit.contracts.js::record --all records every moved pointer and leaves unmoved ones alone": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record --all skips a pending removal and a staged pointer split": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record --all skips an alias with no recorded gitlink and still records the rest": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record --all with nothing moved is a no-op": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record aborts entirely when the root repository is in detached HEAD": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record allows an already-staged selected gitlink that matches the working tree": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record allows unrelated unstaged root changes and stays path-limited": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record commits only the moved gitlink with a conventional message": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record completes a pending finalization recovery through the shared preflight": {
+    "deleted": true,
+    "reason": "The 2.x registration and pointer finalization transaction was removed. The production migration recovery journey covers interruption of the replacement root workflow."
+  },
+  "tests/cli-commit.contracts.js::record fails for a staged path outside the selected alias set": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record is a no-op without pointer movement and does not warn for dirty source": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record leaves the gitlink staged when the root commit fails": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record rejects a conflicted root gitlink": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record rejects a missing recorded gitlink and points at topology commit": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record rejects a pending removal and points at unsync": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record rejects a staged gitlink for a different alias": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record rejects a staged/worktree pointer split": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record rejects an in-progress root merge": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record rejects unrelated staged root changes": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record warns about a dirty submodule but still records the current HEAD": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record with an omitted selection resolves through the multi-select prompt": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record with several aliases creates one plural root commit": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::record without a selection resolves by candidate count, not by the terminal": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::sync configures every declared remote on the submodule": [
+    "tests/cli-commit-c.test.js::clone configures every declared remote on the source checkout"
+  ],
+  "tests/cli-commit.contracts.js::sync fails when an omitted baseline cannot resolve origin/HEAD": [
+    "tests/cli-sync-c.test.js::clone uses origin's default branch and refuses an unusable default"
+  ],
+  "tests/cli-commit.contracts.js::sync fails when the explicit manifest branch is absent on origin and does not change .gitmodules": [
+    "tests/cli-sync-a.test.js::clone rejects a missing branch and leaves no debris"
+  ],
+  "tests/cli-commit.contracts.js::sync finalizes new topology and existing metadata reconciliation in one commit": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-commit.contracts.js::sync leaves reconciled metadata unstaged without a commit": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-commit.contracts.js::sync reconciles drifted .gitmodules url and branch from the manifest, redacting URLs": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-commit.contracts.js::sync removes the .gitmodules branch key when the manifest omits branch": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-commit.contracts.js::sync restore reconciles .gitmodules metadata through the unified finalization": {
+    "deleted": true,
+    "reason": "The 2.x registration and pointer finalization transaction was removed. The production migration recovery journey covers interruption of the replacement root workflow."
+  },
+  "tests/cli-commit.contracts.js::the record picker does not offer a staged-split pointer": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-commit.contracts.js::unsync refuses an unmerged root .gitmodules before removing the submodule": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-preparation.test.js::all eight preparing commands auto-initialize without changing root topology": [
+    "tests/integration/alias-preparation.test.ts::preparation uses existing independent checkouts without changing root state"
+  ],
+  "tests/cli-preparation.test.js::auto-initialization leaves a pinned commit alone when the baseline branch is ahead": [
+    "tests/integration/alias-preparation.test.ts::preparation preserves a detached commit when the baseline branch has advanced"
+  ],
+  "tests/cli-preparation.test.js::the five offer-side commands register once and continue": [
+    "tests/integration/alias-preparation.test.ts::preparation clones an offered alias once and continues with its manifest state"
+  ],
+  "tests/cli-preparation.test.js::a partial delegated sync does not ask a second preparation question": [
+    "tests/cli-preparation-a.test.js::a partial delegated clone does not ask a second preparation question"
+  ],
+  "tests/cli-preparation.test.js::automatic initialization stops when Git refuses the baseline attachment": [
+    "tests/cli-preparation-a.test.js::pull stops when Git refuses branch attachment and preserves the detached commit"
+  ],
+  "tests/cli-preparation.test.js::commands that presuppose local state refuse an unregistered alias without touching root state": [
+    "tests/cli-preparation-a.test.js::commands that presuppose local state refuse a missing checkout without touching the root"
+  ],
+  "tests/cli-preparation.test.js::every preparing command refuses partial registration with repair guidance": [
+    "tests/cli-preparation-a.test.js::every preparing command refuses legacy registration with migration guidance"
+  ],
+  "tests/cli-preparation.test.js::pull --all asks once and registers three aliases in one topology commit": [
+    "tests/cli-preparation-a.test.js::pull --all asks once and clones three aliases without changing the root index or HEAD"
+  ],
+  "tests/cli-preparation.test.js::status, doctor, and record report an uninitialized alias without preparing it": [
+    "tests/cli-preparation-a.test.js::status and doctor report a missing alias without preparing it"
+  ],
+  "tests/cli-preparation.test.js::fetch does not adopt a foreign checkout even with clone consent available": [
+    "tests/cli-preparation-a.test.js::fetch does not adopt a foreign checkout even with clone consent available"
+  ],
+  "tests/cli-scaffold.test.js::doctor reports a healthy submodule after sync": [
+    "tests/cli-scaffold.test.js::doctor reports a healthy independent checkout after clone"
+  ],
+  "tests/cli-scaffold.test.js::help is exposed as oms with the submodule commands": [
+    "tests/cli-scaffold.test.js::help is exposed as oms with independent checkout commands"
+  ],
+  "tests/cli-scaffold.test.js::init removes a stale managed oms/ entry left in .gitignore": [
+    "tests/cli-scaffold.test.js::init preserves existing ignore rules rather than rewriting them"
+  ],
+  "tests/cli-scaffold.test.js::shared submodule commands fail without side effects outside a Git work tree": [
+    "tests/cli-scaffold.test.js::shared source commands fail without side effects outside a Git work tree"
+  ],
+  "tests/cli-scaffold.test.js::submodule commands accept canonical-equivalent workspace paths": [
+    "tests/cli-scaffold.test.js::source commands accept canonical-equivalent workspace paths"
+  ],
+  "tests/cli-scaffold.test.js::submodule commands fail closed when Git top-level inspection is indeterminate": [
+    "tests/cli-scaffold.test.js::source commands fail closed when Git top-level inspection is indeterminate"
+  ],
+  "tests/cli-scaffold.test.js::submodule commands reject a nested manifest before root or workspace side effects": [
+    "tests/cli-scaffold.test.js::source commands reject a nested manifest before root or workspace side effects"
+  ],
+  "tests/cli-scaffold.test.js::sync --list loads oms.yaml from a parent workspace (no git repo needed)": [
+    "tests/cli-scaffold.test.js::clone --list loads oms.yaml from a parent workspace (no git repo needed)"
+  ],
+  "tests/cli-scaffold.test.js::sync outside a git repository fails with git init guidance": [
+    "tests/cli-scaffold.test.js::clone outside a git repository fails with git init guidance"
+  ],
+  "tests/cli-scaffold.test.js::unsync on a never-synced alias reports nothing to remove with exit 0": [
+    "tests/cli-scaffold.test.js::remove on a never-cloned alias reports nothing to remove with exit 0"
+  ],
+  "tests/cli-scaffold.test.js::unsync rejects an unknown alias": [
+    "tests/cli-scaffold.test.js::remove rejects an alias with no current or verified former declaration"
+  ],
+  "tests/cli-sync.contracts.js::--no-commit leaves topology unstaged and preserves unrelated staged paths": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::a committed pointer reproduces on a fresh clone via sync": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-sync.contracts.js::a dirty submodule among several is surfaced and only it remains": [
+    "tests/cli-sync-c.test.js::a dirty source checkout blocks removal of the entire selection"
+  ],
+  "tests/cli-sync.contracts.js::delegated preparation sync commits its topology": [
+    "tests/integration/alias-preparation.test.ts::preparation clones an offered alias once and continues with its manifest state"
+  ],
+  "tests/cli-sync.contracts.js::multi-alias sync --commit creates one plural topology commit": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::multi-alias sync --commit finalizes the successful alias and excludes the failed one": [
+    "tests/cli-sync-b.test.js::multi-alias clone keeps the successful alias when another fails"
+  ],
+  "tests/cli-sync.contracts.js::multi-alias sync still produces one plural topology commit by default": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::pull --ff-only succeeds on the submodule's branch": [
+    "tests/cli-sync-c.test.js::pull --ff-only succeeds on the source branch and refuses divergence"
+  ],
+  "tests/cli-sync.contracts.js::pull advances the submodule branch without staging and hints record": [
+    "tests/cli-sync-a.test.js::pull advances the source branch without staging and never pulls a matching tag instead"
+  ],
+  "tests/cli-sync.contracts.js::pull rejects a dirty submodule before running": [
+    "tests/cli-sync-b.test.js::pull rejects a dirty source checkout before running"
+  ],
+  "tests/cli-sync.contracts.js::pull rejects detached HEAD with no local branch at its commit": [
+    "tests/integration/independent-source-commands.test.ts::commit, pull and push operate on one source; detached attachment and fast-forward safeguards hold"
+  ],
+  "tests/cli-sync.contracts.js::push fails clearly when detached HEAD has no local branch at its commit": [
+    "tests/integration/independent-source-commands.test.ts::commit, pull and push operate on one source; detached attachment and fast-forward safeguards hold"
+  ],
+  "tests/cli-sync.contracts.js::push lazily creates the remote branch without staging the root pointer": [
+    "tests/cli-sync-a.test.js::push lazily creates the exact remote branch without staging anything in the root"
+  ],
+  "tests/cli-sync.contracts.js::push warns about a dirty submodule but still pushes the current HEAD": [
+    "tests/cli-sync-b.test.js::push warns about a dirty source checkout but still pushes the current HEAD"
+  ],
+  "tests/cli-sync.contracts.js::status --json exposes staged and split root pointer states": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-sync.contracts.js::status --json keeps a recorded-but-uninitialized repo in inventory as uninit": [
+    "tests/cli-sync-c.test.js::status --json keeps a configured alias without a local checkout"
+  ],
+  "tests/cli-sync.contracts.js::status --json marks a never-synced configured alias as missing, not uninit": [
+    "tests/cli-sync-c.test.js::status --json keeps a configured alias without a local checkout"
+  ],
+  "tests/cli-sync.contracts.js::status --json narrows repos and pointer arrays to the selected aliases": [
+    "tests/cli-sync-b.test.js::status --json narrows repos to the selected aliases"
+  ],
+  "tests/cli-sync.contracts.js::status --json reports a missing tracking branch as null divergence": [
+    "tests/integration/status-json.test.ts::status JSON projects branch, tracking, and independent root and source changes in one Git journey"
+  ],
+  "tests/cli-sync.contracts.js::status --json reports numeric ahead/behind against a tracking branch": [
+    "tests/integration/status-json.test.ts::status JSON projects branch, tracking, and independent root and source changes in one Git journey"
+  ],
+  "tests/cli-sync.contracts.js::status --json represents a detached submodule HEAD explicitly": [
+    "tests/cli-sync-b.test.js::status --json represents a detached source HEAD explicitly"
+  ],
+  "tests/cli-sync.contracts.js::status --json separates root changes from submodule source changes and pointer moves": [
+    "tests/integration/status-json.test.ts::status JSON projects branch, tracking, and independent root and source changes in one Git journey"
+  ],
+  "tests/cli-sync.contracts.js::status reports branch, pin state, and dirtiness": [
+    "tests/cli-sync-a.test.js::status reports branch and dirtiness"
+  ],
+  "tests/cli-sync.contracts.js::status represents a conflicted root gitlink as conflict and still exits 0 for --json": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-sync.contracts.js::sync --commit creates a single-alias add topology commit": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync --commit isolates unrelated staged root paths through the temporary index": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync --commit records pending add topology left by an earlier no-commit sync": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync accepts aliases with underscore, dash, and at-sign": [
+    "tests/cli-sync-c.test.js::clone accepts aliases with underscore, dash, and at-sign"
+  ],
+  "tests/cli-sync.contracts.js::sync creates a missing baseline at detached HEAD": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync does not disturb an already-attached working branch": [
+    "tests/cli-sync-c.test.js::clone does not disturb an already-attached working branch"
+  ],
+  "tests/cli-sync.contracts.js::sync fresh add fails when oms/<alias> is unreadable": [
+    "tests/cli-sync-a.test.js::clone and remove refuse an unreadable alias path"
+  ],
+  "tests/cli-sync.contracts.js::sync preserves a recorded pointer when the cloned baseline has advanced": [
+    "tests/cli-sync-c.test.js::clone leaves an existing detached checkout unchanged after the baseline advances"
+  ],
+  "tests/cli-sync.contracts.js::sync registers a submodule on its baseline branch and tracks it in the parent": [
+    "tests/cli-sync-b.test.js::clone provisions the declared baseline without tracking it in the workspace root"
+  ],
+  "tests/cli-sync.contracts.js::sync rejects a missing branch via preflight and leaves no debris": [
+    "tests/cli-sync-a.test.js::clone rejects a missing branch and leaves no debris"
+  ],
+  "tests/cli-sync.contracts.js::sync relabels detached HEAD when the baseline points at the same commit": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync reports an attachment Git failure and preserves the detached commit": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync restore fails before add during an in-progress root operation": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync restore fails before add when a non-submodule path occupies the alias": [
+    "tests/cli-sync-c.test.js::clone and remove preserve occupied paths that are not source checkouts"
+  ],
+  "tests/cli-sync.contracts.js::sync restore fails before add when the selected root gitlink is conflicted": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-sync.contracts.js::sync restore fails safely when a regular file occupies the alias": [
+    "tests/cli-sync-c.test.js::clone and remove preserve occupied paths that are not source checkouts"
+  ],
+  "tests/cli-sync.contracts.js::sync restore fails safely when oms/<alias> is unreadable": [
+    "tests/cli-sync-a.test.js::clone and remove refuse an unreadable alias path"
+  ],
+  "tests/cli-sync.contracts.js::sync restore is scoped to the selected alias and preserves unrelated .gitmodules edits": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync restore preserves .gitmodules section order for a clean multi-alias restore": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync restore preserves the recorded pointer when its retained baseline diverged": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-sync.contracts.js::sync restore reconciles manifest metadata as unstaged .gitmodules edits": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync restore removes a metadata-only alias directory before initialization": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync restores an uncommitted unsync instead of adding over the recorded gitlink": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-sync.contracts.js::sync restores representative partial removal states": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::sync update preserves detached HEAD when the local baseline diverged": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::the topology commit default does not depend on stdin being a terminal": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::unsync --commit creates a removal topology commit": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::unsync --commit records pending removal left by an earlier no-commit unsync": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::unsync --commit rejects partial removal topology it cannot complete": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::unsync --no-commit removes a normal registered submodule and leaves the removal topology": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::unsync commits the removal topology by default": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::unsync of all aliases leaves no orphan .gitmodules section": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::unsync refuses and preserves a non-submodule path occupying the alias": [
+    "tests/cli-sync-c.test.js::clone and remove preserve occupied paths that are not source checkouts"
+  ],
+  "tests/cli-sync.contracts.js::unsync refuses before deinit/rm during an in-progress root operation": {
+    "deleted": true,
+    "reason": "Normal commands no longer manage submodule registration or topology commits. Dedicated migration fixtures cover verified legacy root edits and recovery."
+  },
+  "tests/cli-sync.contracts.js::unsync refuses before deinit/rm when the root gitlink is conflicted": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "tests/cli-sync.contracts.js::unsync refuses when oms/<alias> is unreadable": [
+    "tests/cli-sync-a.test.js::clone and remove refuse an unreadable alias path"
+  ],
+  "tests/cli-sync.contracts.js::unsync removes the submodule, keeps oms.yaml, and re-sync works": [
+    "tests/cli-sync-c.test.js::remove keeps oms.yaml and a later clone works"
+  ],
+  "tests/cli-tools.test.js::legacy bare clone (oms/<alias>/.bare) blocks sync with the 0.6.0 migration hint": [
+    "tests/cli-tools.test.js::clone preserves legacy bare data and points to the earlier migration guide"
+  ],
+  "tests/cli-tools.test.js::legacy sources.yaml without oms.yaml is blocked with migration hint": {
+    "deleted": true,
+    "reason": "Retired the pre-0.4 layout detector from normal commands; nearest oms.yaml discovery remains tested and the historical migration guides remain available."
+  },
+  "tests/cli-tools.test.js::legacy sources/ directory inside an oms.yaml workspace is blocked": {
+    "deleted": true,
+    "reason": "Retired the pre-0.4 layout detector from normal commands; nearest oms.yaml discovery remains tested and the historical migration guides remain available."
+  },
+  "tests/unit/core-contracts.test.ts::status topology and record decisions distinguish add, removal, split, no-op, and movement": {
+    "deleted": true,
+    "reason": "Independent source checkouts do not record root gitlinks or expose pointer state. The production CLI tests reject record and registration flags without modifying repositories."
+  },
+  "processBoundaries": {
+    "tests/cli-preparation-a.test.js::a partial delegated clone does not ask a second preparation question": {
+      "boundary": "process-integrity-or-recovery",
+      "reason": "Injects a real child Git failure and checks the production prompt queue and later eligible target."
+    },
+    "tests/cli-preparation-a.test.js::commands that presuppose local state refuse a missing checkout without touching the root": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises public source command routing and refusal without creating or staging a checkout."
+    },
+    "tests/cli-preparation-a.test.js::eligible non-interactive commands require an explicit clone first": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the actual non-interactive source command and its no-provisioning result."
+    },
+    "tests/cli-preparation-a.test.js::every preparing command refuses legacy registration with migration guidance": {
+      "boundary": "production-cli-journey",
+      "reason": "Uses production commands and a real legacy registration to establish preservation and actionable migration guidance."
+    },
+    "tests/cli-preparation-a.test.js::fetch does not adopt a foreign checkout even with clone consent available": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the production consent flow and confirms that unrelated local Git data is not adopted."
+    },
+    "tests/cli-preparation-a.test.js::pull --all asks once and clones three aliases without changing the root index or HEAD": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises real clone and pull operations through the production selection, consent, and root isolation paths."
+    },
+    "tests/cli-preparation-a.test.js::pull stops when Git refuses branch attachment and preserves the detached commit": {
+      "boundary": "process-integrity-or-recovery",
+      "reason": "Injects a child Git switch failure and verifies the production process does not proceed to pull."
+    },
+    "tests/cli-preparation-a.test.js::status and doctor report a missing alias without preparing it": {
+      "boundary": "production-cli-journey",
+      "reason": "Compares production diagnostics with workspace and checkout state before and after the commands."
+    },
+    "tests/cli-sync-c.test.js::clone leaves an existing detached checkout unchanged after the baseline advances": {
+      "boundary": "production-cli-journey",
+      "reason": "Runs the real clone command after an origin change and checks that the existing HEAD and files were not moved."
+    },
+    "tests/cli-branch-a.test.js::branch delete keeps the deletion local: remote refs and root Git state are unchanged": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-a.test.js::branch delete refuses a clone whose origin differs from the declaration": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-a.test.js::branch delete rejects a missing declared clone with clone guidance, without provisioning": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-a.test.js::branch delete rejects an in-progress source operation and detached HEAD": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-a.test.js::branch delete revalidates the tip, baseline and operation at the process boundary": {
+      "boundary": "process-integrity-or-recovery",
+      "reason": "Changes real Git refs or operation state between production command subprocesses and asserts that the confirmed mutation is revalidated."
+    },
+    "tests/cli-branch-a.test.js::branch deletion fails closed when workspace tracking cannot be inspected": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-clean.test.js::branch clean production transactions preserve raced refs and continue only while the base is unchanged": {
+      "boundary": "process-integrity-or-recovery",
+      "reason": "Changes real Git refs or operation state between production command subprocesses and asserts that the confirmed mutation is revalidated."
+    },
+    "tests/cli-branch-list-a.test.js::branch list allows independent local commits but rejects a source tracked by the workspace": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-list-a.test.js::branch list auto-selects the sole eligible clone without rewriting root Git state or the manifest": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-list-a.test.js::branch list can clone a missing alias interactively, continue listing, or cancel without root changes": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-list-a.test.js::branch list cleans up its failed temporary clone and redacts manifest credentials": {
+      "boundary": "process-integrity-or-recovery",
+      "reason": "Exercises failure across production command and Git child processes, including the visible diagnostic, exit code, and preserved checkout state."
+    },
+    "tests/cli-branch-list-a.test.js::branch list preserves blocked-checkout and operational clone exit codes": {
+      "boundary": "process-integrity-or-recovery",
+      "reason": "Exercises failure across production command and Git child processes, including the visible diagnostic, exit code, and preserved checkout state."
+    },
+    "tests/cli-branch-list-a.test.js::branch list preserves stdin for credential prompts during delegated clone redaction": {
+      "boundary": "process-integrity-or-recovery",
+      "reason": "Requires the production CLI and delegated child process to establish inherited stdin and redacted terminal output."
+    },
+    "tests/cli-branch-list-a.test.js::branch list rejects unknown, ambiguous, missing, and blocked aliases with actionable guidance": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-branch-list-a.test.js::branch list shows local refs when it cannot refresh the omitted origin default": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-commit-a.test.js::commit infers the alias inside an existing independent checkout": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-commit-a.test.js::commit rejects an unanchored detached source HEAD without touching the root": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-commit-a.test.js::commit uses the source index first and leaves staged root work untouched": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-commit-b.test.js::commit rejects an in-progress merge inside the source checkout": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-commit-b.test.js::pull --all advances multiple source branches and leaves root staging alone": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-commit-c.test.js::clone configures every declared remote on the source checkout": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-commit-c.test.js::commit gives an explicit alias precedence over the current source context": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-scaffold.test.js::clone --list loads oms.yaml from a parent workspace (no git repo needed)": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::clone outside a git repository fails with git init guidance": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::doctor reports a healthy independent checkout after clone": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::help is exposed as oms with independent checkout commands": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::init preserves existing ignore rules rather than rewriting them": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::normal commands reject legacy registration settings and direct the user to migration": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::production CLI rejects removed commands and topology flags without changing repositories": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::remove on a never-cloned alias reports nothing to remove with exit 0": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::remove rejects an alias with no current or verified former declaration": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::shared source commands fail without side effects outside a Git work tree": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::source commands accept canonical-equivalent workspace paths": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::source commands fail closed when Git top-level inspection is indeterminate": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-scaffold.test.js::source commands reject a nested manifest before root or workspace side effects": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production command routing, argument handling, and diagnostics or preservation at the filesystem and Git boundary."
+    },
+    "tests/cli-source-lifecycle.test.js::built CLI migrates two workspaces, clones missing sources and removes only approved local data": {
+      "boundary": "production-cli-journey",
+      "reason": "Runs the packaged CLI through shared root integration and machine-local recovery, clone, and consented removal in two real workspaces."
+    },
+    "tests/cli-source-lifecycle.test.js::built CLI resumes migration after process loss at Git data and index boundaries": {
+      "boundary": "process-integrity-or-recovery",
+      "reason": "Interrupts the production CLI process across real Git-directory, worktree, and index operations; verifies durable recovery and mismatch preservation on restart."
+    },
+    "tests/cli-sync-a.test.js::clone and remove refuse an unreadable alias path": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-a.test.js::clone rejects a missing branch and leaves no debris": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-a.test.js::pull advances the source branch without staging and never pulls a matching tag instead": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-a.test.js::push lazily creates the exact remote branch without staging anything in the root": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-a.test.js::status reports branch and dirtiness": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production status selection and stdout with real independent repository state."
+    },
+    "tests/cli-sync-b.test.js::clone provisions the declared baseline without tracking it in the workspace root": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-b.test.js::multi-alias clone keeps the successful alias when another fails": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-b.test.js::pull rejects a dirty source checkout before running": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-b.test.js::push warns about a dirty source checkout but still pushes the current HEAD": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-b.test.js::status --json narrows repos to the selected aliases": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production status selection and stdout with real independent repository state."
+    },
+    "tests/cli-sync-b.test.js::status --json represents a detached source HEAD explicitly": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production status selection and stdout with real independent repository state."
+    },
+    "tests/cli-sync-c.test.js::a dirty source checkout blocks removal of the entire selection": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-c.test.js::clone accepts aliases with underscore, dash, and at-sign": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-c.test.js::clone and remove preserve occupied paths that are not source checkouts": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-c.test.js::clone does not disturb an already-attached working branch": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-c.test.js::clone uses origin's default branch and refuses an unusable default": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-c.test.js::pull --ff-only succeeds on the source branch and refuses divergence": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-c.test.js::remove keeps oms.yaml and a later clone works": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-sync-c.test.js::status --json keeps a configured alias without a local checkout": {
+      "boundary": "production-cli-journey",
+      "reason": "Verifies production status selection and stdout with real independent repository state."
+    },
+    "tests/cli-tools.test.js::clone preserves legacy bare data and points to the earlier migration guide": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    },
+    "tests/cli-tree-a.test.js::remove refuses while inventory entries exist, force included, and proceeds after removal": {
+      "boundary": "production-cli-journey",
+      "reason": "Exercises the public command, exit result, and resulting Git or filesystem state through the production bundle."
+    }
+  }
 }

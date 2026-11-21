@@ -1,25 +1,16 @@
 import { cancel, log } from "@clack/prompts";
-import { existsSync, readdirSync, rmSync, rmdirSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
-import { prepareAlias } from "./alias-preparation.js";
+import { existsSync, lstatSync, readdirSync, rmSync, rmdirSync } from "node:fs";
+import { join } from "node:path";
 import { dim, pad } from "./env.js";
 import { TREE_DIRNAME } from "./constants.js";
-import {
-  aliasDir,
-  localBranchExists,
-  productionGitRunner,
-  runGit,
-  runSub,
-  submodulePath,
-  type RawGitRunner,
-} from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
+import { localBranchExists, runGit } from "./git.js";
 import { canPrompt, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
-import { listManagedTrees, treeRelPath, type ManagedTree } from "./tree-inventory.js";
+import { insideTreePath } from "./tree-context.js";
+import { listIndependentManagedTrees, treeRelPath, type ManagedTree } from "./tree-inventory.js";
 import { ensureTreeExcluded } from "./tree-exclude.js";
-
-
+import { inspectSourceCheckout } from "./source-checkout.js";
+import { loadForSources } from "./source-workspace.js";
 
 export function taskNameViolation(task: string): string | null {
   if (task.length === 0) return "the task name is empty";
@@ -29,21 +20,11 @@ export function taskNameViolation(task: string): string | null {
   return null;
 }
 
-export function checkTaskName(repoRoot: string, task: string, runner: RawGitRunner = productionGitRunner): string | null {
-  const violation = taskNameViolation(task);
-  if (violation) return violation;
-  const result = runGit(repoRoot, ["check-ref-format", "--branch", task], false, undefined, runner);
-  return result.success ? null : `"${task}" is not a valid branch name`;
-}
-
-
-
 async function resolveTreeAddArguments(
   repos: Repo[],
   aliasArg: string | undefined,
   taskArg: string | undefined,
 ): Promise<{ alias: string; task: string } | null> {
-  // Manifest validation guarantees at least one configured repository.
   let alias = aliasArg;
   let task = taskArg;
   if (alias === undefined && task === undefined && !canPrompt()) {
@@ -60,7 +41,7 @@ async function resolveTreeAddArguments(
   }
   if (alias === undefined) {
     const choice = await guardedSelect<string>({
-      message: "Select a submodule for the task tree",
+      message: "Select a source repository for the task tree",
       options: repos.map((repo) => ({
         value: repo.alias,
         label: repo.alias,
@@ -84,76 +65,85 @@ async function resolveTreeAddArguments(
   return { alias, task };
 }
 
-export async function runTreeAdd(
+
+export async function runIndependentTreeAdd(
   aliasArg: string | undefined,
   taskArg: string | undefined,
   options: { from?: string },
 ): Promise<number> {
-  const loaded = loadForSubmodules();
+  const loaded = loadForSources();
   if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
-
+  const { repos, workspace, repoRoot } = loaded;
   const resolved = await resolveTreeAddArguments(repos, aliasArg, taskArg);
   if (!resolved) return 1;
   const { alias, task } = resolved;
-
-  // The task is both the directory name and the branch name; validate before touching anything.
-  const violation = checkTaskName(repoRoot, task);
-  if (violation) {
-    log.error(`Invalid task name "${task}": ${violation}. Nothing was created under ${TREE_DIRNAME}/.`);
-    return 1;
-  }
-
-  const repo = repos.find((r) => r.alias === alias);
+  const repo = repos.find((candidate) => candidate.alias === alias);
   if (!repo) {
-    log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
+    log.error(`Unknown alias "${alias}". Use "oms clone --list" to see declared aliases.`);
+    return 1;
+  }
+  const violation = taskNameViolation(task);
+  const checked = violation ? null : workspace.git(repoRoot, ["check-ref-format", "--branch", task]);
+  if (violation || !checked?.success || checked.stdout !== `${task}\n`) {
+    log.error(`Invalid task name "${task}": ${violation ?? "use a literal, valid branch name"}. Nothing was created under ${TREE_DIRNAME}/.`);
     return 1;
   }
 
-  // Refuse a duplicate before preparation: the path is already an inventory entry, whatever it is.
-  const duplicate = listManagedTrees(repoRoot, repos, { dirtyAliases: [] }).find((tree) => tree.alias === alias && tree.task === task);
-  if (duplicate) {
-    log.error(
-      `A managed tree already exists at ${duplicate.path}. Remove it first with "oms tree remove ${alias} ${task}".`,
-    );
+  try {
+    const parent = join(repoRoot, TREE_DIRNAME, alias);
+    const duplicate = listIndependentManagedTrees(workspace, { dirtyAliases: [] })
+      .find((tree) => tree.alias === alias && tree.task === task);
+    if (duplicate) {
+      log.error(`A managed tree already exists at ${duplicate.path}. Remove it first with "oms tree remove ${alias} ${task}".`);
+      return 1;
+    }
+    const parentInfo = lstatSync(parent, { throwIfNoEntry: false });
+    if (parentInfo && !parentInfo.isDirectory()) throw new Error(`${parent} is not a canonical managed-tree directory`);
+    const checkout = inspectSourceCheckout(workspace, repo);
+    if (checkout.kind !== "ready") {
+      log.error(`${alias}: ${checkout.reason} No task tree was created.`);
+      return 1;
+    }
+
+    const exists = localBranchExists(checkout.path, task, workspace.git);
+    if (exists && options.from !== undefined) {
+      log.error(`${alias}: branch "${task}" already exists. Omit --from to resume it at its tip, or choose a new task name.`);
+      return 1;
+    }
+    const absolute = join(parent, task);
+    let args = ["worktree", "add", "--no-guess-remote", "--", absolute, task];
+    if (!exists) {
+      const start = options.from ?? "HEAD";
+      const commit = workspace.git(checkout.path, ["rev-parse", "--verify", "--end-of-options", `${start}^{commit}`]);
+      if (!commit.success) {
+        log.error(`${alias}: "${start}" is not a readable local commit. No task tree was created.`);
+        return 1;
+      }
+      args = ["worktree", "add", "--no-guess-remote", "-b", task, "--", absolute, commit.stdout.trim()];
+    }
+    ensureTreeExcluded(workspace);
+    const result = runGit(checkout.path, args, true, undefined, workspace.git);
+    if (!result.success) return 2;
+    log.success(`${alias}: created task tree ${task} (${exists ? "resumed" : "new"} branch ${task}).`);
+    return 0;
+  } catch (error) {
+    log.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
-
-  const prepared = await prepareAlias(repoRoot, repo, {
-    command: "tree add", topologyOffer: true, allowPendingRegistration: true,
-  });
-  if (!prepared.ok) return prepared.code;
-
-  const dir = aliasDir(repoRoot, alias);
-  const absolute = join(repoRoot, TREE_DIRNAME, alias, task);
-  const exists = localBranchExists(dir, task);
-  if (exists && options.from) {
-    log.error(
-      `${alias}: branch "${task}" already exists, so --from cannot set its start point. ` +
-        `Omit --from to resume the branch at its tip, or choose a new task name.`,
-    );
-    return 1;
-  }
-
-  const args = exists
-    ? ["worktree", "add", absolute, task]
-    : ["worktree", "add", "-b", task, absolute, ...(options.from ? [options.from] : [])];
-  log.step(`${alias}: git -C ${submodulePath(alias)} ${args.join(" ")}`);
-  const result = runSub(repoRoot, alias, args, true);
-  if (!result.success) return 2;
-
-  ensureTreeExcluded(repoRoot);
-  log.success(`${alias}: created task tree ${task} (${exists ? "resumed" : "new"} branch ${task}).`);
-  return 0;
 }
 
-
-export async function runTreeList(): Promise<number> {
-  const loaded = loadForSubmodules();
+export async function runIndependentTreeList(): Promise<number> {
+  const loaded = loadForSources();
   if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
+  try {
+    return printTreeInventory(listIndependentManagedTrees(loaded.workspace, { dirtyAliases: "all" }));
+  } catch (error) {
+    log.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+}
 
-  const trees = listManagedTrees(repoRoot, repos, { dirtyAliases: "all" });
+function printTreeInventory(trees: ManagedTree[]): number {
   if (trees.length === 0) {
     log.info(`No managed trees. Create one with "oms tree add <alias> <task>".`);
     return 0;
@@ -163,7 +153,7 @@ export async function runTreeList(): Promise<number> {
     alias: tree.alias,
     task: tree.task,
     branch: tree.state === "healthy" ? (tree.branch ?? "(detached)") : "-",
-    dirty: tree.state === "healthy" ? (tree.dirty ? "yes" : "no") : "-",
+    dirty: tree.state !== "healthy" || tree.dirty === null ? "-" : tree.dirty ? "yes" : "no",
     state: tree.state === "healthy" ? "ok" : tree.state === "broken" ? "broken" : "not a registered worktree",
   }));
   const col = (key: keyof (typeof rows)[number], header: string) =>
@@ -183,11 +173,11 @@ export async function runTreeList(): Promise<number> {
 
 
 /** Interactive alias-then-task selection over the inventory, never auto-selecting a sole candidate. */
-async function resolveTreeRemoveTarget(
-  trees: ManagedTree[],
+async function resolveTreeRemoveTarget<Tree extends ManagedTree>(
+  trees: Tree[],
   aliasArg: string | undefined,
   taskArg: string | undefined,
-): Promise<ManagedTree | null> {
+): Promise<Tree | null> {
   const find = (alias: string, task: string) => trees.find((tree) => tree.alias === alias && tree.task === task);
   if (aliasArg !== undefined && taskArg !== undefined) {
     const entry = find(aliasArg, taskArg);
@@ -257,7 +247,7 @@ function cleanupEmptyTreeParents(repoRoot: string, alias: string): void {
   try {
     rmdirSync(join(repoRoot, TREE_DIRNAME, alias));
   } catch {
-    return;
+    // An already absent alias directory does not prevent cleaning the namespace root.
   }
   try {
     rmdirSync(join(repoRoot, TREE_DIRNAME));
@@ -271,73 +261,75 @@ function printTreeRemoved(alias: string, task: string, detail: string): void {
   log.info(`Resume it with "oms tree add ${alias} ${task}", or delete the branch with "oms branch delete ${alias} ${task}".`);
 }
 
-export async function runTreeRemove(
+
+export async function runIndependentTreeRemove(
   aliasArg: string | undefined,
   taskArg: string | undefined,
   options: { force?: boolean },
 ): Promise<number> {
-  const loaded = loadForSubmodules();
+  const loaded = loadForSources();
   if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
+  const { workspace, repoRoot } = loaded;
+  try {
+    const explicit = aliasArg !== undefined && taskArg !== undefined;
+    const initial = listIndependentManagedTrees(workspace, { dirtyAliases: explicit ? [aliasArg] : [] });
+    const selected = await resolveTreeRemoveTarget(initial, aliasArg, taskArg);
+    if (!selected) return 1;
+    const { alias, task } = selected;
+    const entry = explicit ? selected : listIndependentManagedTrees(workspace, { dirtyAliases: [alias] })
+      .find((tree) => tree.path === selected.path);
+    if (!entry) throw new Error(`No managed tree at ${selected.path}. Run "oms tree list" to see the trees that exist.`);
 
-  const trees = listManagedTrees(repoRoot, repos, { dirtyAliases: "all" });
-  const entry = await resolveTreeRemoveTarget(trees, aliasArg, taskArg);
-  if (!entry) return 1;
+    const { absolutePath, path, registration } = entry;
+    const parent = lstatSync(join(repoRoot, TREE_DIRNAME, alias), { throwIfNoEntry: false });
+    if (parent && !parent.isDirectory()) throw new Error(`${path} is not under a canonical managed-tree directory. State preserved.`);
+    if (insideTreePath(absolutePath)) {
+      throw new Error(`The current directory is inside ${path}. Run "oms tree remove ${alias} ${task}" from outside the tree. The worktree and its branch were preserved.`);
+    }
 
-  // The caller's shell must not sit inside the directory being deleted.
-  const currentDir = resolve(process.cwd());
-  const targetDir = resolve(entry.absolutePath);
-  if (currentDir === targetDir || currentDir.startsWith(`${targetDir}${sep}`)) {
-    log.error(
-      `The current directory is inside ${entry.path}. Run "oms tree remove ${entry.alias} ${entry.task}" from outside the tree. ` +
-        "The worktree and its branch were preserved.",
+    if (entry.state === "foreign") {
+      const info = lstatSync(absolutePath, { throwIfNoEntry: false });
+      if (!info) throw new Error(`No managed tree at ${path}. Run "oms tree list" to see the trees that exist.`);
+      if (!options.force && (!info.isDirectory() || readdirSync(absolutePath).length !== 0)) {
+        throw new Error(`${path} is not a registered worktree and is not an empty directory. Its contents were preserved. Re-run with --force to delete it.`);
+      }
+      rmSync(absolutePath, { recursive: true });
+      cleanupEmptyTreeParents(repoRoot, alias);
+      log.success(`${alias}: removed ${task} (not a registered worktree).`);
+      return 0;
+    }
+
+    if (entry.dirty === true && !options.force) {
+      throw new Error(`${alias}: task tree ${task} has uncommitted changes. The worktree, its changes, and its branch were preserved. Commit or stash them first, or re-run with --force to discard the working tree.`);
+    }
+    if (entry.state === "broken") {
+      if (entry.gitdir && !registration) throw new Error(`Could not verify stale metadata for ${path}: ${entry.error}. Nothing was removed.`);
+      if (registration?.locked) throw new Error(`${path} is locked in Git. Unlock it before retrying; nothing was removed.`);
+      const info = lstatSync(absolutePath, { throwIfNoEntry: false });
+      if (entry.dirty === null && info && !options.force &&
+          (!info.isDirectory() || readdirSync(absolutePath).some((name) => name !== ".git"))) {
+        throw new Error(`Could not verify changes in broken tree ${path}. Its contents were preserved. Re-run with --force to discard them.`);
+      }
+      if (info) rmSync(absolutePath, { recursive: true });
+      // Only the selected backlink was verified; a broad Git prune could discard other worktrees.
+      if (registration) rmSync(registration.adminDir, { recursive: true });
+      cleanupEmptyTreeParents(repoRoot, alias);
+      printTreeRemoved(alias, task, " (broken link; stale metadata removed)");
+      return 0;
+    }
+
+    if (!registration) throw new Error(`Could not verify worktree registration for ${path}; nothing was removed.`);
+    const removed = runGit(
+      registration.sourceDir,
+      ["worktree", "remove", ...(options.force ? ["--force"] : []), "--", absolutePath],
+      true, undefined, workspace.git,
     );
+    if (!removed.success) return 2;
+    cleanupEmptyTreeParents(repoRoot, alias);
+    printTreeRemoved(alias, task, "");
+    return 0;
+  } catch (error) {
+    log.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
-
-  if (entry.state === "foreign") {
-    if (!existsSync(entry.absolutePath)) {
-      log.error(`No managed tree at ${entry.path}. Run "oms tree list" to see the trees that exist.`);
-      return 1;
-    }
-    const empty = readdirSync(entry.absolutePath).length === 0;
-    if (!empty && !options.force) {
-      log.error(
-        `${entry.path} is not a registered worktree and contains files. The directory and its files were preserved. ` +
-          `Re-run with --force to delete it.`,
-      );
-      return 1;
-    }
-    rmSync(entry.absolutePath, { recursive: true, force: true });
-    cleanupEmptyTreeParents(repoRoot, entry.alias);
-    log.success(`${entry.alias}: removed ${entry.task} (not a registered worktree).`);
-    return 0;
-  }
-
-  if (entry.state === "broken") {
-    // Prunable metadata cannot be removed with `git worktree remove`; prune after clearing the dir.
-    if (existsSync(entry.absolutePath)) rmSync(entry.absolutePath, { recursive: true, force: true });
-    const pruned = runGit(repoRoot, ["--git-dir", entry.gitdir!, "worktree", "prune"], true, undefined);
-    if (!pruned.success) return 2;
-    cleanupEmptyTreeParents(repoRoot, entry.alias);
-    printTreeRemoved(entry.alias, entry.task, " (broken link; administrative metadata pruned)");
-    return 0;
-  }
-
-  if (entry.dirty === true && !options.force) {
-    log.error(
-      `${entry.alias}: task tree ${entry.task} has uncommitted changes. The worktree, its changes, and branch ${entry.task} were preserved. ` +
-        "Commit or stash them first, or re-run with --force to discard the working tree.",
-    );
-    return 1;
-  }
-  const removed = runGit(
-    repoRoot,
-    ["--git-dir", entry.gitdir!, "worktree", "remove", ...(options.force ? ["--force"] : []), entry.absolutePath],
-    true,
-  );
-  if (!removed.success) return 2;
-  cleanupEmptyTreeParents(repoRoot, entry.alias);
-  printTreeRemoved(entry.alias, entry.task, "");
-  return 0;
 }

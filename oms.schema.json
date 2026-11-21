@@ -2,16 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json",
   "title": "oh-my-space oms.yaml",
-  "description": "Declarative list of external source repositories for the oms CLI. Each entry becomes a git submodule under oms/<alias>/.",
+  "description": "Declarative list of independent Git source checkouts for the oms CLI. Each entry names a checkout under oms/<alias>/.",
   "type": "object",
   "additionalProperties": false,
   "required": ["repos"],
   "properties": {
-    "autoCommitRegistration": {
-      "type": "boolean",
-      "default": false,
-      "description": "Create a main-project commit for eligible registration or metadata changes from oms sync and oms unsync, including sync delegated by another command. Direct invocations can override this setting with --commit or --no-commit."
-    },
     "repos": {
       "type": "array",
       "minItems": 1,
@@ -36,12 +31,12 @@
             "propertyNames": {
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
             },
-            "description": "Named git remotes; must include \"origin\". Each value is a clonable git URL (ssh, https, or file://). origin becomes the submodule's primary remote; others are added on sync."
+            "description": "Named Git remotes; must include \"origin\". Each value is a clonable Git URL (SSH, HTTPS, or file://). OMS configures additional remotes at clone time."
           },
           "branch": {
             "type": "string",
             "minLength": 1,
-            "description": "Baseline branch to check out in the submodule. Omit to use the remote's default branch."
+            "description": "Starting branch for a new clone. Omit to use the remote's default branch."
           }
         }
       }

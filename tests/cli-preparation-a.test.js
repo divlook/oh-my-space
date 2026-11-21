@@ -3,27 +3,18 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { configIdentity, git, gitOut, initBareUpstream, initGitWorkspace, queueEnv, run, sourceFor, sourcesFor, tempFixture, testEnv, workspaceWithApi, writeSources } from "./helpers.js";
+import { git, gitOut, initBareUpstream, initGitWorkspace, queueEnv, run, sourceFor, sourcesFor, tempFixture, testEnv, workspaceWithApi, writeSources } from "./helpers.js";
 
 function rootSnapshot(cwd) {
   return {
     head: gitOut(cwd, "rev-parse", "HEAD"),
-    index: gitOut(cwd, "diff", "--cached", "--name-status"),
+    index: gitOut(cwd, "ls-files", "--stage"),
   };
 }
 
 function assertRootSnapshot(cwd, before) {
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), before.head);
-  assert.equal(gitOut(cwd, "diff", "--cached", "--name-status"), before.index);
-}
-
-function cloneWithUninitializedApi() {
-  const source = workspaceWithApi().cwd;
-  const cwd = tempFixture("oms-uninitialized-");
-  execFileSync("git", ["clone", source, cwd], { stdio: "ignore", env: testEnv });
-  configIdentity(cwd);
-  assert.equal(existsSync(join(cwd, "oms", "api", ".git")), false);
-  return cwd;
+  assert.equal(gitOut(cwd, "ls-files", "--stage"), before.index);
 }
 
 const preparingCommands = [
@@ -47,122 +38,104 @@ function detachWithoutBranch(cwd) {
   return dir;
 }
 
-test("commands that presuppose local state refuse an unregistered alias without touching root state", () => {
-  const cases = [
+test("commands that presuppose local state refuse a missing checkout without touching the root", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", initBareUpstream()));
+  const before = rootSnapshot(cwd);
+  for (const args of [
     ["commit", "api", "-m", "x"],
     ["push", "api"],
     ["branch", "delete", "api", "feature/x"],
-  ];
-  for (const args of cases) {
-    const bare = initBareUpstream();
-    const cwd = initGitWorkspace();
-    writeSources(cwd, sourceFor("api", bare));
-    const before = rootSnapshot(cwd);
-    const result = run(args, { cwd });
+    ["branch", "clean", "api"],
+  ]) {
+    const result = run(args, { cwd, env: queueEnv([]) });
     const output = result.stdout + result.stderr;
     assert.notEqual(result.status, 0, `${args.join(" ")} unexpectedly succeeded`);
-    assert.match(output, /oms sync api/, args.join(" "));
+    assert.match(output, /oms clone api/, args.join(" "));
+    assert.doesNotMatch(output, /PROMPT_RESPONSES is exhausted/);
     assertRootSnapshot(cwd, before);
-    assert.equal(existsSync(join(cwd, ".gitmodules")), false);
+    assert.equal(existsSync(join(cwd, "oms", "api")), false);
   }
-
-  const cwd = initGitWorkspace();
-  const source = initBareUpstream();
-  writeSources(cwd, sourceFor("api", source));
-  execFileSync("git", ["clone", source, join(cwd, "oms", "api")], { stdio: "ignore", env: testEnv });
-  writeFileSync(join(cwd, ".gitmodules"), '[submodule "oms/api"]\n\tpath = oms/api\n');
-  const before = rootSnapshot(cwd);
-  const foreign = run(["fetch", "api"], { cwd });
-  assert.equal(foreign.status, 2, foreign.stdout + foreign.stderr);
-  assert.match(foreign.stdout + foreign.stderr, /does not belong to the declared canonical submodule/);
-  assert.doesNotMatch(foreign.stdout + foreign.stderr, /api: fetched/);
-  assertRootSnapshot(cwd, before);
 });
 
-test("pull --all asks once and registers three aliases in one topology commit", () => {
-  const origins = [initBareUpstream(), initBareUpstream(), initBareUpstream()];
+test("eligible non-interactive commands require an explicit clone first", () => {
   const cwd = initGitWorkspace();
-  writeSources(cwd, `autoCommitRegistration: true\n${sourcesFor([
-    { alias: "api", bare: origins[0] },
-    { alias: "web", bare: origins[1] },
-    { alias: "core", bare: origins[2] },
-  ])}`);
-  const beforeCount = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
+  writeSources(cwd, sourceFor("api", initBareUpstream()));
+  const before = rootSnapshot(cwd);
+  for (const args of [
+    ["fetch", "api"],
+    ["pull", "api"],
+    ["branch", "list", "api"],
+    ["branch", "switch", "api", "work"],
+    ["branch", "checkout", "api", "main"],
+  ]) {
+    const result = run(args, { cwd });
+    const output = result.stdout + result.stderr;
+    assert.notEqual(result.status, 0, output);
+    assert.match(output, /oms clone api/, args.join(" "));
+    assert.equal(existsSync(join(cwd, "oms", "api")), false);
+    assertRootSnapshot(cwd, before);
+  }
+});
+
+test("pull --all asks once and clones three aliases without changing the root index or HEAD", () => {
+  const cwd = initGitWorkspace();
+  const bare = initBareUpstream();
+  const aliases = ["api", "web", "core"];
+  writeSources(cwd, sourcesFor(aliases.map((alias) => ({ alias, bare }))));
+  git(cwd, "add", "oms.yaml");
+  const before = rootSnapshot(cwd);
   const result = run(["pull", "--all"], {
     cwd,
-    env: queueEnv([{ type: "select", value: "sync" }]),
+    env: queueEnv([{ type: "select", value: "clone" }]),
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount + 1);
-  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add submodules");
-  assert.match(output, /pulled 3/);
-
-  for (const failure of ["commit-tree", "install-recovery-index"]) {
-    const { cwd: failedCwd, bare } = workspaceWithApi();
-    writeSources(failedCwd, `autoCommitRegistration: true\n${sourcesFor([
-      { alias: "api", bare }, { alias: "web", bare: origins[1] },
-    ])}`);
-    const before = gitOut(failedCwd, "rev-parse", "HEAD");
-    const failed = run(["pull", "--all"], {
-      cwd: failedCwd,
-      env: queueEnv([{ type: "select", value: "sync" }], { OMS_TEST_FAIL_AT: failure }),
-    });
-    const failedOutput = failed.stdout + failed.stderr;
-    assert.notEqual(failed.status, 0, failedOutput);
-    assert.match(failedOutput, /was not run for any alias/);
-    assert.doesNotMatch(failedOutput, /(?:api|web): pulled/);
-    assert.equal(gitOut(failedCwd, "rev-parse", "HEAD") === before, failure === "commit-tree");
+  assert.match(output, /Summary: pulled 3/);
+  const tip = gitOut(bare, "rev-parse", "main");
+  for (const alias of aliases) {
+    assert.match(output, new RegExp(`${alias}: cloned`));
+    assert.equal(gitOut(join(cwd, "oms", alias), "rev-parse", "HEAD"), tip);
+    assert.equal(gitOut(cwd, "check-ignore", `oms/${alias}`), `oms/${alias}`);
   }
+  assert.equal(existsSync(join(cwd, ".gitmodules")), false);
+  assertRootSnapshot(cwd, before);
 });
 
-test("a partial delegated sync does not ask a second preparation question", () => {
+test("a partial delegated clone does not ask a second preparation question", () => {
   const cwd = initGitWorkspace();
   const missingOrigin = join(tempFixture("missing-origin-"), "absent.git");
   writeSources(cwd, sourcesFor([
     { alias: "api", bare: initBareUpstream() },
     { alias: "web", bare: missingOrigin },
   ]));
-  const beforeCount = Number(gitOut(cwd, "rev-list", "--count", "HEAD"));
+  const before = rootSnapshot(cwd);
   const result = run(["fetch", "--all"], {
     cwd,
-    env: queueEnv([{ type: "select", value: "sync" }]),
+    env: queueEnv([{ type: "select", value: "clone" }]),
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
-  assert.doesNotMatch(output, /response queue is exhausted/);
+  assert.doesNotMatch(output, /PROMPT_RESPONSES is exhausted/);
   assert.match(output, /api: fetched/);
+  assert.match(output, /web: git clone failed/);
+  assert.match(output, /Summary: fetched 1, failed 1/);
   assert.equal(existsSync(join(cwd, "oms", "api", ".git")), true);
-  assert.equal(existsSync(join(cwd, "oms", "web", ".git")), false);
-  assert.equal(Number(gitOut(cwd, "rev-list", "--count", "HEAD")), beforeCount);
-  assert.match(gitOut(cwd, "diff", "--cached", "--name-only"), /^oms\/api$/m);
-  assert.equal(run(["fetch", "api"], { cwd }).status, 0);
-  for (const command of [
-    ["push", "api"], ["branch", "delete", "api", "unused"], ["branch", "clean", "api"],
-    ["exec", "api", "--", "true"], ["record", "api"],
-  ]) {
-    const blocked = run(command, { cwd });
-    assert.notEqual(blocked.status, 0, command.join(" "));
-    assert.match(blocked.stdout + blocked.stderr, /oms sync api --commit/);
-  }
+  assert.equal(existsSync(join(cwd, "oms", "web")), false);
+  assertRootSnapshot(cwd, before);
 
-  const source = join(cwd, "oms", "api");
-  const registration = run(["sync", "api", "--commit"], { cwd });
-  assert.equal(registration.status, 0, registration.stdout + registration.stderr);
-  const registrationHead = gitOut(cwd, "rev-parse", "HEAD");
-  assert.equal(gitOut(cwd, "log", "-1", "--pretty=%s"), "chore(oms): add api submodule");
-  git(source, "commit", "--allow-empty", "-m", "source work after registration");
-  git(source, "push", "origin", "main");
-  const record = run(["record", "api"], { cwd });
-  assert.equal(record.status, 0, record.stdout + record.stderr);
-  assert.equal(gitOut(cwd, "rev-parse", "HEAD^"), registrationHead);
-  assert.equal(gitOut(cwd, "rev-parse", "HEAD:oms/api"), gitOut(source, "rev-parse", "HEAD"));
+  const pushed = run(["push", "api"], { cwd, env: queueEnv([]) });
+  assert.equal(pushed.status, 0, pushed.stdout + pushed.stderr);
+  assert.match(pushed.stdout + pushed.stderr, /api\/main: pushed/);
+  assertRootSnapshot(cwd, before);
 });
 
 test("fetch retries one transient failure and succeeds without an error", () => {
   const { cwd, wt } = workspaceWithApi();
   const remoteHead = gitOut(wt, "rev-parse", "refs/remotes/origin/main");
   git(wt, "update-ref", "-d", "refs/remotes/origin/main");
+  const rootHead = gitOut(cwd, "rev-parse", "HEAD");
+  const rootIndex = gitOut(cwd, "ls-files", "--stage");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const stubDir = tempFixture("oms-fetch-retry-");
   const attempts = join(stubDir, "fetch-attempts");
@@ -183,6 +156,8 @@ test("fetch retries one transient failure and succeeds without an error", () => 
   assert.doesNotMatch(output, /failed/);
   assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 2);
   assert.equal(gitOut(wt, "rev-parse", "refs/remotes/origin/main"), remoteHead);
+  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), rootHead);
+  assert.equal(gitOut(cwd, "ls-files", "--stage"), rootIndex);
 });
 
 test("two fetch failures report the exit code and later aliases still run", () => {
@@ -190,15 +165,17 @@ test("two fetch failures report the exit code and later aliases still run", () =
   const web = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourcesFor([{ alias: "api", bare: api }, { alias: "web", bare: web }]));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
-  assert.equal(run(["sync", "web"], { cwd }).status, 0);
+  const cloned = run(["clone", "--all"], { cwd });
+  assert.equal(cloned.status, 0, cloned.stdout + cloned.stderr);
+  git(join(cwd, "oms", "web"), "update-ref", "-d", "refs/remotes/origin/main");
 
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const stubDir = tempFixture("oms-fetch-failure-");
+  const attempts = join(stubDir, "attempts");
   const stubGit = join(stubDir, "git");
   writeFileSync(
     stubGit,
-    `#!/usr/bin/env bash\nif [ "$1" = "fetch" ] && [[ "$PWD" == */oms/api ]]; then exit 92; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+    `#!/usr/bin/env bash\nif [ "$1" = "fetch" ] && [[ "$PWD" == */oms/api ]]; then echo attempt >> ${JSON.stringify(attempts)}; exit 92; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
   );
   chmodSync(stubGit, 0o755);
 
@@ -211,17 +188,21 @@ test("two fetch failures report the exit code and later aliases still run", () =
   assert.match(output, /api: fetch origin failed \(exit 92\)/);
   assert.match(output, /web: fetched/);
   assert.match(output, /Summary: fetched 1, failed 1/);
+  assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 2);
+  assert.equal(gitOut(join(cwd, "oms", "web"), "rev-parse", "refs/remotes/origin/main"), gitOut(web, "rev-parse", "refs/heads/main"));
 });
 
 test("preparation defaults follow selection scope and skip remains successful", () => {
   const namedOrigin = initBareUpstream();
   const named = initGitWorkspace();
-  writeSources(named, sourceFor("api", namedOrigin));
+  writeSources(named, sourcesFor([{ alias: "api", bare: namedOrigin }, { alias: "web", bare: namedOrigin }]));
   const namedResult = run(["fetch", "api"], {
     cwd: named,
     env: queueEnv([{ type: "select", default: true }]),
   });
   assert.equal(namedResult.status, 0, namedResult.stdout + namedResult.stderr);
+  assert.equal(existsSync(join(named, "oms", "api", ".git")), true);
+  assert.equal(existsSync(join(named, "oms", "web")), false);
 
   const soleOrigin = initBareUpstream();
   const sole = initGitWorkspace();
@@ -231,13 +212,21 @@ test("preparation defaults follow selection scope and skip remains successful", 
     env: queueEnv([{ type: "select", default: true }]),
   });
   assert.equal(soleResult.status, 0, soleResult.stdout + soleResult.stderr);
+  assert.equal(existsSync(join(sole, "oms", "api", ".git")), true);
 
-  const registeredOrigin = initBareUpstream();
-  const skippedOrigin = initBareUpstream();
-  const mixed = initGitWorkspace();
-  writeSources(mixed, sourcesFor([{ alias: "api", bare: registeredOrigin }, { alias: "web", bare: skippedOrigin }]));
-  assert.equal(run(["sync", "api"], { cwd: mixed }).status, 0);
+  const { cwd: mixed, wt, bare } = workspaceWithApi();
+  writeSources(mixed, sourcesFor([{ alias: "api", bare }, { alias: "web", bare: initBareUpstream() }]));
+  git(wt, "update-ref", "-d", "refs/remotes/origin/main");
   const before = rootSnapshot(mixed);
+  const cancelled = run(["fetch", "--all"], {
+    cwd: mixed,
+    env: queueEnv([{ type: "select", value: "cancel" }]),
+  });
+  assert.equal(cancelled.status, 1, cancelled.stdout + cancelled.stderr);
+  assert.match(cancelled.stdout + cancelled.stderr, /No repositories were changed/);
+  assert.equal(gitOut(wt, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"), "");
+  assert.equal(existsSync(join(mixed, "oms", "web")), false);
+  assertRootSnapshot(mixed, before);
   const skipped = run(["fetch", "--all"], {
     cwd: mixed,
     env: queueEnv([{ type: "select", default: true }]),
@@ -248,6 +237,7 @@ test("preparation defaults follow selection scope and skip remains successful", 
   assert.match(output, /api: fetched/);
   assert.match(output, /Summary: fetched 1, skipped 1/);
   assert.equal(existsSync(join(mixed, "oms", "web", ".git")), false);
+  assert.equal(gitOut(wt, "rev-parse", "refs/remotes/origin/main"), gitOut(bare, "rev-parse", "refs/heads/main"));
   assertRootSnapshot(mixed, before);
 });
 
@@ -281,12 +271,14 @@ test("detached HEAD attaches safely, offers a moving choice, and fails without i
   const blockedAttach = run(["pull", "api"], { cwd: blocked.cwd });
   const blockedOutput = blockedAttach.stdout + blockedAttach.stderr;
   assert.equal(blockedAttach.status, 2, blockedOutput);
-  assert.match(blockedOutput, /could not attach detached HEAD/);
+  assert.match(blockedOutput, /no available local branch at the same commit/);
   assert.equal(gitOut(blockedDir, "branch", "--show-current"), "");
 
   for (const command of ["commit", "pull", "push"]) {
     const { cwd } = workspaceWithApi();
     const dir = detachWithoutBranch(cwd);
+    const head = gitOut(dir, "rev-parse", "HEAD");
+    if (command === "commit") writeFileSync(join(dir, "work.txt"), "uncommitted");
     const before = rootSnapshot(cwd);
     const args = command === "commit" ? [command, "api", "-m", "x"] : [command, "api"];
     const result = run(args, { cwd });
@@ -295,6 +287,7 @@ test("detached HEAD attaches safely, offers a moving choice, and fails without i
     assert.match(output, /detached HEAD/, command);
     assert.match(output, /oms branch switch api/, command);
     assert.equal(gitOut(dir, "branch", "--show-current"), "");
+    assert.equal(gitOut(dir, "rev-parse", "HEAD"), head);
     assertRootSnapshot(cwd, before);
   }
 });
@@ -304,14 +297,16 @@ test("detached HEAD creates a branch through the queued text prompt", () => {
 
   const created = workspaceWithApi();
   const createdDir = detachWithoutBranch(created.cwd);
+  const head = gitOut(createdDir, "rev-parse", "HEAD");
   const result = run(["push", "api"], {
     cwd: created.cwd,
     env: queueEnv([create, { type: "text", value: "work/detached" }]),
   });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.match(output, /api: created work\/detached at /);
+  assert.match(output, /api\/work\/detached: pushed/);
   assert.equal(gitOut(createdDir, "branch", "--show-current"), "work/detached");
+  assert.equal(gitOut(created.bare, "rev-parse", "refs/heads/work/detached"), head);
 
   const empty = workspaceWithApi();
   const emptyDir = detachWithoutBranch(empty.cwd);
@@ -330,66 +325,80 @@ test("detached HEAD creates a branch through the queued text prompt", () => {
     env: queueEnv([create, { type: "cancel" }]),
   });
   assert.equal(stopped.status, 2, stopped.stdout + stopped.stderr);
-  assert.match(stopped.stdout + stopped.stderr, /still detached/);
+  assert.match(stopped.stdout + stopped.stderr, /Cancelled/);
   assert.equal(gitOut(cancelledDir, "branch", "--show-current"), "");
 });
 
-test("every preparing command refuses partial registration with repair guidance", () => {
+test("every preparing command refuses legacy registration with migration guidance", () => {
+  const bare = initBareUpstream();
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", bare));
+  const manifest = `[submodule "oms/api"]\n\tpath = oms/api\n\turl = file://${bare}\n`;
+  writeFileSync(join(cwd, ".gitmodules"), manifest);
+  const before = rootSnapshot(cwd);
   for (const args of preparingCommands) {
-    const bare = initBareUpstream();
-    const cwd = initGitWorkspace();
-    writeSources(cwd, sourceFor("api", bare));
-    writeFileSync(join(cwd, ".gitmodules"), `[submodule "oms/api"]\n\tpath = oms/api\n\turl = file://${bare}\n`);
-    const before = rootSnapshot(cwd);
-    const result = run(args, { cwd });
+    const result = run(args, { cwd, env: queueEnv([]) });
     const output = result.stdout + result.stderr;
     assert.notEqual(result.status, 0, `${args.join(" ")} unexpectedly succeeded`);
-    assert.match(output, /inconsistent|pending addition\/removal/, args.join(" "));
-    assert.match(output, /oms sync api/, args.join(" "));
+    assert.match(output, /legacy source data or registration/, args.join(" "));
+    assert.match(output, /oms migrate --dry-run/, args.join(" "));
+    assert.doesNotMatch(output, /PROMPT_RESPONSES is exhausted/);
+    assertRootSnapshot(cwd, before);
+  }
+  assert.equal(readFileSync(join(cwd, ".gitmodules"), "utf8"), manifest);
+  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+});
+
+test("fetch does not adopt a foreign checkout even with clone consent available", () => {
+  const { cwd, bare } = workspaceWithApi();
+  const foreign = initBareUpstream();
+  const path = join(cwd, "oms", "web");
+  writeSources(cwd, sourcesFor([{ alias: "api", bare }, { alias: "web", bare }]));
+  execFileSync("git", ["clone", `file://${foreign}`, path], { stdio: "ignore", env: testEnv });
+  const before = rootSnapshot(cwd);
+  const result = run(["fetch", "--all"], { cwd, env: queueEnv([]) });
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 2, output);
+  assert.match(output, /web: origin does not match the current declaration/);
+  assert.match(output, /api: fetched/);
+  assert.doesNotMatch(output, /web: fetched|PROMPT_RESPONSES is exhausted/);
+  assert.equal(gitOut(path, "remote", "get-url", "origin"), `file://${foreign}`);
+  assertRootSnapshot(cwd, before);
+});
+
+test("status and doctor report a missing alias without preparing it", () => {
+  const cwd = initGitWorkspace();
+  writeSources(cwd, sourceFor("api", initBareUpstream()));
+  const before = rootSnapshot(cwd);
+  for (const command of ["status", "doctor"]) {
+    const result = run([command], { cwd, env: queueEnv([]) });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout + result.stderr, /api.*not cloned/);
+    assert.equal(existsSync(join(cwd, "oms", "api")), false);
     assertRootSnapshot(cwd, before);
   }
 });
 
-test("status, doctor, and record report an uninitialized alias without preparing it", () => {
-  const cwd = cloneWithUninitializedApi();
+test("pull stops when Git refuses branch attachment and preserves the detached commit", () => {
+  const { cwd, wt } = workspaceWithApi();
+  git(wt, "switch", "--detach");
   const before = rootSnapshot(cwd);
-  const status = run(["status", "--json"], { cwd });
-  assert.equal(status.status, 0, status.stdout + status.stderr);
-  const parsed = JSON.parse(status.stdout);
-  assert.equal(parsed.repos.length, 1);
-  assert.equal(parsed.repos[0].initialized, false);
-  assert.equal(existsSync(join(cwd, "oms", "api", ".git")), false);
-
-  const doctor = run(["doctor"], { cwd });
-  assert.equal(doctor.status, 2, doctor.stdout + doctor.stderr);
-  assert.equal(existsSync(join(cwd, "oms", "api", ".git")), false);
-  const record = run(["record"], { cwd });
-  assert.equal(record.status, 0, record.stdout + record.stderr);
-  assert.match(record.stdout + record.stderr, /Nothing to record/);
-  assert.equal(existsSync(join(cwd, "oms", "api", ".git")), false);
-  assertRootSnapshot(cwd, before);
-});
-
-test("automatic initialization stops when Git refuses the baseline attachment", () => {
-  const cwd = cloneWithUninitializedApi();
-  const before = rootSnapshot(cwd);
-  const pinned = gitOut(cwd, "rev-parse", "HEAD:oms/api");
-
+  const head = gitOut(wt, "rev-parse", "HEAD");
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const stubDir = tempFixture("oms-prepare-attach-failure-");
   const stubGit = join(stubDir, "git");
   writeFileSync(
     stubGit,
-    `#!/usr/bin/env bash\nif [ "$1" = "switch" ] && [ "$2" = "main" ]; then echo "simulated attach failure" >&2; exit 93; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+    `#!/usr/bin/env bash\nif [ "$1" = "switch" ] && [ "$4" = "main" ]; then echo "simulated attach failure" >&2; exit 93; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
   );
   chmodSync(stubGit, 0o755);
 
-  const result = run(["fetch", "api"], { cwd, env: { ...testEnv, PATH: `${stubDir}${delimiter}${testEnv.PATH}` } });
+  const result = run(["pull", "api"], { cwd, env: { ...testEnv, PATH: `${stubDir}${delimiter}${testEnv.PATH}` } });
   const output = result.stdout + result.stderr;
-  assert.notEqual(result.status, 0, output);
+  assert.equal(result.status, 2, output);
   assert.match(output, /simulated attach failure/);
-  assert.match(output, /could not attach detached HEAD to "main"/);
-  assert.equal(gitOut(join(cwd, "oms", "api"), "rev-parse", "HEAD"), pinned);
-  assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "");
+  assert.doesNotMatch(output, /pulled from/);
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), head);
+  assert.equal(gitOut(wt, "branch", "--show-current"), "");
   assertRootSnapshot(cwd, before);
 });

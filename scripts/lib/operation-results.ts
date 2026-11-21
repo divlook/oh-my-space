@@ -3,13 +3,9 @@ import type { OperationResult } from "./types.js";
 
 export function printSummary(results: OperationResult[]): void {
   const counts: Record<OperationResult, number> = {
-    added: 0,
-    updated: 0,
     fetched: 0,
     pulled: 0,
     pushed: 0,
-    unsynced: 0,
-    recorded: 0,
     skipped: 0,
     failed: 0,
   };

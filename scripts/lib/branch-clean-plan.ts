@@ -1,13 +1,20 @@
-import { aliasDir, productionGitRunner, redactSensitiveUrls, resolveOriginHead, runGit, submodulePath } from "./git.js";
-import { loadRepos } from "./manifest.js";
-import { resolveBaselines } from "./branch-baseline.js";
-import { inspectCleanSourceSafety } from "./source-safety.js";
+import { redactSensitiveUrls, runGit } from "./git.js";
+import { requireAttachedSource } from "./source-safety.js";
 import type { GitResult, Repo } from "./types.js";
+import { captureSourceBranchContext, sourceBaseline, type SourceBranchContext } from "./source-branch-context.js";
+import type { ReadySourceCheckout, SourceWorkspace } from "./source-checkout.js";
 
 type Ref = Readonly<{ ref: string; oid: string; symbolic: string }>;
 type Branch = Ref & Readonly<{ name: string; reasons: readonly string[] }>;
-type Context = Readonly<{ declaration: string; registration: string; recorded: string }>;
-export type BranchCleanPlan = Readonly<{ alias: string; base: Ref; context: Context; branches: readonly Branch[]; limitedHistory: boolean }>;
+export type SourceBranchCleanPlan = Readonly<{
+  alias: string;
+  base: Ref;
+  checkout: ReadySourceCheckout;
+  context: SourceBranchContext;
+  defaultBaseline: string | null;
+  branches: readonly Branch[];
+  limitedHistory: boolean;
+}>;
 export type BranchCleanOutcome = { branch: Branch; kind: "deleted" | "already absent" | "preserved" | "failed" | "not run"; reason?: string; configFailed?: boolean };
 type SourceSafety = { protected: Map<string, string[]>; shallow: boolean };
 
@@ -28,45 +35,8 @@ function inventory(dir: string): readonly Ref[] {
   }));
 }
 
-function captureContext(root: string, alias: string): Context {
-  const loaded = loadRepos({ cwd: root });
-  const repo = loaded?.repos.find((entry) => entry.alias === alias);
-  if (!repo || loaded?.repoRoot !== root) throw new Error("Selected repository declaration cannot be inspected or no longer exists.");
-  const declaration = JSON.stringify([repo.alias, repo.branch ?? null, Object.entries(repo.remotes).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)]);
-  const path = submodulePath(alias);
-  const tree = checked(root, ["ls-tree", "-z", "HEAD", "--", path], "Cannot inspect root HEAD recorded source gitlink");
-  const match = tree.stdout.match(/^160000 commit ([0-9a-f]{40,64})\t([^\0]+)\0$/);
-  if (!match || match[2] !== path) throw new Error(`Root HEAD does not record a source gitlink for ${alias}; run "oms sync ${alias}" first.`);
-  const index = checked(root, ["ls-files", "--stage", "-z", "--", path], "Cannot inspect selected registration index");
-  if (!new RegExp(`^160000 [0-9a-f]{40,64} 0\\t${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\0$`).test(index.stdout)) {
-    throw new Error(`Selected registration is inconsistent; run "oms sync ${alias}" first.`);
-  }
-  const keyPrefix = `submodule.${path}.`;
-  const snapshots: string[] = [];
-  for (const args of [["--blob", "HEAD:.gitmodules"], ["--blob", ":.gitmodules"], ["--file", ".gitmodules"], ["--local"]]) {
-    const result = checked(root, ["config", ...args, "--null", "--list"], "Cannot inspect selected registration configuration");
-    const entries = result.stdout.split("\0").filter((entry) => entry.startsWith(keyPrefix)).sort();
-    if (args[0] !== "--local" && !entries.includes(`submodule.${path}.path\n${path}`)) throw new Error("Selected registration path changed or is inconsistent; run oms sync first.");
-    snapshots.push(JSON.stringify(entries));
-  }
-  return Object.freeze({ declaration, registration: JSON.stringify(snapshots), recorded: match[1] });
-}
-
-function inspectSafety(root: string, repo: Repo, context: Context): SourceSafety {
-  const dir = aliasDir(root, repo.alias);
-  const source = inspectCleanSourceSafety(dir, repo.alias, context.recorded);
-  if ("reason" in source) throw new Error(source.reason);
-  const baseline = resolveBaselines(root, repo);
-  if (!baseline.ok) throw new Error(baseline.reason);
-  const protectedBranches = new Map<string, string[]>();
-  for (const item of baseline.protectedReasons) {
-    const reasons = protectedBranches.get(item.branch) ?? [];
-    reasons.push(item.reason);
-    protectedBranches.set(item.branch, reasons);
-  }
-  if (source.branch !== null) {
-    protectedBranches.set(source.branch, [...(protectedBranches.get(source.branch) ?? []), "current branch"]);
-  }
+function inspectWorktrees(dir: string, current: string, protectedBranches: Map<string, string[]>): SourceSafety {
+  protectedBranches.set(current, [...(protectedBranches.get(current) ?? []), "current branch"]);
   const worktrees = checked(dir, ["worktree", "list", "--porcelain", "-z"], "Cannot inspect all source worktrees");
   const records = worktrees.stdout.split("\0\0").filter(Boolean);
   if (!records.length) throw new Error("Cannot inspect all source worktrees: empty inventory.");
@@ -86,6 +56,14 @@ function inspectSafety(root: string, repo: Repo, context: Context): SourceSafety
   return { protected: protectedBranches, shallow: shallow === "true" };
 }
 
+function inspectIndependentSafety(dir: string, repo: Repo): { baseline: string; safety: SourceSafety } {
+  const source = requireAttachedSource(dir, repo.alias);
+  if ("reason" in source) throw new Error(source.reason);
+  const baseline = sourceBaseline(dir, repo);
+  if (!baseline) throw new Error(`${repo.alias}: origin/HEAD could not be resolved. Declare "branch" in oms.yaml or repair it with git remote set-head origin -a inside oms/${repo.alias}.`);
+  return { baseline, safety: inspectWorktrees(dir, source.branch, new Map([[baseline, [repo.branch ? "manifest baseline" : "origin default baseline"]]])) };
+}
+
 function ancestry(dir: string, tip: string, base: string, shallow: boolean): string | null {
   const result = runGit(dir, ["merge-base", "--is-ancestor", tip, base]);
   if (result.exitCode === 0 && !result.stderr.trim()) return null;
@@ -93,14 +71,13 @@ function ancestry(dir: string, tip: string, base: string, shallow: boolean): str
   throw new Error(`Cannot inspect ancestry: ${redactSensitiveUrls(result.stderr.trim()) || "Git inspection failed"}`);
 }
 
-export function planBranchClean(root: string, repo: Repo, baseArg: string | undefined): BranchCleanPlan {
-  const dir = aliasDir(root, repo.alias);
-  const context = captureContext(root, repo.alias);
-  const safety = inspectSafety(root, repo, context);
+export function planSourceBranchClean(workspace: SourceWorkspace, repo: Repo, checkout: ReadySourceCheckout, baseArg: string | undefined): SourceBranchCleanPlan {
+  const dir = checkout.path;
+  const context = captureSourceBranchContext(workspace, repo.alias, checkout);
+  const { baseline, safety } = inspectIndependentSafety(dir, repo);
   const refs = inventory(dir);
-  const defaultName = repo.branch ?? resolveOriginHead(dir);
   // Baseline resolution above must succeed even when an explicit comparison is supplied.
-  const requested = baseArg ?? (defaultName ? `refs/heads/${defaultName}` : "");
+  const requested = baseArg ?? `refs/heads/${baseline}`;
   const matches = refs.filter((entry) => requested.startsWith("refs/") ? entry.ref === requested : entry.ref === `refs/heads/${requested}` || entry.ref === `refs/remotes/${requested}`);
   if (matches.length !== 1 || matches[0].symbolic) throw new Error(`Comparison base ${JSON.stringify(requested)} is missing, ambiguous, or symbolic. Supply an existing direct local or remote-tracking branch with --base; no refs were refreshed.`);
   const base = matches[0];
@@ -119,11 +96,20 @@ export function planBranchClean(root: string, repo: Repo, baseArg: string | unde
     }
     return Object.freeze({ ...entry, name, reasons: Object.freeze(reasons) });
   }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-  return Object.freeze({ alias: repo.alias, context, base, branches: Object.freeze(branches), limitedHistory });
+  return Object.freeze({ alias: repo.alias, checkout, context, base, branches: Object.freeze(branches), limitedHistory, defaultBaseline: baseArg === undefined ? baseline : null });
 }
 
-export function executeBranchClean(root: string, repo: Repo, plan: BranchCleanPlan): BranchCleanOutcome[] {
-  const dir = aliasDir(root, repo.alias);
+export function executeSourceBranchClean(workspace: SourceWorkspace, repo: Repo, plan: SourceBranchCleanPlan): BranchCleanOutcome[] {
+  const dir = plan.checkout.path;
+  function revalidate(): SourceSafety {
+    const context = captureSourceBranchContext(workspace, repo.alias, plan.checkout);
+    if (context.declaration !== plan.context.declaration || context.identity !== plan.context.identity) throw new Error("Selected declaration or checkout identity changed after confirmation.");
+    const { baseline, safety } = inspectIndependentSafety(dir, repo);
+    if (plan.defaultBaseline !== null && baseline !== plan.defaultBaseline) throw new Error("The baseline selecting the displayed comparison base changed after confirmation.");
+    return safety;
+  }
+
+  const git = workspace.git;
   const candidates = plan.branches.filter((branch) => !branch.reasons.length);
   const outcomes: BranchCleanOutcome[] = [];
   let stop: string | undefined;
@@ -132,9 +118,7 @@ export function executeBranchClean(root: string, repo: Repo, plan: BranchCleanPl
     let refs: readonly Ref[];
     let safety: SourceSafety;
     try {
-      const context = captureContext(root, repo.alias);
-      if (context.declaration !== plan.context.declaration || context.registration !== plan.context.registration || context.recorded !== plan.context.recorded) throw new Error("Selected declaration, registration information, or root HEAD recorded source commit changed after confirmation.");
-      safety = inspectSafety(root, repo, context);
+      safety = revalidate();
       refs = inventory(dir);
       const base = refs.find((entry) => entry.ref === plan.base.ref);
       if (!base || base.symbolic || base.oid !== plan.base.oid) throw new Error("Displayed comparison base changed or is no longer a direct branch ref.");
@@ -158,7 +142,7 @@ export function executeBranchClean(root: string, repo: Repo, plan: BranchCleanPl
     }
     if (reasons.length) { outcomes.push({ branch, kind: "preserved", reason: reasons.join(", ") }); continue; }
     const transaction = `start\nverify ${plan.base.ref} ${plan.base.oid}\ndelete ${branch.ref} ${branch.oid}\nprepare\ncommit\n`;
-    const deletion = productionGitRunner(dir, ["update-ref", "--no-deref", "--stdin"], Buffer.from(transaction));
+    const deletion = git(dir, ["update-ref", "--no-deref", "--stdin"], Buffer.from(transaction));
     if (!deletion.success) {
       outcomes.push({ branch, kind: "failed", reason: `expected-commit ref transaction failed: ${redactSensitiveUrls(deletion.stderr.trim()) || "Git refused deletion"}` });
       continue;

@@ -1,79 +1,31 @@
-import { cancel, log } from "@clack/prompts";
-import { prepareAlias } from "./alias-preparation.js";
-import { aliasRegistrations } from "./alias-registration.js";
-import { reportBaselines } from "./branch-baseline.js";
+import { log } from "@clack/prompts";
 import {
   aliasDir,
   currentBranch,
   inspectLocalBranches,
+  type LocalBranchInfo,
   inspectRemoteBranches,
   redactSensitiveUrls,
   runSub,
   shortOid,
-  submodulePath,
+  sourcePath,
 } from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
-import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
-import { ensureRemotes } from "./submodule-config.js";
+import { ensureSourceRemotes, type RemoteReconciliation } from "./source-remotes.js";
 import type { Repo } from "./types.js";
 import { refuseInsideManagedTree } from "./tree-context.js";
+import { sourceBaseline } from "./source-branch-context.js";
+import { prepareBranchSource } from "./source-preparation.js";
+import { loadForSources } from "./source-workspace.js";
 
 type RemoteState = "fresh" | "stale" | "unavailable";
 type RemoteInventory = { name: string; state: RemoteState; branches: string[]; warning: string | null };
-type AliasResult = { kind: "repo"; repo: Repo } | { kind: "error"; code: number };
-
-const PREPARE = { command: "branch list", topologyOffer: true, allowPendingRegistration: true };
-
-async function resolveAlias(repos: Repo[], repoRoot: string, aliasArg: string | undefined): Promise<AliasResult> {
-  if (aliasArg) {
-    const repo = repos.find(({ alias }) => alias === aliasArg);
-    if (!repo) {
-      log.error(`Unknown alias "${aliasArg}". Use "oms sync --list" to list aliases declared in oms.yaml.`);
-      return { kind: "error", code: 1 };
-    }
-    const prepared = await prepareAlias(repoRoot, repo, PREPARE);
-    return prepared.ok ? { kind: "repo", repo } : { kind: "error", code: prepared.code };
-  }
-  if (repos.length === 0) {
-    log.error("No aliases are declared in oms.yaml. Add one before listing branches.");
-    return { kind: "error", code: 1 };
-  }
-  if (repos.length === 1) {
-    const repo = repos[0];
-    const prepared = await prepareAlias(repoRoot, repo, PREPARE);
-    return prepared.ok ? { kind: "repo", repo } : { kind: "error", code: prepared.code };
-  }
-  if (!canPrompt()) {
-    log.error('No alias given and stdin is not a TTY. Pass an alias: "oms branch list <alias>".');
-    return { kind: "error", code: 1 };
-  }
-
-  const registrations = aliasRegistrations(repoRoot, repos.map((repo) => repo.alias));
-  const choice = await guardedSelect<string>({
-    message: "Select a submodule to list branches from",
-    options: repos.map((repo) => ({
-      value: repo.alias,
-      label: repo.alias,
-      hint: registrations.get(repo.alias)!.kind,
-    })),
-  });
-  if (isCancel(choice)) {
-    cancel("Cancelled. Repository state was preserved.");
-    return { kind: "error", code: 1 };
-  }
-  const repo = repos.find(({ alias }) => alias === choice);
-  if (!repo) return { kind: "error", code: 1 };
-  const prepared = await prepareAlias(repoRoot, repo, PREPARE);
-  return prepared.ok ? { kind: "repo", repo } : { kind: "error", code: prepared.code };
-}
-
 function diagnosticOrFallback(diagnostic: string, fallback: string): string {
   return diagnostic.trim().length > 0 ? diagnostic.trim() : fallback;
 }
 
 /** Reconcile and refresh declared remotes sequentially, retrying each failed fetch exactly once. */
-function refreshRemotes(repoRoot: string, repo: Repo): { remotes: RemoteInventory[]; originHeadReliable: boolean } {
-  const reconciled = new Map(ensureRemotes(repoRoot, repo.alias, repo.remotes).map((result) => [result.name, result]));
+function refreshRemotes(repoRoot: string, repo: Repo, configuredRemotes: RemoteReconciliation[]): { remotes: RemoteInventory[]; originHeadReliable: boolean } {
+  const reconciled = new Map(configuredRemotes.map((result) => [result.name, result]));
   const remotes: RemoteInventory[] = [];
   let originHeadReliable = false;
 
@@ -98,7 +50,7 @@ function refreshRemotes(repoRoot: string, repo: Repo): { remotes: RemoteInventor
         name,
         state: "unavailable",
         branches: [],
-        warning: diagnosticOrFallback(refs.diagnostic, `${name}: remote ref inspection failed; inspect refs with git -C ${submodulePath(repo.alias)} for-each-ref`),
+        warning: diagnosticOrFallback(refs.diagnostic, `${name}: remote ref inspection failed; inspect refs with git -C ${sourcePath(repo.alias)} for-each-ref`),
       });
       continue;
     }
@@ -138,19 +90,18 @@ function renderInventory(
   repo: Repo,
   current: string | null,
   detachedOid: string | null,
-  local: Extract<ReturnType<typeof inspectLocalBranches>, { ok: true }>["branches"],
+  local: LocalBranchInfo[],
   remotes: RemoteInventory[],
-  baseline: ReturnType<typeof reportBaselines>,
+  baseline: string | null,
+  originHeadReliable: boolean,
 ): void {
-  const baselineNames = baseline.baselines.map(({ branch }) => branch);
-  const baselineSet = new Set(baselineNames);
   const lines = [`Branch inventory: ${repo.alias}`, `HEAD: ${current ?? `detached ${detachedOid}`}`];
-  lines.push(`BASELINE [${baseline.state}]: ${baselineNames.join(", ") || "(none)"}`);
-  if (baseline.unmatched.length > 0) lines.push(`Unmatched reliable baselines: ${baseline.unmatched.join(", ")}`);
+  lines.push(`BASELINE [${baseline ? "known" : "unknown"}]: ${baseline ?? "(none)"}`);
+  if (baseline && !local.some(({ name }) => name === baseline)) lines.push(`Unmatched reliable baselines: ${baseline}`);
   lines.push("", "LOCAL", "NAME\tFLAGS\tUPSTREAM\tAHEAD\tBEHIND");
   if (local.length === 0) lines.push("(empty)");
   for (const branch of local) {
-    const flags = [branch.name === current ? "current" : null, baselineSet.has(branch.name) ? "baseline" : null]
+    const flags = [branch.name === current ? "current" : null, branch.name === baseline ? "baseline" : null]
       .filter(Boolean)
       .join(",");
     const hasUpstream = branch.upstream !== null;
@@ -168,37 +119,34 @@ function renderInventory(
     else for (const branch of remote.branches) lines.push(`${remote.name}\t${remote.state}\t${branch}`);
   }
   process.stdout.write(`${lines.join("\n")}\n`);
-  for (const warning of [...baseline.warnings, ...remotes.map(({ warning }) => warning).filter((value): value is string => value !== null)]) {
-    log.warn(`${repo.alias}: ${redactSensitiveUrls(warning)}`);
+  if (baseline === null) log.warn(`${repo.alias}: ${originHeadReliable
+    ? "origin/HEAD could not be resolved after refreshing origin"
+    : "origin/HEAD is not reliable because origin could not be refreshed successfully"}`);
+  for (const { warning } of remotes) {
+    if (warning) log.warn(`${repo.alias}: ${redactSensitiveUrls(warning)}`);
   }
 }
 
-export async function runBranchList(aliasArg: string | undefined): Promise<number> {
-  const loaded = loadForSubmodules();
-  if (!loaded) return 1;
-  if (refuseInsideManagedTree(loaded.repoRoot)) return 1;
-  const resolved = await resolveAlias(loaded.repos, loaded.repoRoot, aliasArg);
-  if (resolved.kind === "error") return resolved.code;
-  const { repo } = resolved;
-  const dir = aliasDir(loaded.repoRoot, repo.alias);
-
-  const refreshed = refreshRemotes(loaded.repoRoot, repo);
+export async function runSourceBranchList(alias: string | undefined): Promise<number> {
+  const loaded = loadForSources();
+  if (!loaded || refuseInsideManagedTree(loaded.repoRoot)) return 1;
+  const { workspace, repoRoot, repos } = loaded;
+  const prepared = await prepareBranchSource(workspace, repos, alias, "branch list");
+  if ("code" in prepared) return prepared.code;
+  const { repo, checkout: { path: dir } } = prepared;
+  const configured = ensureSourceRemotes(repoRoot, repo.alias, repo.remotes, Object.keys(repo.remotes));
+  const refreshed = refreshRemotes(repoRoot, repo, configured);
   const local = inspectLocalBranches(dir);
   if (!local.ok) {
     if (local.diagnostic) log.error(local.diagnostic);
     log.error(
-      `${repo.alias}: local branch ref inspection failed. Branches, checkout state, and root state were preserved. Retry "git -C ${submodulePath(repo.alias)} for-each-ref refs/heads", then "oms branch list ${repo.alias}".`,
+      `${repo.alias}: local branch ref inspection failed. Branches, checkout state, and root state were preserved. Retry "git -C ${sourcePath(repo.alias)} for-each-ref refs/heads", then "oms branch list ${repo.alias}".`,
     );
     return 2;
   }
   const current = currentBranch(dir);
   const detachedOid = current === null ? shortOid(dir, "HEAD") : null;
-  const baseline = reportBaselines(
-    loaded.repoRoot,
-    repo,
-    local.branches.map(({ name }) => name),
-    refreshed.originHeadReliable,
-  );
-  renderInventory(repo, current, detachedOid, local.branches, refreshed.remotes, baseline);
+  const baseline = sourceBaseline(dir, repo, refreshed.originHeadReliable);
+  renderInventory(repo, current, detachedOid, local.branches, refreshed.remotes, baseline, refreshed.originHeadReliable);
   return 0;
 }

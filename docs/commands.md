@@ -14,15 +14,15 @@ Built-in help ships with the installed CLI and is the authoritative exact refere
 | --- | --- | --- |
 | Create a starter manifest | `oms init` | Current directory, no source repository |
 | Diagnose the workspace | `oms doctor` | Read-only checks across the workspace |
-| Add or initialize declared repositories | `oms sync` | Main-project registration and selected source repositories |
+| Clone missing declared repositories | `oms clone` | Selected local source checkouts and root-local ignore rules |
 | Inspect repository state | `oms status` | Read-only across selected source repositories |
 | Commit source changes | `oms commit` | One source repository only |
-| Record moved source commits | `oms record` | Main project only |
+| Convert a 2.x workspace | `oms migrate` | Verified legacy Git data and affected root files and index entries |
 | Start a second task in one repository | `oms tree add`, `oms tree list`, `oms tree remove` | Source-repository worktrees under `.oms-tree/`, no root history change |
-| Clean merged local branches | `oms branch clean` | One source repository, no recorded-commit change |
+| Clean merged local branches | `oms branch clean` | One source repository only |
 | Fetch, pull, or push source history | `oms fetch`, `oms pull`, `oms push` | Selected source repositories |
 | Run tests, builds, or other commands | `oms exec` | Selected canonical source checkouts. Child commands control additional effects. |
-| Remove registered repositories | `oms unsync` | Main-project registration and selected source repositories |
+| Remove local checkouts | `oms remove` | Selected local source checkouts only |
 | Install AI-agent instructions | `oms agent ...` | Root-owned files under `oms/` |
 | Show or install agent skills | `oms skills` | Tool installation, not repository history |
 | Check or update the CLI | `oms update` | CLI installation, not the workspace |
@@ -41,45 +41,37 @@ For older or unverifiable skills, OMS recommends `npx skills update`. For incomp
 
 ### `oms status`
 
-`oms status` shows branch, recorded-commit relationship, dirtiness, and ahead/behind state. `moved` means the source checkout differs from the commit recorded by the main project. JSON output serves tools and AI agents. See `oms status --help` for its exact schema.
+`oms status` shows source branch, dirtiness, and ahead/behind state. It reports only current declarations and lists managed trees separately. A missing checkout appears as `(not cloned)` and is not an error. A blocked checkout, such as a legacy submodule or an occupied path, appears as `(unavailable)` with a diagnostic. For the exact JSON schema, run `oms status --help`.
 
 ## Add or remove repositories
 
-`oms sync` and `oms unsync` do not commit by default. Pass `--commit` for one invocation or set [`autoCommitRegistration: true`](configure-your-workspace.md#autocommitregistration) in `oms.yaml`. Pass `--no-commit` to override that setting for one invocation. The flags are mutually exclusive, and OMS never prompts to commit.
+### `oms clone`
 
-Without a commit, Git can change staging on affected paths, including paths you already staged. Review or save any staged selection you need to preserve before running either command. See [migration and rollback guidance](migrations/README.md#opt-in-registration-commits) if you use an older OMS version or depend on automatic commits.
+`oms clone api` provisions the missing checkout on its declared branch, or the remote default when no branch is set. `--all` selects every declaration. `--list` reads declarations without opening Git. Without aliases or `--all`, a terminal prompts for selection.
 
-### `oms sync`
+An existing checkout with matching origin stays on its current branch and commit. OMS never overwrites an occupied or legacy path. For a legacy workspace, use `oms migrate --dry-run`.
 
-`oms sync` registers missing repositories, initializes existing registrations, and fetches source history. It attaches the configured starting branch, called the baseline, only when this preserves the recorded commit. It reconciles OMS-managed remote and branch metadata from `oms.yaml`.
+### `oms remove`
 
-Rerun `oms sync <alias> --commit` to finalize pending registration or managed metadata changes. A sync commit includes eligible changes for successful aliases and the complete current `oms.yaml` if it changed. OMS refuses before syncing if a staged registration path differs from the planned commit. It preserves unrelated staged paths except that it consumes any existing `oms.yaml` staging. See [How OMS works](how-oms-works.md#synchronization) for safety and recovery behavior.
+`oms remove api web` deletes only the verified local checkouts after you approve the plan. It leaves `oms.yaml`, root ignore rules, the root index and history, and remote repositories unchanged. `--all` includes verified former checkouts and reports unidentified paths separately without deleting them. An already absent declared checkout is a no-op.
 
-### `oms unsync`
+Review the branches and tags listed in the plan. The terminal prompt defaults to No; unattended removal requires `--yes`. OMS checks HEAD, local refs, and reflog-only commits against current origin refs, and requires each local tag to match by name and object. It does not rely on cached remote-tracking refs for this proof. If OMS cannot prove that history is recoverable, preserve it outside the checkout before retrying. A separate backup protects your data but does not make the origin check pass.
 
-`oms unsync` deinitializes and removes selected submodules but keeps their declarations in `oms.yaml`. It refuses to discard uncommitted source changes unless you explicitly choose force. Rerun `oms unsync <alias> --commit` to finalize a pending removal.
+`--force` only allows discarding staged, unstaged, untracked, and ignored working files. It cannot bypass a stash, an in-progress Git operation, a linked worktree, an ownership mismatch, or failed history checks. Resolve the reported blocker and run `oms remove` again.
 
-Use `oms sync` and `oms unsync` for repository additions and removals. `oms record` only commits a moved source pointer for a repository whose registration is already in the main project's current commit.
+If origin is inaccessible, only a terminal invocation with one explicitly named alias can use the exception. Make a backup first: the checkout may be your only copy. OMS still blocks reflog-only commits. For local branches tracking origin, it requires each tip to be reachable from its last known upstream. A detached HEAD must be reachable from a last known origin branch. If the remaining checks pass, OMS requires the exact alias in a separate prompt even with `--yes` or `--force`. `--all` cannot use this exception.
 
-### Pending registrations
-
-A valid registration can be usable before it is committed. `oms fetch`, `oms pull`, `oms commit`, `oms branch list`, `oms branch switch`, `oms branch checkout`, and `oms tree add` accept it, subject to their usual safety checks. Before `oms push`, `oms branch delete`, `oms branch clean`, `oms exec`, or `oms record` can operate on that repository, finalize its registration with `oms sync <alias> --commit`.
-
-When a command offers to register missing repositories, the offer states whether `autoCommitRegistration` enables a main-project commit. If you accept, only eligible repositories that prepared successfully or needed no preparation continue. An error finalizing shared root state stops the original command for the whole selection.
+One blocked target prevents the batch from starting. OMS checks each target again before deleting it. Do not change checkouts from another process during removal. If a target changes, OMS stops and reports completed and unattempted removals; it does not restore deleted checkouts.
 
 ## Work with source commits
 
 ### `oms commit`
 
-`oms commit` commits changes inside one source repository. OMS commits existing staged changes as staged. If the source index has no staged changes, OMS stages that source repository's changes. The command never stages or commits the main-project submodule entry.
+`oms commit` commits changes inside one source repository. OMS commits existing staged changes as staged. If the source index has no staged changes, OMS stages that source repository's changes. The command never stages or commits root changes and never provisions a missing clone.
 
-OMS automatically initializes a registered but uninitialized repository. OMS refuses an unregistered repository because a fresh checkout cannot contain the source changes you intend to commit.
+### `oms migrate`
 
-### `oms record`
-
-`oms record` commits selected moved submodule entries in the main project. The commit includes only those entries. OMS refuses unrelated staged paths. OMS can record successful selections even when it cannot record another selected alias. OMS then reports partial failure.
-
-Push the source commit before recording it so collaborators can fetch the recorded commit.
+`oms migrate --dry-run` previews conversion from OMS 2.x. `oms migrate` converts verified local Git data and updates only the affected root paths. Review the plan and authorize application before any changes. Read the [migration guide](migrations/2.x-to-3.0.0.md) before converting multiple computers.
 
 ## Work with branches
 
@@ -95,11 +87,11 @@ Push the source commit before recording it so collaborators can fetch the record
 
 `oms branch list` refreshes every remote declared for one alias. It lists local and remote-tracking branches, baseline certainty, upstream divergence, and detached state. OMS retries each fetch once. Cached refs remain visible as `stale` after a failed refresh. A remote with no usable refs is `unavailable`.
 
-Listing itself does not switch, create, delete, merge, or push branches, and does not update the main project's recorded commit.
+Listing does not switch, create, delete, merge, or push branches.
 
 ### `oms branch delete`
 
-`oms branch delete` deletes one local branch. It never deletes a remote branch or remote-tracking ref. It never changes the recorded commit. OMS protects the current branch and resolved baseline branches, even in force mode.
+`oms branch delete` deletes one local branch. It never deletes a remote branch or remote-tracking ref. OMS protects the current branch and resolved baseline branches, even in force mode.
 
 OMS attempts safe deletion first. Force deletion prints recovery information and checks the branch commit again before deletion.
 
@@ -118,23 +110,23 @@ oms branch clean api --base origin/develop # use a cached remote-tracking base
 
 Use `oms branch clean --help` for a quick reference with examples and essential base, confirmation, and initialization guidance. The rules below and [Merged branch cleanup safety](how-oms-works.md#merged-branch-cleanup-safety) cover detailed safety, concurrency, exit codes, and recovery.
 
-OMS initializes existing registrations without offering new registration. Initialization, fetched data, baseline branch creation or attachment, and tracking settings remain after decline. When candidates exist, the plan shows full refs and commit IDs, candidates, exclusion reasons, actual preparation effects, and concurrency restrictions before a confirmation that defaults to No. Already initialized sources receive no routine preparation notice. Decline or cancellation exits `1`; candidates without an interactive terminal are preserved with exit `1`.
+Cleanup requires a verified independent checkout. It never clones a missing source. When candidates exist, the plan shows full refs and commit IDs, candidates, exclusions, and concurrency restrictions. The prompt defaults to No. Decline, cancellation, or candidates without an interactive terminal leave branches unchanged and exit `1`.
 
-After successful inspection, no candidates exits `0` without prompting. An already initialized source without exceptional diagnostics prints only an alias-specific no-op summary, not the base, branch inventory, or deletion-concurrency warning. Actual initialization effects and applicable safety or shallow-history diagnostics remain visible. A no-op does not mean working files are clean or all topic branches were merged; inspection failures still refuse cleanup.
+After successful inspection, no candidates exits `0` without prompting. Without an exceptional diagnostic, OMS prints only an alias-specific no-op summary. A no-op does not mean working files are clean or all topic branches were merged.
 
-Only proven ancestry in the comparison base qualifies a branch. Extra commits and non-ancestor squash or rebase results remain. The current branch, local comparison base, all protected baselines, and branches checked out in any worktree are excluded. Shallow repositories allow proven ancestors but preserve unproven history; deepen or repair it explicitly before rerunning. Unsafe source operations, detached HEAD away from the recorded commit, inconsistent registration, and unreliable inspection refuse cleanup. A staged pointer is not the recorded commit.
+Only proven ancestry in the comparison base qualifies a branch. Extra commits and non-ancestor squash or rebase results remain. The current branch, local comparison base, protected baselines, and branches checked out in any worktree are excluded. Shallow repositories allow proven ancestors but preserve unproven history; deepen or repair it before rerunning. OMS refuses a detached HEAD, an in-progress source Git operation, or unreliable inspection.
 
 Keep other Git or IDE branch, worktree, and configuration changes paused from confirmation waiting through completion. Expected-commit checks do not lock all repository state. Same-name/OID recreation is not distinguished, and recreation between deletion and configuration cleanup can lose the recreated branch's settings. See [Merged branch cleanup safety](how-oms-works.md#merged-branch-cleanup-safety) for the full boundary.
 
-Results distinguish deleted, already absent, preserved, failed, and not run. Deleted branches receive their full original tip and a shell-safe recreation command while the commit is available. Partial failure exits `2` without rollback or force retry. A configuration-cleanup failure remains a completed ref deletion and includes a repair command; independently safe candidates continue. After preparation, cleanup preserves remote refs, source HEAD/files/index, root tracked state, and recorded commits.
+Results distinguish deleted, already absent, preserved, failed, and not run. Deleted branches receive their full original tip and a shell-safe recreation command while the commit is available. Partial failure exits `2` without rollback or force retry. A configuration-cleanup failure leaves the ref deleted and includes a repair command. Cleanup preserves remote refs, source HEAD, source files and index, and the root repository.
 
 ## Work on tasks in managed trees
 
 ### `oms tree add`
 
-`oms tree add` creates a disposable Git worktree of an initialized repository at `.oms-tree/<alias>/<task>/`. It uses branch `<task>` there. A new branch starts at the submodule's current HEAD. `--from` overrides the start point. An existing branch resumes at its tip. `--from` fails with an existing branch.
+`oms tree add` creates a disposable Git worktree of a verified source checkout at `.oms-tree/<alias>/<task>/`. It uses branch `<task>` there. A new branch starts at the canonical checkout's current HEAD, or at `--from <ref>`. An existing branch resumes at its tip; `--from` fails with an existing branch.
 
-Creating the tree itself needs no network, does not move the canonical checkout, and makes no root commit or `.gitmodules` entry. A detached HEAD stays detached. OMS may offer to register a missing repository first. OMS excludes `.oms-tree/` from root status through the root's local exclude file. Trees are machine-local.
+Tree creation needs no network and leaves the canonical checkout unchanged, even when detached. It does not provision missing sources. OMS excludes `.oms-tree/` through the root's local exclude file.
 
 ### `oms tree list`
 
@@ -157,28 +149,27 @@ OMS removes empty `.oms-tree/<alias>/` and `.oms-tree/` directories. The root's 
 Use Git directly inside a managed tree. These commands refuse to run there:
 
 - `oms commit`
-- `oms record`
 - `oms branch`
 - `oms fetch`
 - `oms pull`
 - `oms push`
 - `oms exec`
 
-They direct you to the canonical checkout or the workspace root. `oms status`, `oms doctor`, and `oms tree` still work inside a tree. `oms unsync` refuses while any tree exists for the alias. Unsync deletes the shared submodule Git directory.
+They direct you to the canonical checkout or the workspace root. `oms status`, `oms doctor`, and `oms tree` still work inside a tree. `oms remove` refuses while any managed or external linked worktree exists for the alias.
 
 ## Synchronize source history
 
 ### `oms fetch`
 
-`oms fetch` fetches selected declared remotes with pruning. OMS initializes registered but uninitialized repositories. OMS may offer missing registration as one explicit synchronization decision.
+`oms fetch` fetches selected declared remotes with pruning. In a terminal, it may ask once whether to clone missing sources before fetching.
 
 ### `oms pull`
 
-`oms pull` fast-forwards the current source branch from one selected remote. OMS rejects dirty source changes. The command does not record the moved source commit in the main project. Follow the printed `oms record` hint after a successful move.
+`oms pull` fast-forwards the current source branch from one selected remote. OMS rejects uncommitted source changes. The pull changes only the source checkout; the workspace root does not pin the source commit.
 
 ### `oms push`
 
-`oms push` pushes the current source branch to selected remotes. It refuses an unregistered repository and never records the moved source commit. Recording requires a separate `oms record` step. OMS limits upstream setup to `origin`.
+`oms push` pushes the current source branch to selected remotes. It requires an existing verified checkout and limits upstream setup to `origin`.
 
 ## Run commands across repositories
 
@@ -225,9 +216,7 @@ OMS applies these selection rules before it starts a child process:
 A missing separator or an empty executable causes failure before selection.
 `oms exec --help` needs no separator or command.
 
-OMS does not initialize, register, fetch, switch branches, record pointers, or repair targets as preparation.
-Missing, uninitialized, occupied, or inconsistently registered targets fail individually with `oms sync <alias>` guidance. Valid pending registrations also fail, with `oms sync <alias> --commit` guidance.
-OMS preserves failed targets and continues with later eligible targets.
+OMS does not clone, migrate, fetch, switch branches, or repair targets as preparation. Missing targets fail with `oms clone <alias>` guidance; legacy, occupied, and unsafe targets report the appropriate migration or repair step. Eligible later targets still run.
 Other commands retain their preparation rules.
 
 ### Input, output, and results
