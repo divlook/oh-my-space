@@ -1,63 +1,29 @@
 import { log } from "@clack/prompts";
+import { DATA_DIRNAME } from "./constants.js";
 import { dim, pad, readPackageVersion, uniqueAliases } from "./env.js";
-import { aliasDir, currentBranch, isDirty, registeredSubmodulePaths, runGit, shortSha, submodulePath } from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
-import { listManagedTrees, type ManagedTree } from "./tree-inventory.js";
+import { currentBranch, runGit, type RawGitRunner } from "./git.js";
+import { isDirtyCounts, parseChangeCounts, type ChangeCounts } from "./git-status.js";
+import { inspectSourceCheckout, type SourceWorkspace } from "./source-checkout.js";
+import { inferAliasFromCwd, loadForSources } from "./source-workspace.js";
+import { listIndependentManagedTrees, type ManagedTree } from "./tree-inventory.js";
 import type { Repo, StatusOptions } from "./types.js";
-import { changeCounts, inferAliasFromCwd, isDirtyCounts, observeGitlinks, type ChangeCounts, type GitlinkObservation, type PinValue } from "./workspace-state.js";
 
-type StatusRow = {
-  alias: string;
-  branch: string;
-  pin: string;
-  dirty: string;
-  ahead: string;
-  behind: string;
-};
-
-function readDivergence(dir: string): string[] {
-  const r = runGit(dir, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
-  return r.success ? r.stdout.trim().split(/\s+/, 2) : [];
-}
-
-function aheadBehind(dir: string): { ahead: string; behind: string } {
-  const [behind, ahead] = readDivergence(dir);
-  return { ahead: ahead && ahead !== "0" ? ahead : "", behind: behind && behind !== "0" ? behind : "" };
-}
-
-
-function headShortSha(dir: string): string | null {
-  const r = runGit(dir, ["rev-parse", "--short", "HEAD"]);
+function headShortSha(dir: string, git?: RawGitRunner): string | null {
+  const r = runGit(dir, ["rev-parse", "--short", "HEAD"], false, undefined, git);
   return r.success ? r.stdout.trim() || null : null;
 }
 
 type HeadState = { branch: string | null; head: string | null; detached: boolean };
 
-function headState(dir: string): HeadState {
-  const branch = currentBranch(dir);
-  const head = headShortSha(dir);
+function headState(dir: string, git?: RawGitRunner): HeadState {
+  const branch = currentBranch(dir, git);
+  const head = headShortSha(dir, git);
   return { branch, head, detached: branch === null && head !== null };
 }
 
 type TrackingState = { trackingBranch: string | null; ahead: number | null; behind: number | null };
 
-function trackingState(dir: string): TrackingState {
-  const up = runGit(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
-  const trackingBranch = up.success ? up.stdout.trim() || null : null;
-  if (!trackingBranch) return { trackingBranch: null, ahead: null, behind: null };
-  const [rawBehind = "", rawAhead = ""] = readDivergence(dir);
-  const behind = Number.parseInt(rawBehind, 10);
-  const ahead = Number.parseInt(rawAhead, 10);
-  return {
-    trackingBranch,
-    ahead: Number.isNaN(ahead) ? null : ahead,
-    behind: Number.isNaN(behind) ? null : behind,
-  };
-}
-
-
-/** Machine-readable per-repo status entry. The stable schemaVersion 1 contract is specified by the ai-submodule-workflow capability and summarized by oms status --help. */
-type JsonRepoStatus = {
+type SourceStatus = {
   alias: string;
   path: string;
   absolutePath: string;
@@ -67,7 +33,6 @@ type JsonRepoStatus = {
   head: string | null;
   detached: boolean;
   trackingBranch: string | null;
-  pin: PinValue;
   dirty: boolean;
   changes: ChangeCounts;
   ahead: number | null;
@@ -75,29 +40,12 @@ type JsonRepoStatus = {
   error: string | null;
 };
 
-type JsonRootStatus = {
+type RootStatus = {
   branch: string | null;
   head: string | null;
   detached: boolean;
   dirty: boolean;
   changes: ChangeCounts;
-  submodulePointers: {
-    moved: string[];
-    staged: string[];
-    split: string[];
-    conflict: string[];
-  };
-};
-
-type JsonStatus = {
-  schemaVersion: 1;
-  toolVersion: string;
-  workspaceRoot: string;
-  currentAlias: string | null;
-  root: JsonRootStatus;
-  repos: JsonRepoStatus[];
-  trees: JsonTreeStatus[];
-  errors: string[];
 };
 
 type JsonTreeStatus = {
@@ -111,15 +59,68 @@ type JsonTreeStatus = {
   error: string | null;
 };
 
-function buildRepoStatus(repoRoot: string, state: GitlinkObservation): JsonRepoStatus {
-  const common = {
-    alias: state.alias,
-    path: submodulePath(state.alias),
-    absolutePath: aliasDir(repoRoot, state.alias),
+function buildTreeStatuses(trees: ManagedTree[]): JsonTreeStatus[] {
+  return trees.map((tree) => ({
+    alias: tree.alias,
+    task: tree.task,
+    path: tree.path,
+    absolutePath: tree.absolutePath,
+    branch: tree.state === "healthy" ? tree.branch : null,
+    head: tree.state === "healthy" ? tree.head : null,
+    dirty: tree.state === "healthy" ? tree.dirty : null,
+    error: tree.error,
+  }));
+}
+
+function printStatusTreesText(trees: ManagedTree[]): void {
+  if (trees.length > 0) {
+    console.log("");
+    console.log("Managed trees (.oms-tree/):");
+    for (const tree of trees) {
+      const state = tree.error ?? (tree.dirty ? "dirty" : "clean");
+      const branch = tree.state === "healthy" ? (tree.branch ?? "(detached)") : "-";
+      console.log(`  ${tree.path}  ${branch}  ${state}`);
+    }
+  }
+}
+
+type WorkspaceStatus = {
+  schemaVersion: 2;
+  toolVersion: string;
+  workspaceRoot: string;
+  currentAlias: string | null;
+  root: RootStatus;
+  repos: SourceStatus[];
+  trees: JsonTreeStatus[];
+  errors: string[];
+};
+
+const noTracking: TrackingState = { trackingBranch: null, ahead: null, behind: null };
+
+function readSourceTracking(dir: string, branchRef: string, git: RawGitRunner): TrackingState & { error?: string } {
+  const refs = git(dir, ["for-each-ref", "--format=%(upstream:short)%09%(upstream)", "--", branchRef]);
+  if (!refs.success) return { ...noTracking, error: "could not read the tracking branch" };
+  const [trackingBranch, upstream] = refs.stdout.trimEnd().split("\t", 2);
+  if (!trackingBranch || !upstream) return noTracking;
+  const comparison = git(dir, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`]);
+  const counts = comparison.success ? /^(\d+)\s+(\d+)$/.exec(comparison.stdout.trim()) : null;
+  if (!counts) return { ...noTracking, trackingBranch, error: "could not compare HEAD with its tracking branch" };
+  return { trackingBranch, ahead: Number(counts[2]), behind: Number(counts[1]) };
+}
+
+function readChanges(dir: string, git: RawGitRunner): ChangeCounts | null {
+  const result = git(dir, ["--no-optional-locks", "status", "--porcelain=v1", "-z"]);
+  return result.success ? parseChangeCounts(result.stdout) : null;
+}
+
+function sourceStatus(workspace: SourceWorkspace, repo: Repo): SourceStatus {
+  const checkout = inspectSourceCheckout(workspace, repo);
+  const row: SourceStatus = {
+    alias: repo.alias,
+    path: `${DATA_DIRNAME}/${repo.alias}`,
+    absolutePath: checkout.path,
     configured: true,
-    pin: state.pin,
-  };
-  const safeDefaults = {
+    initialized: checkout.kind === "ready",
     branch: null,
     head: null,
     detached: false,
@@ -128,181 +129,109 @@ function buildRepoStatus(repoRoot: string, state: GitlinkObservation): JsonRepoS
     changes: { staged: 0, unstaged: 0, untracked: 0 },
     ahead: null,
     behind: null,
-  };
-  if (!state.initialized) {
-    return { ...common, initialized: false, ...safeDefaults, error: null };
-  }
-  const dir = common.absolutePath;
-  const head = headShortSha(dir);
-  if (head === null) {
-    return {
-      ...common,
-      initialized: true,
-      ...safeDefaults,
-      error: `${state.alias}: could not read submodule HEAD`,
-    };
-  }
-  const branch = currentBranch(dir);
-  const { trackingBranch, ahead, behind } = trackingState(dir);
-  const changes = changeCounts(dir, new Set());
-  return {
-    ...common,
-    initialized: true,
-    branch,
-    head,
-    detached: branch === null,
-    trackingBranch,
-    dirty: isDirtyCounts(changes),
-    changes,
-    ahead,
-    behind,
     error: null,
   };
-}
-
-/**
- * Build the root JSON status. root.changes always excludes every configured submodule gitlink path so
- * pointer movement is reported only through submodulePointers, whose arrays cover the selected repos.
- */
-function buildRootStatus(repoRoot: string, configuredRepos: Repo[], states: GitlinkObservation[]): JsonRootStatus {
-  const { branch, head, detached } = headState(repoRoot);
-  const excludePaths = new Set<string>([
-    ...registeredSubmodulePaths(repoRoot),
-    ...configuredRepos.map((r) => submodulePath(r.alias)),
-  ]);
-  const changes = changeCounts(repoRoot, excludePaths);
-  const pointers = { moved: [] as string[], staged: [] as string[], split: [] as string[], conflict: [] as string[] };
-  for (const s of states) {
-    if (s.conflict) pointers.conflict.push(s.alias);
-    if (s.moved) pointers.moved.push(s.alias);
-    if (s.staged) pointers.staged.push(s.alias);
-    if (s.split) pointers.split.push(s.alias);
+  if (checkout.kind === "ready") {
+    const { git } = workspace;
+    const dir = checkout.path;
+    const ref = git(dir, ["symbolic-ref", "--quiet", "HEAD"]);
+    const branchRef = ref.success ? ref.stdout.trim() : "";
+    row.head = headShortSha(dir, git);
+    if (!row.head) row.error = "could not read checkout HEAD";
+    if (branchRef.startsWith("refs/heads/")) {
+      row.branch = branchRef.slice("refs/heads/".length);
+      const tracking = readSourceTracking(dir, branchRef, git);
+      row.trackingBranch = tracking.trackingBranch;
+      row.ahead = tracking.ahead;
+      row.behind = tracking.behind;
+      row.error ??= tracking.error ?? null;
+    } else if (ref.exitCode === 1) {
+      row.detached = row.head !== null;
+    } else {
+      row.error ??= "could not read the current branch";
+    }
+    const changes = readChanges(dir, git);
+    if (changes) {
+      row.changes = changes;
+      row.dirty = isDirtyCounts(changes);
+    } else {
+      row.error ??= "could not inspect checkout changes";
+    }
+  } else if (checkout.kind !== "missing") {
+    row.error = checkout.reason;
   }
-  return { branch, head, detached, dirty: isDirtyCounts(changes), changes, submodulePointers: pointers };
+  if (row.error !== null) row.error = `${repo.alias}: ${row.error}`;
+  return row;
 }
 
-function collectStatusTrees(repoRoot: string, configuredRepos: Repo[], selectedAliases: string[] | null): ManagedTree[] {
-  const trees = listManagedTrees(repoRoot, configuredRepos, { dirtyAliases: selectedAliases ?? "all" });
-  if (selectedAliases === null) return trees;
-  const selected = new Set(selectedAliases);
-  return trees.filter((tree) => selected.has(tree.alias));
-}
-
-function buildTreeStatuses(trees: ManagedTree[]): JsonTreeStatus[] {
-  return trees.map((tree) => ({
-    alias: tree.alias,
-    task: tree.task,
-    path: tree.path,
-    absolutePath: tree.absolutePath,
-    branch: tree.branch,
-    head: tree.head,
-    dirty: tree.dirty,
-    error: tree.error,
-  }));
-}
-
-function printStatusJson(
-  repoRoot: string,
-  configuredRepos: Repo[],
-  states: GitlinkObservation[],
-  treeAliases: string[] | null,
-): number {
-  const repos = states.map((state) => buildRepoStatus(repoRoot, state));
-  const errors = repos.filter((r) => r.error !== null).map((r) => r.error as string);
-  const payload: JsonStatus = {
-    schemaVersion: 1,
-    toolVersion: readPackageVersion(),
-    workspaceRoot: repoRoot,
-    currentAlias: inferAliasFromCwd(repoRoot, configuredRepos),
-    root: buildRootStatus(repoRoot, configuredRepos, states),
-    repos,
-    trees: buildTreeStatuses(collectStatusTrees(repoRoot, configuredRepos, treeAliases)),
-    errors,
-  };
-  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  return errors.length > 0 ? 2 : 0;
-}
-
-export async function runStatus(aliases: string[], options: StatusOptions): Promise<number> {
-  const loaded = loadForSubmodules();
+export async function runIndependentStatus(aliases: string[], options: StatusOptions, git?: RawGitRunner): Promise<number> {
+  const loaded = loadForSources({}, git);
   if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
-
-  let selectedAliases: string[];
-  // Null means "no alias filter was given": the tree inventory is then reported whole, including
-  // entries whose alias is no longer declared in the manifest.
-  let treeAliases: string[] | null = null;
-  if (options.all || aliases.length === 0) {
-    selectedAliases = repos.map((repo) => repo.alias);
-  } else {
-    const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
+  const { repos, repoRoot, workspace } = loaded;
+  let selected = repos;
+  let selectedAliases: string[] | null = null;
+  if (aliases.length > 0) {
+    const byAlias = new Map(repos.map((repo) => [repo.alias, repo]));
+    const unknown = aliases.filter((alias) => !byAlias.has(alias));
     if (unknown.length > 0) {
-      const msg = `Unknown alias(es): ${unknown.join(", ")}. Use "oms sync --list" to see available aliases.`;
+      const msg = `Unknown alias(es): ${unknown.join(", ")}. Use "oms clone --list" to see available aliases.`;
       if (options.json) process.stderr.write(`${msg}\n`);
       else log.error(msg);
       return 1;
     }
-    selectedAliases = uniqueAliases(aliases);
-    treeAliases = selectedAliases;
+    if (!options.all) {
+      selectedAliases = uniqueAliases(aliases);
+      selected = selectedAliases.map((alias) => byAlias.get(alias)!);
+    }
   }
 
-  const states = observeGitlinks(repoRoot, selectedAliases);
-  if (options.json) return printStatusJson(repoRoot, repos, states, treeAliases);
-  printStatusText(repoRoot, repos, states, treeAliases);
-  return 0;
+  const sources = selected.map((repo) => sourceStatus(workspace, repo));
+  const errors: string[] = [];
+  for (const { error } of sources) if (error !== null) errors.push(error);
+  let trees: ManagedTree[] = [];
+  try {
+    trees = listIndependentManagedTrees(workspace, { dirtyAliases: selectedAliases ?? "all" });
+    if (selectedAliases !== null) {
+      const selectedSet = new Set(selectedAliases);
+      trees = trees.filter(({ alias }) => selectedSet.has(alias));
+    }
+  } catch (error) {
+    errors.push(`managed trees: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (options.json) {
+    const counts = readChanges(repoRoot, workspace.git);
+    if (!counts) errors.unshift("workspace root: could not inspect changes");
+    const changes = counts ?? { staged: 0, unstaged: 0, untracked: 0 };
+    const payload: WorkspaceStatus = {
+      schemaVersion: 2,
+      toolVersion: readPackageVersion(),
+      workspaceRoot: repoRoot,
+      currentAlias: inferAliasFromCwd(repoRoot, repos),
+      root: { ...headState(repoRoot, workspace.git), dirty: isDirtyCounts(changes), changes },
+      repos: sources,
+      trees: buildTreeStatuses(trees),
+      errors,
+    };
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  } else {
+    printSourceStatuses(sources);
+    printStatusTreesText(trees);
+    for (const error of errors) process.stderr.write(`${error}\n`);
+  }
+  return errors.length > 0 ? 2 : 0;
 }
 
-function printStatusText(
-  repoRoot: string,
-  configuredRepos: Repo[],
-  states: GitlinkObservation[],
-  treeAliases: string[] | null,
-): void {
-  const rows: StatusRow[] = [];
-  for (const state of states) {
-    const { alias } = state;
-    if (!state.initialized) {
-      rows.push({ alias, branch: "(not synced)", pin: state.pin, dirty: "", ahead: "", behind: "" });
-      continue;
-    }
-    const dir = aliasDir(repoRoot, alias);
-    const branch = currentBranch(dir) ?? `(detached ${shortSha(dir)})`;
-    const { ahead, behind } = aheadBehind(dir);
-    rows.push({
-      alias,
-      branch,
-      pin: state.pin,
-      dirty: isDirty(dir) ? "yes" : "",
-      ahead,
-      behind,
-    });
-  }
-
-  const col = (key: keyof StatusRow, header: string) =>
-    Math.max(header.length, ...rows.map((r) => r[key].length));
-  const aW = col("alias", "ALIAS");
-  const bW = col("branch", "BRANCH");
-  const pW = col("pin", "PIN");
-  const dW = Math.max("DIRTY".length, ...rows.map((r) => r.dirty.length));
-  console.log(
-    dim(
-      `${pad("ALIAS", aW)}  ${pad("BRANCH", bW)}  ${pad("PIN", pW)}  ${pad("DIRTY", dW)}  AHEAD  BEHIND`,
-    ),
-  );
-  for (const r of rows) {
-    console.log(
-      `${pad(r.alias, aW)}  ${pad(r.branch, bW)}  ${pad(r.pin, pW)}  ${pad(r.dirty, dW)}  ${pad(r.ahead, 5)}  ${r.behind}`,
-    );
-  }
-
-  const trees = collectStatusTrees(repoRoot, configuredRepos, treeAliases);
-  if (trees.length > 0) {
-    console.log("");
-    console.log("Managed trees (.oms-tree/):");
-    for (const tree of trees) {
-      const state = tree.state === "healthy" ? (tree.dirty ? "dirty" : "clean") : tree.error;
-      const branch = tree.state === "healthy" ? (tree.branch ?? "(detached)") : "-";
-      console.log(`  ${tree.path}  ${branch}  ${state}`);
-    }
+function printSourceStatuses(sources: SourceStatus[]): void {
+  const branches = sources.map((source) => source.branch ?? (source.detached
+    ? `(detached ${source.head})`
+    : source.error ? "(unavailable)" : "(not cloned)"));
+  const aliasWidth = Math.max("ALIAS".length, ...sources.map((source) => source.alias.length));
+  const branchWidth = Math.max("BRANCH".length, ...branches.map((branch) => branch.length));
+  console.log(dim(`${pad("ALIAS", aliasWidth)}  ${pad("BRANCH", branchWidth)}  DIRTY  AHEAD  BEHIND`));
+  for (const [i, source] of sources.entries()) {
+    const dirty = source.dirty ? "yes" : "";
+    const ahead = source.ahead ? String(source.ahead) : "";
+    const behind = source.behind ? String(source.behind) : "";
+    console.log(`${pad(source.alias, aliasWidth)}  ${pad(branches[i], branchWidth)}  ${pad(dirty, 5)}  ${pad(ahead, 5)}  ${behind}`);
   }
 }

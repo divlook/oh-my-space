@@ -2,10 +2,14 @@ import { log } from "@clack/prompts";
 import { resolve, sep } from "node:path";
 import { TREE_DIRNAME } from "./constants.js";
 
-export function insideManagedTree(repoRoot: string, cwd: string = process.cwd()): boolean {
-  const root = resolve(repoRoot, TREE_DIRNAME);
+export function insideTreePath(tree: string, cwd: string = process.cwd()): boolean {
+  const root = resolve(tree);
   const current = resolve(cwd);
   return current === root || current.startsWith(`${root}${sep}`);
+}
+
+export function insideManagedTree(repoRoot: string, cwd: string = process.cwd()): boolean {
+  return insideTreePath(resolve(repoRoot, TREE_DIRNAME), cwd);
 }
 
 export function refuseInsideManagedTree(repoRoot: string): boolean {

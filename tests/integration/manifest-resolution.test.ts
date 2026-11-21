@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -64,6 +64,28 @@ test("workspace manifest resolution prefers nearest files, accepts file symlinks
     assert.equal(loadRepos({ cwd: child }), null);
     assert.deepEqual(readdirSync(child).sort(), before);
     assert.equal(existsSync(join(child, "oms")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("normal manifest resolution rejects legacy registration settings without falling back or writing", () => {
+  const root = mkdtempSync(join(tmpdir(), "oms-legacy-manifest-"));
+  try {
+    const child = join(root, "child");
+    mkdirSync(child);
+    writeFileSync(join(root, "oms.yaml"), manifest);
+    const path = join(child, "oms.yaml");
+    const legacy = `autoCommitRegistration: false\n${manifest}`;
+    writeFileSync(path, legacy);
+
+    assert.equal(loadRepos({ cwd: child }), null);
+    assert.throws(() => validateSources({
+      autoCommitRegistration: true,
+      repos: [{ alias: "api", remotes: { origin: "https://example.com/api.git" } }],
+    }), /autoCommitRegistration is a legacy setting.*oms migrate --dry-run/);
+    assert.equal(readFileSync(path, "utf8"), legacy);
+    assert.deepEqual(readdirSync(child), ["oms.yaml"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

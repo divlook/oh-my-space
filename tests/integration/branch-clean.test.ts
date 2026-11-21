@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { git, gitOut, initBareUpstream, initGitWorkspace, localBranchExists, sourceFor, syncedSubmodule, tempFixture, testEnv, writeSources } from "../helpers.js";
+import { git, gitOut, initBareUpstream, initGitWorkspace, localBranchExists, sourceFor, tempFixture, testEnv, writeSources } from "../helpers.js";
 import { yes, fixture, snapshot, clean, wrapper } from "./branch-clean-fixtures.js";
 
 test("cleanup deletes sorted true ancestors independently of HEAD and upstream and preserves repository boundaries", async () => {
@@ -39,18 +39,18 @@ test("cleanup deletes sorted true ancestors independently of HEAD and upstream a
   assert.match(result.output, /git.*branch/);
 });
 
-test("cleanup protects metadata baselines and all external and managed worktree branches", async () => {
+test("cleanup protects the manifest baseline and all external and managed worktree branches", async () => {
   const { cwd, wt } = fixture();
-  for (const branch of ["drift", "external", "managed", "a-first"]) git(wt, "branch", branch);
-  git(cwd, "config", "-f", ".gitmodules", "submodule.oms/api.branch", "drift");
+  git(wt, "checkout", "-b", "current");
+  for (const branch of ["external", "managed", "a-first"]) git(wt, "branch", branch);
   const external = join(tempFixture("clean-external-"), "tree");
   const managed = join(cwd, ".oms-tree", "api", "task");
   git(wt, "worktree", "add", external, "external");
   git(wt, "worktree", "add", managed, "managed");
   const before = gitOut(wt, "worktree", "list", "--porcelain");
-  const result = await clean(cwd, { responses: yes });
+  const result = await clean(cwd, { base: "refs/remotes/origin/main", responses: yes });
   assert.equal(result.code, 0, result.output);
-  for (const branch of ["main", "drift", "external", "managed"]) assert.ok(localBranchExists(wt, branch));
+  for (const branch of ["main", "current", "external", "managed"]) assert.ok(localBranchExists(wt, branch));
   assert.equal(localBranchExists(wt, "a-first"), false);
   assert.equal(gitOut(wt, "worktree", "list", "--porcelain"), before);
   const refusal = await clean(managed);
@@ -105,22 +105,21 @@ test("cleanup unmerged-only no-op preserves dirty files and branches without ord
   assert.deepEqual(snapshot(cwd, wt), before);
 });
 
-test("cleanup detached safety uses root HEAD gitlink rather than a staged pointer", async () => {
+test("cleanup refuses detached HEAD even when it points at the manifest baseline", async () => {
   const { cwd, wt } = fixture();
-  const recorded = gitOut(wt, "rev-parse", "HEAD");
-  git(wt, "commit", "--allow-empty", "-m", "new pointer");
-  const staged = gitOut(wt, "rev-parse", "HEAD");
-  git(cwd, "add", "oms/api");
-  git(wt, "checkout", "--detach", recorded);
-  git(wt, "branch", "topic", recorded);
+  const baseline = gitOut(wt, "rev-parse", "main");
+  git(wt, "branch", "topic");
+  git(wt, "checkout", "--detach", baseline);
+  const before = snapshot(cwd, wt);
+  const refused = await clean(cwd, { responses: [] });
+  assert.equal(refused.code, 1, refused.output);
+  assert.match(refused.output, /detached.*oms branch switch api/);
+  assert.deepEqual(snapshot(cwd, wt), before);
+  assert.ok(localBranchExists(wt, "topic"));
+  git(wt, "checkout", "main");
   const accepted = await clean(cwd, { responses: yes });
   assert.equal(accepted.code, 0, accepted.output);
-  assert.equal(gitOut(cwd, "rev-parse", ":oms/api"), staged);
-  git(wt, "checkout", "--detach", staged);
-  git(wt, "branch", "topic");
-  const refused = await clean(cwd);
-  assert.equal(refused.code, 1, refused.output);
-  assert.ok(localBranchExists(wt, "topic"));
+  assert.equal(localBranchExists(wt, "topic"), false);
 });
 
 test("cleanup shallow history deletes proven ancestors and preserves unproven ancestry without fetching", async () => {
@@ -175,10 +174,11 @@ test("cleanup origin default requires its local branch and explicit bases do not
   assert.equal(valid.code, 1, valid.output);
   assert.ok(valid.output.includes("refs/heads/release"));
   assert.ok(localBranchExists(wt, "release") && localBranchExists(wt, "origin/release") && localBranchExists(wt, "topic"));
-  git(wt, "checkout", "--detach");
+  git(wt, "checkout", "-b", "current");
   git(wt, "branch", "-d", "release");
   const missing = await clean(cwd);
   assert.equal(missing.code, 1, missing.output);
+  assert.match(missing.output, /Comparison base.*refs\/heads\/release.*missing/);
   assert.ok(localBranchExists(wt, "topic"));
   const explicit = await clean(cwd, { base: "refs/remotes/origin/release", responses: yes });
   assert.equal(explicit.code, 0, explicit.output);
@@ -186,20 +186,23 @@ test("cleanup origin default requires its local branch and explicit bases do not
   assert.equal(localBranchExists(wt, "origin/release"), false);
 });
 
-test("cleanup refuses unregistered and in-progress targets without topology offers", async () => {
+test("cleanup refuses missing clones and in-progress targets without offering to provision", async () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
   const root = gitOut(cwd, "rev-parse", "HEAD");
-  const unregistered = await clean(cwd);
-  assert.equal(unregistered.code, 1, unregistered.output);
+  const missing = await clean(cwd, { responses: [] });
+  assert.equal(missing.code, 1, missing.output);
+  assert.match(missing.output, /oms clone api/);
   assert.equal(gitOut(cwd, "rev-parse", "HEAD"), root);
-  assert.equal(existsSync(join(cwd, ".gitmodules")), false);
-  const wt = syncedSubmodule(cwd, "api", bare);
+  const wt = join(cwd, "oms", "api");
+  assert.equal(existsSync(wt), false);
+  git(cwd, "clone", `file://${bare}`, "oms/api");
   git(wt, "branch", "topic");
   writeFileSync(gitOut(wt, "rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"), `${gitOut(wt, "rev-parse", "HEAD")}\n`);
   const operation = await clean(cwd);
   assert.equal(operation.code, 1, operation.output);
+  assert.match(operation.output, /in progress/);
   assert.ok(localBranchExists(wt, "topic"));
 });
 

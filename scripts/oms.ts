@@ -5,14 +5,14 @@ import { DATA_DIRNAME, MANIFEST_FILENAME } from "./lib/constants.js";
 import { readPackageVersion } from "./lib/env.js";
 import { assertPromptQueueDrained, canPrompt, guardedSelect, isCancel } from "./lib/prompt-adapter.js";
 import { runAgentInstall, runAgentUninstall } from "./lib/agent.js";
-import { runBranchDelete } from "./lib/branch-delete.js";
-import { runBranchClean } from "./lib/branch-clean.js";
-import { runBranchList } from "./lib/branch-list.js";
-import { runCheckout, runSwitch } from "./lib/branch-ops.js";
-import { runCommit } from "./lib/commit.js";
-import { runRecord } from "./lib/record.js";
-import { runDoctor } from "./lib/doctor.js";
-import { runExec } from "./lib/exec.js";
+import { runSourceBranchDelete as runBranchDelete } from "./lib/branch-delete.js";
+import { runSourceBranchClean as runBranchClean } from "./lib/branch-clean.js";
+import { runSourceBranchList as runBranchList } from "./lib/branch-list.js";
+import { runSourceCheckout as runCheckout, runSourceSwitch as runSwitch } from "./lib/branch-ops.js";
+import { runSourceCommit as runCommit } from "./lib/commit.js";
+import { runClone } from "./lib/clone-source.js";
+import { runIndependentDoctor } from "./lib/doctor.js";
+import { runIndependentExec } from "./lib/exec.js";
 import {
   agentInstallHelp,
   agentUninstallHelp,
@@ -21,6 +21,7 @@ import {
   branchDeleteHelp,
   branchListHelp,
   branchSwitchHelp,
+  cloneHelp,
   commitHelp,
   execHelp,
   exitHelp,
@@ -28,27 +29,26 @@ import {
   initHelp,
   pullHelp,
   pushHelp,
-  recordHelp,
+  migrateHelp,
+  removeHelp,
   skillsHelp,
-  statusHelp,
-  syncHelp,
+  independentStatusHelp,
   treeAddHelp,
   treeHelp,
   treeListHelp,
   treeRemoveHelp,
-  unsyncHelp,
   workspaceContextHelp,
 } from "./lib/help.js";
 import { runInit } from "./lib/init.js";
-import { runManage } from "./lib/manage-ops.js";
-import { runSync, runUnsync } from "./lib/repo-ops.js";
+import { runSourceManage as runManage } from "./lib/manage-ops.js";
+import { runMigrate } from "./lib/migrate-source.js";
+import { runRemove } from "./lib/remove-source.js";
 import { runSkills } from "./lib/skills.js";
-import { runStatus } from "./lib/status.js";
-import { runTreeAdd, runTreeList, runTreeRemove } from "./lib/tree-ops.js";
+import { runIndependentStatus } from "./lib/status.js";
+import { runIndependentTreeAdd, runIndependentTreeList, runIndependentTreeRemove } from "./lib/tree-ops.js";
 import { runUpdate } from "./lib/update.js";
 import { findWorkspaceRoot } from "./lib/workspace-discovery.js";
 import { refuseInsideManagedTree } from "./lib/tree-context.js";
-import { loadForSubmodules } from "./lib/manifest.js";
 import type {
   AgentOptions,
   CheckoutOptions,
@@ -56,28 +56,10 @@ import type {
   RemoteOptions,
   SourcesOptions,
   StatusOptions,
-  SyncCommitOptions,
-  UnsyncOptions,
   UpdateOptions,
 } from "./lib/types.js";
 
 type SkillsOptions = { install?: boolean };
-type PushCliOptions = SourcesOptions & RemoteOptions & { commit?: boolean; record?: boolean };
-
-async function runPush(aliases: string[], options: PushCliOptions): Promise<number> {
-  if (options.commit || options.record) {
-    const loaded = loadForSubmodules();
-    if (!loaded || refuseInsideManagedTree(loaded.repoRoot)) return 1;
-    const flag = options.record ? "--record" : "--commit";
-    const pushExample = aliases.length > 0 ? `oms push ${aliases.join(" ")}` : "oms push <alias>";
-    const recordExample = aliases.length > 0 ? `oms record ${aliases[0]}` : "oms record <alias>";
-    log.error(
-      `"oms push ${flag}" is not supported. Push the submodule branch with "${pushExample}", then commit the existing root pointer update with "${recordExample}".`,
-    );
-    return 1;
-  }
-  return runManage("push", aliases, options);
-}
 
 async function exitWith(action: Promise<number>): Promise<void> {
   try {
@@ -90,18 +72,6 @@ async function exitWith(action: Promise<number>): Promise<void> {
   }
 }
 
-function withRegistrationCommitOptions(command: Command): Command {
-  // Commander stores both flags in `commit`. Check the previous value before it is replaced.
-  const parseFlag = (enabled: boolean) => (_value: string, previous: boolean | undefined) => {
-    if (previous === !enabled) {
-      command.error("error: options '--commit' and '--no-commit' cannot be used together");
-    }
-    return enabled;
-  };
-  return command
-    .option("--commit", "commit eligible registration changes in the main project", parseFlag(true))
-    .option("--no-commit", "skip the main-project commit; Git may change staging on affected paths", parseFlag(false));
-}
 
 const collectRepeatable = (value: string, acc: string[]): string[] => [...acc, value];
 const execSeparator = process.argv[2] === "exec" ? process.argv.indexOf("--", 3) : -1;
@@ -112,7 +82,7 @@ const program = new Command();
 program
   .name("oms")
   .description(
-    `Manage source repositories listed in ${MANIFEST_FILENAME} as git submodules under ${DATA_DIRNAME}/<alias>/.`,
+    `Manage independent Git clones listed in ${MANIFEST_FILENAME} under ${DATA_DIRNAME}/<alias>/.`,
   )
   .version(readPackageVersion())
   .addHelpText("after", `${workspaceContextHelp}${exitHelp}`);
@@ -129,11 +99,11 @@ program
 program
   .command("doctor")
   .description(
-    `Check ${MANIFEST_FILENAME}, git availability, and the submodule state of each registered alias.`,
+    `Check ${MANIFEST_FILENAME}, Git, and source checkout identity.`,
   )
   .addHelpText("after", `${workspaceContextHelp}${exitHelp}`)
   .action(async () => {
-    await exitWith(runDoctor());
+    await exitWith(runIndependentDoctor());
   });
 
 program
@@ -144,36 +114,35 @@ program
   .option("--all", "select every declared source repo in manifest order")
   .addHelpText("after", `${execHelp}${workspaceContextHelp}`)
   .action(async (aliases: string[], options: SourcesOptions) => {
-    await exitWith(runExec(aliases, options, execCommand));
+    await exitWith(runIndependentExec(aliases, options, execCommand));
   });
 
-withRegistrationCommitOptions(program.command("sync"))
-  .description(
-    `Register each repo as a submodule at ${DATA_DIRNAME}/<alias>/ (or initialize and refresh an existing one), checked out on its baseline branch.`,
-  )
-  .argument("[aliases...]", "repo aliases to sync (omit for interactive multi-select)")
-  .option("--all", "sync every registered source repo")
-  .option("--list", "print registered repos")
-  .addHelpText("after", `${syncHelp}${workspaceContextHelp}${exitHelp}`)
-  .action(async (aliases: string[], options: SyncCommitOptions) => {
-    await exitWith(runSync(aliases, options));
+program
+  .command("clone")
+  .description("Clone missing independent checkouts on the declared or remote default branch.")
+  .argument("[aliases...]", "declared aliases to clone (omit for interactive multi-select)")
+  .option("--all", "clone missing checkouts for every declaration")
+  .option("--list", "print declarations without using Git")
+  .addHelpText("after", `${cloneHelp}${workspaceContextHelp}${exitHelp}`)
+  .action(async (aliases: string[], options: SourcesOptions) => {
+    await exitWith(runClone(aliases, options));
   });
 
 program
   .command("status")
-  .description("Show each submodule's branch, pointer state, dirtiness, and ahead/behind counts.")
+  .description("Show source branches, changes, and tracking divergence.")
   .argument("[aliases...]", "repo aliases to inspect (omit for all)")
-  .option("--all", "inspect every registered source repo")
+  .option("--all", "inspect every declared source")
   .option("--json", "print machine-readable workspace state (one JSON object on stdout)")
-  .addHelpText("after", `${statusHelp}${workspaceContextHelp}${exitHelp}`)
+  .addHelpText("after", `${independentStatusHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (aliases: string[], options: StatusOptions) => {
-    await exitWith(runStatus(aliases, options));
+    await exitWith(runIndependentStatus(aliases, options));
   });
 
 program
   .command("commit")
-  .description("Prepare the selected registration, then commit submodule source changes only (never the root gitlink).")
-  .argument("[alias]", "registered source alias (omit to infer from the current oms/<alias>/ directory)")
+  .description("Commit changes in one source checkout without touching the workspace root.")
+  .argument("[alias]", "declared source alias (omit to infer from the current oms/<alias>/ directory)")
   .option("-m, --message <message>", "commit message (repeatable; required only to create a commit)", collectRepeatable, [])
   .addHelpText("after", `${commitHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, options: CommitOptions) => {
@@ -181,13 +150,14 @@ program
   });
 
 program
-  .command("record")
-  .description("Commit an existing root gitlink pointer update for the selected submodule (root repo only).")
-  .argument("[aliases...]", "registered source aliases (omit to infer from the current oms/<alias>/ directory)")
-  .option("--all", "record every moved source repo pointer")
-  .addHelpText("after", `${recordHelp}${workspaceContextHelp}${exitHelp}`)
-  .action(async (aliases: string[], options: SourcesOptions) => {
-    await exitWith(runRecord(aliases, options));
+  .command("migrate")
+  .description("Convert a legacy OMS workspace to independent clones.")
+  .argument("[aliases...]", "not supported; migration always applies to the entire workspace")
+  .option("--dry-run", "preview the plan without changing the workspace")
+  .option("--yes", "apply the reviewed plan without prompting")
+  .addHelpText("after", `${migrateHelp}${workspaceContextHelp}${exitHelp}`)
+  .action(async (aliases: string[], options: { dryRun?: boolean; yes?: boolean }) => {
+    await exitWith(runMigrate(aliases, options));
   });
 
 const branchCommand = program
@@ -263,10 +233,10 @@ async function selectBranchAction(command: Command): Promise<number> {
     return 1;
   }
   const actions = [
-    { command: branchListCommand, label: "list branches in a submodule", run: () => runBranchList(undefined) },
-    { command: branchSwitchCommand, label: "switch to or create a local branch in a submodule", run: () => runSwitch(undefined, undefined, {}) },
-    { command: branchCheckoutCommand, label: "check out a remote branch in a submodule", run: () => runCheckout(undefined, undefined) },
-    { command: branchDeleteCommand, label: "delete a local branch in a submodule", run: () => runBranchDelete(undefined, undefined, {}) },
+    { command: branchListCommand, label: "list branches in a source checkout", run: () => runBranchList(undefined) },
+    { command: branchSwitchCommand, label: "switch to or create a local branch", run: () => runSwitch(undefined, undefined, {}) },
+    { command: branchCheckoutCommand, label: "check out a remote branch", run: () => runCheckout(undefined, undefined) },
+    { command: branchDeleteCommand, label: "delete a local branch", run: () => runBranchDelete(undefined, undefined, {}) },
     { command: branchCleanCommand, label: "clean merged local branches in a source repository", run: () => runBranchClean(undefined, {}) },
   ];
   const choice = await guardedSelect<string>({
@@ -287,13 +257,13 @@ const treeCommand = program
 
 treeCommand
   .command("add")
-  .description("Create a per-task worktree of an initialized submodule at .oms-tree/<alias>/<task>/.")
-  .argument("[alias]", "registered source alias (omit to pick interactively)")
+  .description("Create a task worktree of an independent checkout at .oms-tree/<alias>/<task>/.")
+  .argument("[alias]", "declared source alias (omit to pick interactively)")
   .argument("[task]", "task name; also the branch checked out in the tree")
-  .option("--from <ref>", "start point for a new task branch (default: the submodule's current HEAD)")
+  .option("--from <ref>", "start point for a new task branch (default: canonical HEAD)")
   .addHelpText("after", `${treeAddHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, task: string | undefined, options: { from?: string }) => {
-    await exitWith(runTreeAdd(alias, task, options));
+    await exitWith(runIndependentTreeAdd(alias, task, options));
   });
 
 treeCommand
@@ -301,7 +271,7 @@ treeCommand
   .description("List every managed tree under .oms-tree/ with its branch, dirty, and broken state.")
   .addHelpText("after", `${treeListHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async () => {
-    await exitWith(runTreeList());
+    await exitWith(runIndependentTreeList());
   });
 
 treeCommand
@@ -312,7 +282,7 @@ treeCommand
   .option("-f, --force", "remove a dirty worktree or a non-empty foreign directory (branch still survives)")
   .addHelpText("after", `${treeRemoveHelp}${workspaceContextHelp}${exitHelp}`)
   .action(async (alias: string | undefined, task: string | undefined, options: { force?: boolean }) => {
-    await exitWith(runTreeRemove(alias, task, options));
+    await exitWith(runIndependentTreeRemove(alias, task, options));
   });
 
 program
@@ -329,7 +299,7 @@ program
 program
   .command("pull")
   .description(
-    "Prepare each selected source, then pull its submodule branch only; never records the root gitlink.",
+    "Fast-forward source branches without changing the workspace root.",
   )
   .argument("[aliases...]", "declared source aliases to pull (omit for interactive multi-select)")
   .option("--all", "pull every declared source repo")
@@ -342,28 +312,26 @@ program
 program
   .command("push")
   .description(
-    "Prepare each registered source, then push its submodule branch only; unregistered aliases are refused.",
+    "Push branches from verified source checkouts only.",
   )
   .argument("[aliases...]", "declared source aliases to push (omit for interactive multi-select)")
   .option("--all", "push every declared source repo")
-  .option("--commit", "unsupported: use \"oms record <alias>\" after pushing")
-  .option("--record", "unsupported: use \"oms record <alias>\" after pushing")
   .option("--remote <name>", "remote to push to (repeatable; omit to choose interactively)", collectRepeatable, [])
   .addHelpText("after", `${pushHelp}${workspaceContextHelp}${exitHelp}`)
-  .action(async (aliases: string[], options: PushCliOptions) => {
-    await exitWith(runPush(aliases, options));
+  .action(async (aliases: string[], options: SourcesOptions & RemoteOptions) => {
+    await exitWith(runManage("push", aliases, options));
   });
 
-withRegistrationCommitOptions(program.command("unsync"))
-  .description(
-    `Deinitialize and remove the submodule for each alias (keeps ${MANIFEST_FILENAME} entry).`,
-  )
-  .argument("[aliases...]", "repo aliases to unsync (omit for interactive multi-select)")
-  .option("--all", "unsync every registered source repo")
-  .option("--force", "discard uncommitted changes in the submodule")
-  .addHelpText("after", `${unsyncHelp}${workspaceContextHelp}${exitHelp}`)
-  .action(async (aliases: string[], options: UnsyncOptions) => {
-    await exitWith(runUnsync(aliases, options));
+program
+  .command("remove")
+  .description(`Remove verified local checkouts without changing ${MANIFEST_FILENAME}.`)
+  .argument("[aliases...]", "declared or verified former aliases to remove")
+  .option("--all", "select every declared and verified former checkout")
+  .option("--yes", "approve the reviewed plan without the normal prompt")
+  .option("--force", "allow discarding working files only")
+  .addHelpText("after", `${removeHelp}${workspaceContextHelp}${exitHelp}`)
+  .action(async (aliases: string[], options: { all?: boolean; force?: boolean; yes?: boolean }) => {
+    await exitWith(runRemove(aliases, options));
   });
 
 const agentCommand = program
@@ -415,6 +383,9 @@ const requestedCommand = process.argv[2];
 const commandNames = new Set([...program.commands.map((command) => command.name()), "help"]);
 if (requestedCommand && !requestedCommand.startsWith("-") && !commandNames.has(requestedCommand)) {
   console.error(`error: unknown command '${requestedCommand}'`);
+  if (requestedCommand === "sync" || requestedCommand === "unsync" || requestedCommand === "record") {
+    console.error("OMS 3.0 uses independent clones. For an existing OMS 2.x workspace, start with 'oms migrate --dry-run'.");
+  }
   process.exit(1);
 }
 

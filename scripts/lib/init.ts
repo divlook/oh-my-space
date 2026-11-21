@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { log } from "@clack/prompts";
 import { MANIFEST_FILENAME } from "./constants.js";
 import { inspectWorkspaceGitIdentity } from "./workspace-discovery.js";
-import { ensureOmsNotIgnored } from "./workspace-ignore.js";
 
 const INIT_TEMPLATE = `# yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
 repos:
@@ -38,11 +37,10 @@ export async function runInit(options: { force?: boolean }): Promise<number> {
   }
   writeFileSync(target, INIT_TEMPLATE);
   log.success(`created ${MANIFEST_FILENAME} at ${target}`);
-  ensureOmsNotIgnored(cwd);
   if (identity.kind === "no-work-tree") {
-    log.info(`oms manages sources as git submodules; run "git init" here if this is not a git repo yet.`);
+    log.info('Run "git init" here to create the workspace root.');
   }
-  log.info(`edit alias/remotes/branch, then run "oms sync".`);
+  log.info('Edit the aliases, remotes, and branches, then run "oms clone --all".');
   log.info("Optional — set up AI agent guidance for this workspace:");
   log.message(`  oms agent install   # add the OMS instruction block for AI agents`);
   log.message(`  oms skills          # show how to install the oms workspace skills`);

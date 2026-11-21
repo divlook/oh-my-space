@@ -1,70 +1,27 @@
 import { cancel, log } from "@clack/prompts";
 import {
-  aliasDir,
-  currentBranch,
   listLocalBranches,
   localBranchExists,
   localBranchOid,
   remoteBranchExists,
   runSub,
   shortOid,
-  submoduleInitialized,
-  submodulePath,
+  sourcePath,
 } from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
-import { submoduleOperationInProgress } from "./git-operation-state.js";
-import { checkDeleteSourceSafety as checkSubmodulePreconditions } from "./source-safety.js";
-import { resolveBaselines, type ProtectedReason } from "./branch-baseline.js";
 import { canPrompt, guardedConfirm, guardedSelect, isCancel } from "./prompt-adapter.js";
 import type { Repo } from "./types.js";
-import { prepareAlias } from "./alias-preparation.js";
 import { refuseInsideManagedTree } from "./tree-context.js";
 import { shellQuote as shq } from "./shell.js";
+import { captureSourceBranchContext, sourceBaseline } from "./source-branch-context.js";
+import { requireSource, selectSource } from "./source-preparation.js";
+import { requireAttachedSource } from "./source-safety.js";
+import { loadForSources } from "./source-workspace.js";
 
 type BranchDeleteOptions = { force?: boolean };
 
-type AliasResult = { kind: "repo"; repo: Repo } | { kind: "error"; code: number };
-
-const PREPARE = { command: "branch delete", topologyOffer: false, allowPendingRegistration: false };
-
-async function resolveDeleteAlias(repos: Repo[], repoRoot: string, aliasArg: string | undefined): Promise<AliasResult> {
-  if (aliasArg) {
-    const repo = repos.find((r) => r.alias === aliasArg);
-    if (!repo) {
-      log.error(`Unknown alias "${aliasArg}". Use "oms sync --list" to see registered aliases.`);
-      return { kind: "error", code: 1 };
-    }
-    return { kind: "repo", repo };
-  }
-
-  const initialized = repos.filter((r) => submoduleInitialized(repoRoot, r.alias));
-  if (initialized.length === 0) {
-    log.error(`No initialized submodules to delete a branch from. Run "oms sync" first.`);
-    return { kind: "error", code: 1 };
-  }
-  if (!canPrompt()) {
-    log.error(`No alias given and stdin is not a TTY. Pass an alias: "oms branch delete <alias> <branch>".`);
-    return { kind: "error", code: 1 };
-  }
-  const choice = await guardedSelect<string>({
-    message: "Select a submodule to delete a local branch from",
-    options: initialized.map((r) => ({
-      value: r.alias,
-      label: r.alias,
-      hint: r.branch ? `branch: ${r.branch}` : undefined,
-    })),
-  });
-  if (isCancel(choice)) {
-    cancel("Cancelled.");
-    return { kind: "error", code: 1 };
-  }
-  const repo = initialized.find((r) => r.alias === (choice as string));
-  return repo ? { kind: "repo", repo } : { kind: "error", code: 1 };
-}
-
 type BranchProtection = { reason: string; current: boolean };
 
-function buildProtectedMap(reasons: ProtectedReason[], current: string | null): Map<string, BranchProtection> {
+function buildProtectedMap(reasons: { branch: string; reason: string }[], current: string): Map<string, BranchProtection> {
   const grouped = new Map<string, string[]>();
   for (const { branch, reason } of reasons) {
     const list = grouped.get(branch) ?? [];
@@ -130,42 +87,15 @@ async function resolveTargetBranch(
   return { kind: "branch", branch: picked };
 }
 
-function revalidateSafety(
-  repoRoot: string,
-  repo: Repo,
-  branch: string,
-  expectedOid: string,
-  checkOid: boolean,
-): { ok: true } | { ok: false; reason: string } {
-  const dir = aliasDir(repoRoot, repo.alias);
-  const op = submoduleOperationInProgress(dir);
-  if (op) {
-    return { ok: false, reason: `${repo.alias}: a ${op} started inside oms/${repo.alias} after selection; aborting. Retry once it completes.` };
-  }
-  const baseline = resolveBaselines(repoRoot, repo);
-  if (!baseline.ok) return { ok: false, reason: `${repo.alias}: ${baseline.reason}` };
-  const protectedSet = new Set(baseline.protectedReasons.map((p) => p.branch));
-  const cur = currentBranch(dir);
-  if (cur) protectedSet.add(cur);
-  if (protectedSet.has(branch)) {
-    return { ok: false, reason: `${repo.alias}: "${branch}" became protected concurrently; aborting.` };
-  }
-  if (checkOid) {
-    const now = localBranchOid(dir, branch);
-    if (now !== expectedOid) {
-      return { ok: false, reason: `${repo.alias}: "${branch}" changed concurrently (expected ${expectedOid}); aborting, retry.` };
-    }
-  }
-  return { ok: true };
-}
-
 function printForceRecovery(alias: string, branch: string, fullOid: string): void {
   log.warn(`${alias}: force-deleting "${branch}" at ${fullOid}; unmerged local commits may be lost.`);
-  log.info(`Recreate it with: git -C ${shq(submodulePath(alias))} branch ${shq(branch)} ${fullOid}`);
+  log.info(`Recreate it with: git -C ${shq(sourcePath(alias))} branch -- ${shq(branch)} ${fullOid}`);
 }
 
-function forceDeleteBranch(repoRoot: string, repo: Repo, branch: string, fullOid: string, priorShort: string): number {
-  const safety = revalidateSafety(repoRoot, repo, branch, fullOid, true);
+type RevalidateDeletion = (branch: string, oid: string, force: boolean) => { ok: true } | { ok: false; reason: string };
+
+function forceDeleteBranch(repoRoot: string, repo: Repo, branch: string, fullOid: string, priorShort: string, revalidate: RevalidateDeletion): number {
+  const safety = revalidate(branch, fullOid, true);
   if (!safety.ok) {
     log.error(safety.reason);
     return 2;
@@ -181,7 +111,7 @@ function forceDeleteBranch(repoRoot: string, repo: Repo, branch: string, fullOid
   return 0;
 }
 
-async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: string, force: boolean): Promise<number> {
+async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: string, force: boolean, revalidate: RevalidateDeletion): Promise<number> {
   const alias = repo.alias;
   const fullOid = localBranchOid(dir, branch);
   if (fullOid === null) {
@@ -190,9 +120,9 @@ async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: s
   }
   const priorShort = shortOid(dir, fullOid);
 
-  if (force) return forceDeleteBranch(repoRoot, repo, branch, fullOid, priorShort);
+  if (force) return forceDeleteBranch(repoRoot, repo, branch, fullOid, priorShort, revalidate);
 
-  const safety = revalidateSafety(repoRoot, repo, branch, fullOid, false);
+  const safety = revalidate(branch, fullOid, false);
   if (!safety.ok) {
     log.error(safety.reason);
     return 2;
@@ -223,49 +153,50 @@ async function deleteBranch(repoRoot: string, repo: Repo, dir: string, branch: s
     return 2;
   }
 
-  return forceDeleteBranch(repoRoot, repo, branch, fullOid, priorShort);
+  return forceDeleteBranch(repoRoot, repo, branch, fullOid, priorShort, revalidate);
 }
 
-export async function runBranchDelete(
-  aliasArg: string | undefined,
-  branchArg: string | undefined,
-  options: BranchDeleteOptions,
-): Promise<number> {
-  const loaded = loadForSubmodules();
-  if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
-  if (refuseInsideManagedTree(repoRoot)) return 1;
-
-  const resolved = await resolveDeleteAlias(repos, repoRoot, aliasArg);
-  if (resolved.kind === "error") return resolved.code;
-  const repo = resolved.repo;
-  const prepared = await prepareAlias(repoRoot, repo, PREPARE);
-  if (!prepared.ok) return prepared.code;
-  const dir = aliasDir(repoRoot, repo.alias);
-
-  const pre = checkSubmodulePreconditions(repoRoot, repo);
-  if (!pre.ok) {
-    log.error(pre.reason);
+export async function runSourceBranchDelete(alias: string | undefined, branchArg: string | undefined, options: BranchDeleteOptions): Promise<number> {
+  const loaded = loadForSources();
+  if (!loaded || refuseInsideManagedTree(loaded.repoRoot)) return 1;
+  const { workspace, repoRoot, repos } = loaded;
+  const selected = await selectSource(workspace, repos, alias, "branch delete", "destructive");
+  if (!selected || selected === "noop") return 1;
+  const { repo } = selected;
+  const checkout = requireSource(workspace, repo);
+  if (!checkout) return 1;
+  const dir = checkout.path;
+  const checkAttached = () => requireAttachedSource(dir, repo.alias, "individual-fallback");
+  const safety = checkAttached();
+  if ("reason" in safety) { log.error(safety.reason); return 1; }
+  const baseline = sourceBaseline(dir, repo);
+  if (!baseline) {
+    log.error(`${repo.alias}: origin/HEAD could not be resolved. Declare "branch" in oms.yaml or repair it with git remote set-head origin -a inside oms/${repo.alias}.`);
     return 1;
   }
+  let context;
+  try { context = captureSourceBranchContext(workspace, repo.alias, checkout); }
+  catch (error) { log.error(error instanceof Error ? error.message : String(error)); return 1; }
+  const protectedMap = buildProtectedMap([
+    { branch: safety.branch, reason: "current branch" },
+    { branch: baseline, reason: repo.branch ? "manifest baseline" : "origin default baseline" },
+  ], safety.branch);
+  const target = await resolveTargetBranch(repo, dir, branchArg, listLocalBranches(dir).sort(), protectedMap);
+  if (target.kind !== "branch") return target.kind === "noop" ? 0 : target.code;
 
-  const baseline = resolveBaselines(repoRoot, repo);
-  if (!baseline.ok) {
-    log.error(`${repo.alias}: ${baseline.reason}`);
-    return 1;
-  }
-  if (baseline.driftWarning) log.warn(baseline.driftWarning);
-
-  const protectedReasons: ProtectedReason[] = [];
-  const cur = currentBranch(dir);
-  if (cur) protectedReasons.push({ branch: cur, reason: "current branch" });
-  protectedReasons.push(...baseline.protectedReasons);
-  const protectedMap = buildProtectedMap(protectedReasons, cur);
-
-  const localBranches = [...listLocalBranches(dir)].sort();
-  const target = await resolveTargetBranch(repo, dir, branchArg, localBranches, protectedMap);
-  if (target.kind === "error") return target.code;
-  if (target.kind === "noop") return 0;
-
-  return deleteBranch(repoRoot, repo, dir, target.branch, options.force ?? false);
+  const revalidate: RevalidateDeletion = (branch, oid, force) => {
+    try {
+      const current = captureSourceBranchContext(workspace, repo.alias, checkout);
+      if (current.declaration !== context.declaration || current.identity !== context.identity) throw new Error("selected declaration or checkout identity changed");
+      const state = checkAttached();
+      if ("reason" in state) throw new Error(state.reason);
+      if (sourceBaseline(dir, repo) !== baseline) throw new Error("the protected baseline changed or cannot be resolved");
+      if (branch === state.branch || branch === baseline) throw new Error(`"${branch}" became protected`);
+      if (force && localBranchOid(dir, branch) !== oid) throw new Error(`"${branch}" moved from ${oid}`);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, reason: `${repo.alias}: source safety changed concurrently after selection: ${error instanceof Error ? error.message : String(error)}. Check the source, then retry.` };
+    }
+  };
+  return deleteBranch(repoRoot, repo, dir, target.branch, options.force ?? false, revalidate);
 }

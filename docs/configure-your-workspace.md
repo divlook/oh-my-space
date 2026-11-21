@@ -10,13 +10,12 @@ Run this from the intended workspace root:
 oms init
 ```
 
-`oms init` writes a starter manifest. It does not add repositories or install AI tooling. Before running submodule commands, run `git init` in the same directory if it is not a Git root.
+`oms init` writes a starter manifest. It does not add repositories or install AI tooling. If the directory is not already a Git root, run `git init` there before cloning sources.
 
 ## Manifest structure
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/divlook/oh-my-space/main/oms.schema.json
-autoCommitRegistration: false # optional; omit to keep registration commits disabled
 repos:
   - alias: service-a
     remotes:
@@ -29,14 +28,6 @@ repos:
 ```
 
 The schema comment is optional at runtime. Keep it to enable editor validation and completion from [`oms.schema.json`](../oms.schema.json).
-
-## `autoCommitRegistration`
-
-`autoCommitRegistration` is an optional top-level boolean. If omitted or `false`, `oms sync` and `oms unsync` do not create main-project commits. Set `autoCommitRegistration: true` to commit eligible registration, removal, and metadata changes automatically, including registrations you approve when another command offers to sync. This setting does not change how `oms commit` or `oms record` works.
-
-On a direct `sync` or `unsync` invocation, pass `--commit` to enable the commit or `--no-commit` to disable it. Use only one flag. The decision is the same in a terminal and in a script; OMS does not prompt to commit.
-
-Without a commit, Git may still stage changes or replace existing staging on affected paths. If you need to keep a particular staged selection, review or save it before running the command.
 
 ## `repos`
 
@@ -58,15 +49,15 @@ The accepted pattern is `/^[a-z0-9][a-z0-9_@-]*$/`.
 
 Each entry must specify `remotes` that contain `origin`. Each value is a Git URL that supports cloning.
 
-`origin` is the primary remote. During synchronization, it controls the local `origin` URL and the matching `.gitmodules` URL. OMS processes additional entries, such as `upstream`, as additional remotes in manifest order.
+`origin` is the primary remote. OMS uses it when cloning. The origin of an existing checkout must match this value after Git applies fetch URL rewriting. OMS adds the other declared remotes, such as `upstream`, when it clones a source.
 
 OMS never prints remote URL values while reporting metadata changes.
 
 ### `branch`
 
-`branch` is optional. When present, it names the baseline branch that synchronization validates on `origin`. When omitted, OMS uses the remote's default branch (`origin/HEAD`) as the baseline.
+`branch` is optional. It names the starting branch, called the baseline, to clone from `origin`. Omit it to use the remote's default branch.
 
-The baseline guides synchronization and protects important branches from deletion. Synchronization does not silently move a checkout from the commit recorded by the main project to a newer baseline commit.
+OMS uses the baseline to protect important branches from deletion. Updating the declaration does not switch or advance an existing checkout.
 
 ## Common examples
 
@@ -94,10 +85,10 @@ repos:
 
 ## Apply configuration changes
 
-After editing the manifest, reconcile the workspace:
+After editing the manifest, clone any missing sources:
 
 ```bash
-oms sync --all
+oms clone --all
 ```
 
 Inspect the workspace state:
@@ -106,8 +97,8 @@ Inspect the workspace state:
 oms status
 ```
 
-`oms sync` adds missing registrations and updates OMS-managed `.gitmodules` metadata. To commit eligible changes in the main project, add `--commit` or enable [`autoCommitRegistration`](#autocommitregistration). You can also rerun with `--commit` after reviewing pending changes.
+`oms clone` leaves verified existing clones unchanged. If you reuse an alias for a different origin, move the previous checkout somewhere safe first. OMS does not replace it.
 
-To remove a checked-out repository while keeping its declaration for later use, use `oms unsync`. To remove it from the workspace definition, edit `oms.yaml` as a separate main-project change.
+Use `oms remove` to remove a local checkout while keeping its declaration. To change what the team shares, edit and commit `oms.yaml` in the root.
 
-See [How OMS works](how-oms-works.md#synchronization) for baseline, recorded-commit, partial-success, and recovery behavior.
+See [How OMS works](how-oms-works.md#synchronization) for provisioning and recovery behavior.

@@ -1,13 +1,13 @@
 # OMS Workspace
 
-OMS workspaces contain a main project and separately versioned source repositories. The main project records the source commits that belong to the workspace.
+An OMS workspace consists of a main project, its source declarations, and the local checkouts of those sources.
 
 ## Language
 
 ### Workspace repositories
 
 **Main project**:
-The Git repository that declares the workspace's source repositories and records their exact commits.
+The Git repository that shares a workspace's source declarations.
 _Avoid_: Workspace when referring only to the main project's Git history
 
 **Source repository**:
@@ -17,6 +17,14 @@ _Avoid_: Workspace repository when referring to a source rather than the main pr
 **Alias**:
 The name that identifies a source repository within a workspace.
 _Avoid_: Repository name when referring to the workspace-specific name
+
+**Source declaration**:
+An entry in `oms.yaml` that identifies a workspace source by its alias, remotes, and optional baseline branch. It can exist without a local checkout.
+_Avoid_: Source registration, checkout
+
+### Legacy submodule terms
+
+These terms describe the pre-3.0 workspace model and its migration.
 
 **Source registration**:
 A source repository's inclusion as a Git submodule in the main project. A source can be declared without being registered, or registered without a locally initialized checkout.
@@ -41,8 +49,12 @@ _Avoid_: Source registration when referring only to a change in the referenced c
 ### Local checkouts
 
 **Canonical checkout**:
-The source repository's primary local checkout in the workspace. Its checked-out commit can differ from the recorded commit.
+The primary local checkout of a declared source on one computer. In the independent-clone model, it has its own Git data and its current branch and commit belong to that computer.
 _Avoid_: Source repository when distinguishing its primary checkout from a managed tree
+
+**Former source checkout**:
+A local independent checkout that matches the most recent declaration for an alias before that declaration was removed from the main project's history.
+_Avoid_: Orphan when ownership has not been established
 
 **Managed tree**:
 A machine-local Git worktree for a task in a source repository. It shares the repository's history and branches with the canonical checkout but has its own working files.

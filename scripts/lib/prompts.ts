@@ -1,9 +1,6 @@
 import { cancel, log } from "@clack/prompts";
-import { aliasRegistration } from "./alias-registration.js";
 import { dim, pad, uniqueAliases } from "./env.js";
-import { aliasDir, isDirty, submoduleInitialized } from "./git.js";
 import { canPrompt, guardedMultiselect, guardedSelect, guardedText, isCancel } from "./prompt-adapter.js";
-import { gitlinkState, inferAliasFromCwd, recordVerdict } from "./workspace-state.js";
 import type { ManageCommand, Repo, SourcesOptions } from "./types.js";
 
 function extraRemoteNames(repo: Repo): string[] {
@@ -43,50 +40,6 @@ export async function selectInteractive(repos: Repo[], actionLabel: string): Pro
   return choice
     .map((alias) => repos.find((r) => r.alias === alias))
     .filter((r): r is Repo => r !== undefined);
-}
-
-export async function selectRepoAlias(
-  repos: Repo[],
-  alias: string | undefined,
-  actionLabel: string,
-): Promise<Repo | null> {
-  let repo: Repo | undefined;
-  if (alias) {
-    repo = repos.find((candidate) => candidate.alias === alias);
-    if (!repo) {
-      log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
-      return null;
-    }
-  } else if (repos.length === 0) {
-    log.error(`No source repos available for "oms ${actionLabel}". Add one to oms.yaml first.`);
-    return null;
-  } else if (repos.length === 1) {
-    repo = repos[0];
-    log.info(`Selected "${repo.alias}" (the only configured source repo).`);
-  } else {
-    if (!canPrompt()) {
-      log.error(
-        `Several source repos qualify for "oms ${actionLabel}" (${repos.map((candidate) => candidate.alias).join(", ")}) and stdin is not a TTY. Pass an alias: "oms ${actionLabel} <alias>".`,
-      );
-      return null;
-    }
-    const choice = await guardedSelect<string>({
-      message: `Select a source repo for "oms ${actionLabel}"`,
-      options: repos.map((candidate) => ({
-        value: candidate.alias,
-        label: candidate.alias,
-        hint: candidate.branch ? `branch: ${candidate.branch}` : undefined,
-      })),
-    });
-    if (isCancel(choice)) {
-      cancel("Cancelled.");
-      return null;
-    }
-    repo = repos.find((candidate) => candidate.alias === (choice as string));
-    if (!repo) return null;
-  }
-
-  return repo;
 }
 
 const CREATE_NEW_BRANCH = "\0create-new-branch";
@@ -215,146 +168,11 @@ export async function selectRepos(
   const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
   if (unknown.length > 0) {
     log.error(
-      `Unknown alias(es): ${unknown.join(", ")}. Use "oms sync --list" to see available aliases.`,
+      `Unknown alias(es): ${unknown.join(", ")}. Use "oms clone --list" to see available aliases.`,
     );
     return null;
   }
 
   const byAlias = new Map(repos.map((repo) => [repo.alias, repo]));
   return uniqueAliases(aliases).map((alias) => byAlias.get(alias)!);
-}
-
-type AliasResolution =
-  | { kind: "alias"; alias: string }
-  | { kind: "noop" }
-  | { kind: "error" };
-
-function commandCandidates(repos: Repo[], repoRoot: string, command: "commit" | "record"): string[] {
-  return repos.filter((repo) => {
-    if (command === "commit") return submoduleInitialized(repoRoot, repo.alias) && isDirty(aliasDir(repoRoot, repo.alias));
-    const state = gitlinkState(repoRoot, repo.alias);
-    return state.pin === "moved"
-      && recordVerdict(state, repo.alias).kind === "recordable"
-      && aliasRegistration(repoRoot, repo.alias).kind === "initialized";
-  }).map((repo) => repo.alias);
-}
-
-function candidateLabels(command: "commit" | "record"): { empty: string; sole: string } {
-  return command === "commit"
-    ? { empty: "Nothing to commit in any submodule.", sole: "dirty submodule" }
-    : { empty: "Nothing to record for any submodule.", sole: "moved pointer" };
-}
-
-function knownAliases(repos: Repo[], aliases: string[]): string[] | null {
-  const unknown = aliases.filter((a) => !repos.some((r) => r.alias === a));
-  if (unknown.length > 0) {
-    log.error(
-      `Unknown alias${unknown.length > 1 ? "es" : ""} "${unknown.join(", ")}". Use "oms sync --list" to see registered aliases.`,
-    );
-    return null;
-  }
-  return uniqueAliases(aliases);
-}
-
-export async function resolveCommitAlias(
-  repos: Repo[],
-  repoRoot: string,
-  alias: string | undefined,
-): Promise<AliasResolution> {
-  const command = "commit";
-  if (alias) {
-    if (!repos.some((r) => r.alias === alias)) {
-      log.error(`Unknown alias "${alias}". Use "oms sync --list" to see registered aliases.`);
-      return { kind: "error" };
-    }
-    return { kind: "alias", alias };
-  }
-
-  const inferred = inferAliasFromCwd(repoRoot, repos);
-  if (inferred) return { kind: "alias", alias: inferred };
-
-  // Count candidates before consulting the terminal. Zero and one need no human intent, so gating
-  // them on stdin made the same repository state succeed in a terminal and fail in a pipe.
-  const candidates = commandCandidates(repos, repoRoot, command);
-  const labels = candidateLabels(command);
-
-  if (candidates.length === 0) {
-    log.info(labels.empty);
-    return { kind: "noop" };
-  }
-  if (candidates.length === 1) {
-    log.info(`Selected "${candidates[0]}" (the only ${labels.sole}).`);
-    return { kind: "alias", alias: candidates[0] };
-  }
-  if (!canPrompt()) {
-    log.error(
-      `Several submodules qualify for "oms ${command}" (${candidates.join(", ")}) and stdin is not a TTY. Pass one: "oms ${command} <alias>".`,
-    );
-    return { kind: "error" };
-  }
-
-  const choice = await guardedSelect<string>({
-    message: `Select a submodule to ${command}`,
-    options: candidates.map((a) => ({ value: a, label: a })),
-  });
-  if (isCancel(choice)) {
-    cancel("Cancelled.");
-    return { kind: "error" };
-  }
-  return { kind: "alias", alias: choice as string };
-}
-
-/** How a record selection was made; `--all` and the picker allow per-alias skips, a named list does not. */
-type AliasSetResolution =
-  | { kind: "aliases"; aliases: string[]; explicit: boolean }
-  | { kind: "noop" }
-  | { kind: "error" };
-
-export async function resolveRecordAliases(
-  repos: Repo[],
-  repoRoot: string,
-  aliases: string[],
-  options: SourcesOptions,
-): Promise<AliasSetResolution> {
-  if (options.all) {
-    return { kind: "aliases", aliases: repos.map((r) => r.alias), explicit: false };
-  }
-
-  if (aliases.length > 0) {
-    const known = knownAliases(repos, aliases);
-    if (!known) return { kind: "error" };
-    return { kind: "aliases", aliases: known, explicit: true };
-  }
-
-  const inferred = inferAliasFromCwd(repoRoot, repos);
-  if (inferred) return { kind: "aliases", aliases: [inferred], explicit: true };
-
-  const candidates = commandCandidates(repos, repoRoot, "record");
-  const labels = candidateLabels("record");
-
-  if (candidates.length === 0) {
-    log.info(labels.empty);
-    return { kind: "noop" };
-  }
-  if (candidates.length === 1) {
-    log.info(`Selected "${candidates[0]}" (the only ${labels.sole}).`);
-    return { kind: "aliases", aliases: candidates, explicit: false };
-  }
-  if (!canPrompt()) {
-    log.error(
-      `Several moved pointers qualify for "oms record" (${candidates.join(", ")}) and stdin is not a TTY. Pass an alias ("oms record <alias>") or record every moved pointer with "oms record --all".`,
-    );
-    return { kind: "error" };
-  }
-
-  const choice = await guardedMultiselect<string>({
-    message: "Select submodules to record (space to toggle, enter to confirm)",
-    options: candidates.map((a) => ({ value: a, label: a })),
-    required: true,
-  });
-  if (isCancel(choice)) {
-    cancel("Cancelled.");
-    return { kind: "error" };
-  }
-  return { kind: "aliases", aliases: choice, explicit: false };
 }

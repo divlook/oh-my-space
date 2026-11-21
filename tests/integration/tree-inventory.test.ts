@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { runStatus } from "../../scripts/lib/status.js";
-import { runTreeAdd, runTreeList, runTreeRemove } from "../../scripts/lib/tree-ops.js";
-import { git, testEnv, workspaceWithApi } from "../helpers.js";
+import { runIndependentStatus as runStatus } from "../../scripts/lib/status.js";
+import {
+  runIndependentTreeAdd as runTreeAdd,
+  runIndependentTreeList as runTreeList,
+  runIndependentTreeRemove as runTreeRemove,
+} from "../../scripts/lib/tree-ops.js";
+import { git, sourcesFor, testEnv, workspaceWithApi, writeSources } from "../helpers.js";
 
 Object.assign(process.env, testEnv);
 
@@ -49,10 +53,11 @@ test("tree list reports healthy and foreign entries and succeeds when inventory 
 test("status JSON includes broken, foreign, and healthy trees and narrows aliases", async () => {
   const { cwd, bare } = workspaceWithApi();
   for (const alias of ["web", "orphan"]) {
-    git(cwd, "-c", "protocol.file.allow=always", "submodule", "add", "-b", "main", `file://${bare}`, `oms/${alias}`);
+    git(cwd, "clone", "--branch", "main", `file://${bare}`, `oms/${alias}`);
   }
-  appendFileSync(join(cwd, "oms.yaml"), `  - alias: web\n    remotes:\n      origin: file://${bare}\n    branch: main\n`);
-  git(cwd, "add", "-A");
+  appendFileSync(join(cwd, ".git", "info", "exclude"), "\n/oms/web/\n/oms/orphan/\n");
+  writeSources(cwd, sourcesFor(["api", "web", "orphan"].map((alias) => ({ alias, bare }))));
+  git(cwd, "add", "oms.yaml");
   git(cwd, "commit", "-m", "add tree inventory sources");
   assert.equal((await capture(cwd, () => runTreeAdd("api", "t1", {}))).code, 0);
   assert.equal((await capture(cwd, () => runTreeAdd("api", "broken", {}))).code, 0);
@@ -62,6 +67,9 @@ test("status JSON includes broken, foreign, and healthy trees and narrows aliase
   assert.equal((await capture(cwd, () => runTreeAdd("web", "other", {}))).code, 0);
   const orphanTree = join(cwd, ".oms-tree", "orphan", "task");
   git(join(cwd, "oms", "orphan"), "worktree", "add", "-b", "task", orphanTree);
+  writeSources(cwd, sourcesFor(["api", "web"].map((alias) => ({ alias, bare }))));
+  git(cwd, "add", "oms.yaml");
+  git(cwd, "commit", "-m", "remove orphan declaration");
   writeFileSync(join(cwd, ".oms-tree", "api", "t1", "scratch"), "selected dirty tree");
   writeFileSync(join(cwd, ".oms-tree", "web", "other", "scratch"), "unselected dirty tree");
 
@@ -72,7 +80,8 @@ test("status JSON includes broken, foreign, and healthy trees and narrows aliase
   const broken = all.trees.find((entry: { task: string }) => entry.task === "broken");
   const stray = all.trees.find((entry: { task: string }) => entry.task === "stray");
   const foreign = all.trees.find((entry: { task: string }) => entry.task === "foreign");
-  assert.equal(all.schemaVersion, 1);
+  assert.equal(all.schemaVersion, 2);
+  assert.deepEqual(all.repos.map((entry: { alias: string }) => entry.alias), ["api", "web"]);
   assert.deepEqual(all.trees.map((entry: { path: string }) => entry.path), [
     ".oms-tree/api/broken",
     ".oms-tree/api/stray",
@@ -85,11 +94,12 @@ test("status JSON includes broken, foreign, and healthy trees and narrows aliase
   assert.equal(all.trees.find((entry: { alias: string }) => entry.alias === "orphan").dirty, false);
   assert.equal(all.trees.find((entry: { task: string }) => entry.task === "other").dirty, true);
   assert.equal(healthy.error, null);
-  assert.match(broken.error, /worktree link is broken/);
-  assert.equal(stray.error, "not a registered worktree of any submodule");
+  assert.match(broken.error, /worktree link is broken|gitdir file points to non-existent location/);
+  assert.equal(stray.error, "not a registered worktree of any source repository");
   assert.equal(foreign.alias, "web");
 
   const filteredResult = await capture(cwd, () => runStatus(["api"], { json: true }));
+  assert.equal(filteredResult.code, 0, filteredResult.output);
   const filtered = JSON.parse(filteredResult.output);
   assert.deepEqual(filtered.trees.map((entry: { alias: string }) => entry.alias), ["api", "api", "api"]);
   assert.equal(filtered.trees.find((entry: { task: string }) => entry.task === "t1").dirty, true);
@@ -107,5 +117,6 @@ test("status JSON includes broken, foreign, and healthy trees and narrows aliase
   assert.equal((await capture(cwd, () => runTreeRemove("api", "stray", {}))).code, 0);
   rmSync(join(cwd, ".oms-tree", "web"), { recursive: true, force: true });
   const emptyResult = await capture(cwd, () => runStatus([], { all: true, json: true }));
+  assert.equal(emptyResult.code, 0, emptyResult.output);
   assert.deepEqual(JSON.parse(emptyResult.output).trees, []);
 });

@@ -19,14 +19,14 @@ npm ci
 
 | Concern | Owning modules under `scripts/lib/` |
 | --- | --- |
-| Workspace discovery and root identity | `workspace-discovery.ts` |
-| Gitlink/topology observations and record eligibility | `workspace-state.ts`, `git-operation-state.ts` |
-| Status output and root follow-up guidance | `status.ts`, `root-followup.ts` |
-| Registration, preparation, synchronization | `alias-registration.ts`, `alias-preparation.ts`, `sync-workspace.ts` |
-| Source commits and root pointer records | `commit.ts`, `record.ts` |
+| Workspace discovery and root identity | `workspace-discovery.ts`, `source-workspace.ts` |
+| Checkout identity, provisioning, and removal | `source-checkout.ts`, `clone-source.ts`, `remove-source.ts`, `removal-safety.ts`, `removal-history.ts` |
+| Former-source ownership and diagnostics | `former-source.ts`, `status.ts`, `doctor.ts` |
+| Legacy conversion and recovery | `migrate-source.ts`, `migration-plan.ts`, `migration-git.ts`, `migration-local.ts`, `migration-root.ts`, `migration-journal.ts` |
+| Source-only Git operations | `source-preparation.ts`, `source-attachment.ts`, `commit.ts`, `manage-ops.ts` |
 | Managed-tree inspection and lifecycle | `tree-inventory.ts`, `tree-context.ts`, `tree-exclude.ts`, `tree-ops.ts` |
-| Branch protection and confirmed cleanup | `branch-baseline.ts`, `source-safety.ts`, `branch-clean-plan.ts`, `branch-clean.ts` |
-| Managed Git configuration and root finalization | `managed-gitmodules.ts`, `gitmodules-reconcile.ts`, `topology-commit.ts`, `root-tx.ts` |
+| Root-local ignore updates | `local-exclude.ts` for locked writes; `clone-source.ts` and `tree-exclude.ts` for rule selection |
+| Branch protection and confirmed cleanup | `source-branch-context.ts`, `source-safety.ts`, `branch-clean-plan.ts`, `branch-clean.ts` |
 | CLI installation and registry transport | `package-install.ts`, `install-context.ts`, `registry.ts`, `update.ts` |
 | Installed skill discovery, classification, reporting | `skill-discovery.ts`, `skill-classification.ts`, `skills.ts` |
 
@@ -54,10 +54,9 @@ The full gate checks types and builds once.
 It then runs the unit, integration, and black-box test layers.
 
 The integration and black-box layers share immutable bare-repository and canonical-workspace seeds prepared after the build.
-Each test receives private copies of mutable Git state, including its upstream repository and submodule remote configuration.
-Standalone layer commands prepare their own seeds; the owning process removes them only after its children finish.
-Standalone `test:integration` builds the CLI before preparing its seeds because the canonical API seed uses the real `sync` command.
-Use `workspaceWithApi()` for an already registered, clean `api/main` test setup; keep real sync, clone, and deinitialization commands when that transition is the contract under test.
+Each test receives private copies of mutable Git state, including its source and upstream.
+Standalone layer commands prepare and clean up their own seeds. Standalone `test:integration` builds the CLI first because the canonical API seed uses `clone`.
+Use `workspaceWithApi()` for an already provisioned independent `api/main` checkout. Keep dedicated submodule fixtures for legacy migration and recovery; ordinary source tests should not require a gitlink.
 
 Pull-request CI has one required validation job, `test (development)`, on `.nvmrc` Node 24.
 It reuses verification only when the content fingerprint, resolved Node version, runner image, and architecture match exactly.
@@ -105,7 +104,6 @@ Keep ongoing performance measurements in `tests/performance/`, independently of 
 
 - `owner-durations.json` records current test-owner timings used by `node scripts/validate-test-inventory.mjs --write`, with earlier snapshots retained in `history`.
 - `suite-benchmarks.json` records complete-suite measurements and is uploaded by CI.
-- `untangle-inspection.json` compares production-bundle calls for status, multi-alias preparation, branch cleanup, and root finalization.
 
 The required CI job uploads its performance evidence even when the 55-second check fails; a failed check still prevents package inspection and verification-marker publication.
 
@@ -134,42 +132,7 @@ The benchmark scripts update these files. Preserve reviewed historical measureme
 Acceptance budgets remain a three-run local median of at most 110 seconds, no local run above 135 seconds, and a cache-miss Node 24 CI Test step of at most 55 seconds.
 Use `--gating` with at least three runs for local Node 24 acceptance, or `--ci-gating` for the Node 24 CI budget.
 
-`operation-inspection.json` records compiled-library Git call counts for operation-marker checks and confirmed cleanup.
-`scripts/lib/git-operation-state.ts` resolves all requested marker paths with one Git invocation per inspection, then checks each marker independently.
-Each inspection still resolves paths afresh, including every cleanup candidate revalidation; it does not cache operation state across mutations or confirmation.
-Git emits newline-delimited paths, so Git directories containing newlines retain individual path lookups.
-Baseline inspection similarly parses each collected `.gitmodules` source once with Git, preserving duplicate-value checks and separate working-tree, index, and HEAD observations.
-Cleanup registration snapshots also validate and collect each configuration source in one Git query, without removing per-candidate revalidation.
-`fixture-setup.json` records local construction comparisons and Git-state/isolation checks for copying the existing API seed instead of repeating bootstrap sync or submodule registration.
-
-### Workspace inspection measurements
-
-`status-inspection.json` records production-bundle Git calls, outputs, and three-run median/range timings separately from suite timings. JSON status now collects each selected alias's pointer state once per invocation; later invocations read it again. The A measurements halve root pointer HEAD/index/conflict reads without removing root or source working-file reads.
-
-Multi-alias status now reads all selected root HEAD gitlinks in one query and all selected index stages in another.
-Each preparation phase likewise shares its root HEAD, index, and configuration reads across the aliases it inspects.
-Failed batches fall back to per-alias inspection so that a failed read does not suppress the other aliases.
-
-Doctor still discovers and diagnoses the complete tree namespace, but no longer checks healthy trees' working files during inventory. The B measurements remove one such read in F3 and eleven in F4; other doctor Git commands remain. Tree listing and removal still inspect dirty state, including undeclared trees.
-
-Alias-filtered JSON and text status inspect working files only in selected aliases' healthy trees. In C's F4 measurements, `status api --json` and `status api` inspect five trees instead of eleven. Discovery still includes every alias; unfiltered status and `tree list` inspect all eleven healthy trees and retain dirty reporting for undeclared entries.
-
-Tree add's duplicate guard also uses discovery-only inventory. D removes one healthy-tree dirty read in F3 and eleven in F4. Healthy, broken, and foreign duplicates still refuse before preparation with files, refs, registration, and root index/HEAD preserved; a new task still succeeds without moving the canonical checkout.
-
-Unsync's tree-presence guard uses discovery-only inventory too: E removes one healthy-tree dirty read in F3 and eleven in F4. Healthy, broken, and foreign entries still block even forced unsync. Empty inventory continues through the existing deletion, topology transaction, and recovery flow; those operations are not part of the inventory savings.
-
-To reproduce, build on Node 24 and use immutable local bare seeds with canonical-only templates. Create each replica at its final path before adding trees; verify every mutable gitdir stays inside it and each healthy tree's administrative back-reference points to its own `.git` file. Use these workspace shapes:
-
-- F1: one tracked alias, no trees.
-- F2: ten initialized aliases, `web` without upstream tracking, no trees.
-- F3: one tracked alias with one dirty tree.
-- F4: ten initialized aliases with five `api` and five `web` trees (one dirty in each), plus a broken `api` entry, a nonempty foreign `web` directory, and a healthy undeclared `orphan` tree.
-
-Run `status --json`, `status api --json`, `status`, `status api`, `doctor`, and `tree list` three times per shape. Use separate fresh replicas for duplicate add, dirty removal, and unsync refusal, including broken-only and foreign-only `api` variants and normal add/unsync controls. Check moved, staged, and split pointers on subsequent F1/F2 invocations. Compare output and exits after normalizing replica paths and independently created commit IDs.
-
-For counts, temporarily wrap `child_process.spawnSync` in a Node preload and call `syncBuiltinESMExports`; validate interception with a known Git read. Count tree working-file reads by `status` calls whose cwd is a managed tree. Run doctor with empty `HOME` and `XDG_STATE_HOME`, clear inherited OMS test/prompt and Git/Node overrides, and count/reject attempted `fetch` calls before network access. Any attempted fetch invalidates the sample. Remove instrumentation and fixtures after measuring.
-
-Timings are diagnostic: sequential local runs use a warm filesystem cache, no Node compile cache, and uncontrolled host load. They are not a CI threshold or an absolute latency promise. Existing output fields, ordering, exit behavior, and mutation safeguards remain unchanged.
+`untangle-inspection.json` records historical 2.x production-bundle comparisons for status, multi-alias preparation, branch cleanup, and root finalization. `operation-inspection.json`, `fixture-setup.json`, and `status-inspection.json` also include historical 2.x measurements. To assess independent clones, measure the suite or owner on the revision you are evaluating.
 
 ### Direct test runs
 

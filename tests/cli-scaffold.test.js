@@ -22,27 +22,72 @@ import {
   gitOut,
   sourceFor,
   gitTopLevelStubEnv,
+  workspaceWithApi,
 } from "./helpers.js";
 
 
-test("help is exposed as oms with the submodule commands", () => {
+test("help is exposed as oms with independent checkout commands", () => {
   const result = run(["--help"]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Usage: oms/);
-  assert.match(result.stdout, /\binit\b/);
-  assert.match(result.stdout, /\bsync\b/);
-  assert.match(result.stdout, /\bstatus\b/);
-  assert.match(result.stdout, /\bcommit\b/);
-  assert.match(result.stdout, /\brecord\b/);
-  assert.match(result.stdout, /\bswitch\b/);
-  assert.match(result.stdout, /\bcheckout\b/);
-  assert.match(result.stdout, /\bunsync\b/);
-  assert.match(result.stdout, /\bagent\b/);
-  assert.match(result.stdout, /\bskills\b/);
-  assert.match(result.stdout, /\bupdate\b/);
-  assert.match(result.stdout, /\btree\b/);
-  assert.doesNotMatch(result.stdout, /\bworktree\b/);
-  assert.doesNotMatch(result.stdout, /\bmigrate\b/);
+  assert.match(result.stdout, /independent Git clones/);
+  for (const command of ["init", "clone", "remove", "migrate", "status", "commit", "branch", "agent", "skills", "update", "tree"]) {
+    assert.match(result.stdout, new RegExp(`^  ${command}\\b`, "m"));
+  }
+  assert.doesNotMatch(result.stdout, /^  (?:sync|unsync|record|worktree)\b/m);
+
+  const branch = run(["branch", "--help"]);
+  assert.equal(branch.status, 0, branch.stdout + branch.stderr);
+  assert.match(branch.stdout, /^  switch\b/m);
+  assert.match(branch.stdout, /^  checkout\b/m);
+});
+
+test("production CLI rejects removed commands and topology flags without changing repositories", () => {
+  const { cwd, wt } = workspaceWithApi();
+  const manifest = readFileSync(join(cwd, "oms.yaml"), "utf8");
+  const paths = [cwd, wt];
+  const snapshot = () => paths.map((dir) => ({
+    head: gitOut(dir, "rev-parse", "HEAD"),
+    refs: gitOut(dir, "show-ref"),
+    index: gitOut(dir, "ls-files", "--stage"),
+    changes: gitOut(dir, "status", "--porcelain"),
+  }));
+  const before = snapshot();
+  for (const command of ["sync", "unsync", "record"]) {
+    const result = run([command, "api"], { cwd });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, new RegExp(`unknown command '${command}'`));
+    assert.match(result.stderr, /oms migrate --dry-run/);
+  }
+  for (const command of ["clone", "remove"]) {
+    for (const flag of ["--commit", "--no-commit"]) {
+      const result = run([command, "api", flag], { cwd });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, new RegExp(`unknown option '${flag}'`));
+    }
+  }
+  assert.deepEqual(snapshot(), before);
+  assert.equal(readFileSync(join(cwd, "oms.yaml"), "utf8"), manifest);
+  assert.equal(existsSync(join(cwd, ".gitmodules")), false);
+});
+
+test("normal commands reject legacy registration settings and direct the user to migration", () => {
+  const { cwd, wt } = workspaceWithApi();
+  const original = readFileSync(join(cwd, "oms.yaml"), "utf8");
+  const checkout = gitOut(wt, "rev-parse", "HEAD");
+  for (const value of [true, false]) {
+    const legacy = `autoCommitRegistration: ${value}\n${original}`;
+    writeFileSync(join(cwd, "oms.yaml"), legacy);
+    for (const args of [["clone", "--list"], ["clone", "api"], ["status", "--json"], ["remove", "api", "--yes"]]) {
+      const result = run(args, { cwd });
+      const output = result.stdout + result.stderr;
+      assert.equal(result.status, 1, output);
+      assert.match(output, /autoCommitRegistration is a legacy setting/);
+      assert.match(output, /oms migrate --dry-run/);
+    }
+    assert.equal(readFileSync(join(cwd, "oms.yaml"), "utf8"), legacy);
+    assert.equal(gitOut(wt, "rev-parse", "HEAD"), checkout);
+  }
 });
 
 
@@ -51,6 +96,8 @@ test("init scaffolds oms.yaml with the schema comment and does not gitignore oms
   const result = run(["init"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
+  assert.match(output, /run "git init" here/i);
+  assert.match(output, /oms clone --all/);
 
   const manifest = readFileSync(join(cwd, "oms.yaml"), "utf8");
   assert.match(
@@ -58,6 +105,7 @@ test("init scaffolds oms.yaml with the schema comment and does not gitignore oms
     /# yaml-language-server: \$schema=https:\/\/raw\.githubusercontent\.com\/divlook\/oh-my-space\/main\/oms\.schema\.json/,
   );
   assert.match(manifest, /alias: example/);
+  assert.doesNotMatch(manifest, /autoCommitRegistration/);
 
   if (existsSync(join(cwd, ".gitignore"))) {
     assert.doesNotMatch(readFileSync(join(cwd, ".gitignore"), "utf8"), /^oms\/$/m);
@@ -66,15 +114,13 @@ test("init scaffolds oms.yaml with the schema comment and does not gitignore oms
   assert.equal(existsSync(join(cwd, "oms", "CLAUDE.md")), false);
 });
 
-test("init removes a stale managed oms/ entry left in .gitignore", () => {
+test("init preserves existing ignore rules rather than rewriting them", () => {
   const cwd = tempWorkspace();
   writeFileSync(join(cwd, ".gitignore"), "node_modules/\n# managed by oms\noms/\n");
   const result = run(["init"], { cwd });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const gi = readFileSync(join(cwd, ".gitignore"), "utf8");
-  assert.doesNotMatch(gi, /^oms\/$/m);
-  assert.doesNotMatch(gi, /# managed by oms/);
-  assert.match(gi, /node_modules\//);
+  assert.equal(gi, "node_modules/\n# managed by oms\noms/\n");
 });
 
 test("init refuses to overwrite an existing oms.yaml without --force", () => {
@@ -175,7 +221,7 @@ test("init fails before writes when target identity is indeterminate", () => {
 
 test("doctor accepts the init-generated oms.yaml", () => {
   const cwd = tempWorkspace();
-  run(["init"], { cwd });
+  assert.equal(run(["init"], { cwd }).status, 0);
   const result = run(["doctor"], { cwd });
   const output = result.stdout + result.stderr;
   assert.ok(result.status === 0 || result.status === 2, output);
@@ -183,12 +229,12 @@ test("doctor accepts the init-generated oms.yaml", () => {
   assert.match(output, /1 repo\(s\) configured/);
 });
 
-test("sync --list loads oms.yaml from a parent workspace (no git repo needed)", () => {
+test("clone --list loads oms.yaml from a parent workspace (no git repo needed)", () => {
   const cwd = tempWorkspace();
   mkdirSync(join(cwd, "nested"));
   writeSources(cwd);
 
-  const result = run(["sync", "--list"], { cwd: join(cwd, "nested") });
+  const result = run(["clone", "--list"], { cwd: join(cwd, "nested") });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /sample/);
   assert.match(result.stdout, /git@example.com:org\/repo.git/);
@@ -219,7 +265,7 @@ function assertNearestManifestRefusal(createCandidate) {
   writeSources(outer, sourceFor("outer", "/tmp/outer"));
   createCandidate(join(inner, "oms.yaml"));
 
-  const result = run(["sync", "--list"], { cwd: inner });
+  const result = run(["clone", "--list"], { cwd: inner });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
   assert.match(output, /regular file|broken symbolic link/);
@@ -230,28 +276,29 @@ function assertNearestManifestRefusal(createCandidate) {
 
 test("missing oms.yaml fails with creation guidance", () => {
   const cwd = tempWorkspace();
-  const result = run(["sync", "--list"], { cwd });
+  const result = run(["clone", "--list"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1);
   assert.match(output, /Could not find oms\.yaml/);
+  assert.match(output, /Create a oms\.yaml/);
 });
 
 
-test("sync outside a git repository fails with git init guidance", () => {
+test("clone outside a git repository fails with git init guidance", () => {
   const bare = initBareUpstream();
   const cwd = tempWorkspace();
   writeSources(cwd, sourceFor("probe", bare));
-  const result = run(["sync", "probe"], { cwd });
+  const result = run(["clone", "probe"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 1, output);
-  assert.match(output, /not a git repository/);
+  assert.match(output, /not a Git workspace/);
+  assert.match(output, /git init/);
   assert.equal(existsSync(join(cwd, "oms")), false);
 });
 
 const sharedPreflightCommands = [
   ["status"],
   ["commit", "sample", "-m", "test"],
-  ["record", "sample"],
   ["branch", "switch", "sample", "main"],
   ["branch", "checkout", "sample", "main"],
   ["branch", "list", "sample"],
@@ -259,17 +306,17 @@ const sharedPreflightCommands = [
   ["fetch", "sample"],
   ["pull", "sample"],
   ["push", "sample"],
-  ["unsync", "sample"],
+  ["remove", "sample"],
 ];
 
-test("submodule commands reject a nested manifest before root or workspace side effects", () => {
+test("source commands reject a nested manifest before root or workspace side effects", () => {
   const root = initGitWorkspace();
   const nested = join(root, "nested");
   mkdirSync(nested);
   writeSources(nested);
   const rootStatus = gitOut(root, "status", "--porcelain");
 
-  for (const args of [["sync", "sample"], ...sharedPreflightCommands]) {
+  for (const args of [["clone", "sample"], ...sharedPreflightCommands]) {
     const result = run(args, { cwd: nested });
     const output = result.stdout + result.stderr;
     assert.equal(result.status, 1, `${args.join(" ")}\n${output}`);
@@ -281,7 +328,7 @@ test("submodule commands reject a nested manifest before root or workspace side 
   }
 });
 
-test("submodule commands accept canonical-equivalent workspace paths", () => {
+test("source commands accept canonical-equivalent workspace paths", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd);
   const linkParent = tempWorkspace();
@@ -293,13 +340,13 @@ test("submodule commands accept canonical-equivalent workspace paths", () => {
   assert.doesNotMatch(result.stdout + result.stderr, /does not match the root Git top-level/);
 });
 
-test("submodule commands fail closed when Git top-level inspection is indeterminate", () => {
+test("source commands fail closed when Git top-level inspection is indeterminate", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd);
   const rootStatus = gitOut(cwd, "status", "--porcelain");
 
   for (const env of [gitTopLevelStubEnv("failure"), gitTopLevelStubEnv("missing-path")]) {
-    const result = run(["sync", "sample"], { cwd, env });
+    const result = run(["clone", "sample"], { cwd, env });
     const output = result.stdout + result.stderr;
     assert.equal(result.status, 1, output);
     assert.match(output, /Could not verify/);
@@ -309,7 +356,7 @@ test("submodule commands fail closed when Git top-level inspection is indetermin
   }
 });
 
-test("shared submodule commands fail without side effects outside a Git work tree", () => {
+test("shared source commands fail without side effects outside a Git work tree", () => {
   const cwd = tempWorkspace();
   writeSources(cwd);
 
@@ -317,28 +364,29 @@ test("shared submodule commands fail without side effects outside a Git work tre
     const result = run(args, { cwd });
     const output = result.stdout + result.stderr;
     assert.equal(result.status, 1, `${args.join(" ")}\n${output}`);
-    assert.match(output, /not a git repository/);
+    assert.match(output, /not a Git workspace/);
     assert.equal(existsSync(join(cwd, ".gitmodules")), false);
     assert.equal(existsSync(join(cwd, "oms")), false);
   }
 });
 
-test("unsync rejects an unknown alias", () => {
+test("remove rejects an alias with no current or verified former declaration", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd);
-  const result = run(["unsync", "missing"], { cwd });
+  const result = run(["remove", "missing", "--yes"], { cwd });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /Unknown alias/);
+  assert.equal(result.status, 2, output);
+  assert.match(output, /missing: no former declaration can be verified/);
+  assert.match(output, /No checkout was removed/);
 });
 
-test("unsync on a never-synced alias reports nothing to remove with exit 0", () => {
+test("remove on a never-cloned alias reports nothing to remove with exit 0", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd);
-  const result = run(["unsync", "sample"], { cwd });
+  const result = run(["remove", "sample"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.match(output, /nothing to remove/i);
+  assert.match(output, /sample: already absent/);
 });
 
 
@@ -353,7 +401,8 @@ test("doctor reports workspace, manifest count, git, and warns when not a git re
   assert.doesNotMatch(output, /Workspace root:/);
   assert.match(output, /oms\.yaml: 1 repo\(s\) configured/);
   assert.match(output, /git:/);
-  assert.match(output, /not a git repository/);
+  assert.match(output, /not a Git workspace/);
+  assert.match(output, /git init/);
 });
 
 test("doctor diagnoses a nested manifest without reporting a valid workspace root", () => {
@@ -370,16 +419,13 @@ test("doctor diagnoses a nested manifest without reporting a valid workspace roo
   assert.doesNotMatch(output, /Workspace root:/);
 });
 
-test("doctor reports a healthy submodule after sync", () => {
-  const bare = initBareUpstream();
-  const cwd = initGitWorkspace();
-  writeSources(cwd, sourceFor("api", bare));
-  assert.equal(run(["sync", "api"], { cwd }).status, 0);
+test("doctor reports a healthy independent checkout after clone", () => {
+  const { cwd } = workspaceWithApi();
 
   const result = run(["doctor"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
-  assert.match(output, /api: submodule OK \(branch=main\)/);
+  assert.match(output, /api: independent checkout OK \(branch=main\)/);
 });
 
 test("doctor warns when .gitignore still excludes oms/", () => {
@@ -391,12 +437,13 @@ test("doctor warns when .gitignore still excludes oms/", () => {
   const result = run(["doctor"], { cwd });
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 2, output);
-  assert.match(output, /\.gitignore excludes oms\//);
+  assert.match(output, /Root ignore rules hide all of oms\/, including agent instruction files/);
+  assert.match(output, /alias-specific ignores/);
+  assert.equal(readFileSync(join(cwd, ".gitignore"), "utf8"), "oms/\n");
 });
 
 test("doctor warns when git is older than the recommended 2.40", () => {
-  const cwd = tempWorkspace();
-  writeSources(cwd);
+  const { cwd } = workspaceWithApi();
   const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const stubDir = tempFixture("oms-git-stub-");
   const stubGit = join(stubDir, "git");

@@ -1,9 +1,8 @@
 import { log } from "@clack/prompts";
 import { spawn, type ChildProcess } from "node:child_process";
-import { aliasRegistration, canonicalCheckoutOwned, pendingRegistrationGuidance } from "./alias-registration.js";
-import { aliasDir, submoduleInitialized } from "./git.js";
-import { loadForSubmodules } from "./manifest.js";
 import { selectRepos } from "./prompts.js";
+import { inspectSourceCheckout } from "./source-checkout.js";
+import { loadForSources } from "./source-workspace.js";
 import { refuseInsideManagedTree } from "./tree-context.js";
 import type { SourcesOptions } from "./types.js";
 
@@ -15,18 +14,6 @@ type ExecResult =
   | { kind: "interrupted" }
   | { kind: "not-run" };
 
-function targetFailure(repoRoot: string, alias: string): string | null {
-  const registration = aliasRegistration(repoRoot, alias);
-  if (registration.kind === "pending registration") return pendingRegistrationGuidance(alias);
-  const repair = `State preserved; run "oms sync ${alias}".`;
-  if (registration.kind === "partially registered") return `${registration.kind}: ${registration.reason}. ${repair}`;
-  if (registration.kind === "indeterminate") return `${registration.reason}. State preserved; retry once Git is idle.`;
-  if (registration.kind !== "initialized") return `${registration.kind}. ${repair}`;
-  if (!submoduleInitialized(repoRoot, alias)) return `checkout is not initialized. ${repair}`;
-  return canonicalCheckoutOwned(repoRoot, alias)
-    ? null
-    : `checkout does not belong to the declared canonical submodule. ${repair}`;
-}
 
 function describe(result: ExecResult): string {
   switch (result.kind) {
@@ -39,16 +26,16 @@ function describe(result: ExecResult): string {
   }
 }
 
-export async function runExec(aliases: string[], options: SourcesOptions, command: string[]): Promise<number> {
+
+export async function runIndependentExec(aliases: string[], options: SourcesOptions, command: string[]): Promise<number> {
   const [executable, ...args] = command;
   if (!executable) {
     log.error("Usage: oms exec [aliases...] [--all] -- <command> [args...]");
     return 1;
   }
-  const loaded = loadForSubmodules();
+  const loaded = loadForSources();
   if (!loaded) return 1;
-  const { repos, repoRoot } = loaded;
-  // Manifest validation guarantees a nonempty selection domain; target state is rechecked per child.
+  const { workspace, repos, repoRoot } = loaded;
   if (refuseInsideManagedTree(repoRoot)) return 1;
   const picked = await selectRepos(repos, aliases, options, "exec");
   if (!picked || picked.length === 0) return 1;
@@ -68,15 +55,16 @@ export async function runExec(aliases: string[], options: SourcesOptions, comman
       if (interrupted) {
         result = { kind: "not-run" };
       } else {
-        const failure = targetFailure(repoRoot, repo.alias);
-        if (failure) {
-          result = { kind: "target", reason: failure };
+        // An earlier child may have changed this checkout.
+        const checkout = inspectSourceCheckout(workspace, repo);
+        if (checkout.kind !== "ready") {
+          result = { kind: "target", reason: `${checkout.reason} No command was run in this checkout; its state was preserved.` };
         } else {
           log.step(`${repo.alias}: exec`);
           result = await new Promise<ExecResult>((complete) => {
             let spawnError: Error | undefined;
             try {
-              active = spawn(executable, args, { cwd: aliasDir(repoRoot, repo.alias), shell: false, stdio: "inherit" });
+              active = spawn(executable, args, { cwd: checkout.path, shell: false, stdio: "inherit" });
             } catch (error) {
               complete({ kind: "spawn", reason: error instanceof Error ? error.message : String(error) });
               return;

@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { git, gitOut, queueEnv, run, workspaceWithApi } from "./helpers.js";
+import { git, gitOut, queueEnv, run, sourcesFor, tempWorkspace, workspaceWithApi, writeSources } from "./helpers.js";
 
 function workspaceWithTree(task = "t1") {
   const { cwd, bare, wt } = workspaceWithApi();
-  run(["tree", "add", "api", task], { cwd });
+  const added = run(["tree", "add", "api", task], { cwd });
+  assert.equal(added.status, 0, added.stdout + added.stderr);
   assert.equal(existsSync(join(cwd, ".oms-tree", "api", task)), true);
   return { cwd, bare, wt, tree: join(cwd, ".oms-tree", "api", task), task };
 }
@@ -14,6 +15,8 @@ function workspaceWithTree(task = "t1") {
 function rootSnapshot(cwd) {
   return {
     head: gitOut(cwd, "rev-parse", "HEAD"),
+    index: gitOut(cwd, "ls-files", "--stage"),
+    manifest: readFileSync(join(cwd, "oms.yaml"), "utf8"),
     gitmodules: existsSync(join(cwd, ".gitmodules"))
       ? readFileSync(join(cwd, ".gitmodules"), "utf8")
       : null,
@@ -21,10 +24,7 @@ function rootSnapshot(cwd) {
 }
 
 function assertRootSnapshot(cwd, before) {
-  assert.equal(gitOut(cwd, "rev-parse", "HEAD"), before.head);
-  if (before.gitmodules !== null) {
-    assert.equal(readFileSync(join(cwd, ".gitmodules"), "utf8"), before.gitmodules);
-  }
+  assert.deepEqual(rootSnapshot(cwd), before);
 }
 
 function treeBranches(cwd) {
@@ -41,6 +41,7 @@ test("tree add starts at the canonical HEAD, prints one line, and leaves a detac
   const output = result.stdout + result.stderr;
   assert.equal(result.status, 0, output);
   assert.match(output, /api: created task tree second \(new branch second\)/);
+  assert.equal(output.split("\n").filter((line) => line.includes("created task tree")).length, 1);
   const second = join(cwd, ".oms-tree", "api", "second");
   assert.equal(existsSync(second), true);
   assert.equal(
@@ -49,6 +50,7 @@ test("tree add starts at the canonical HEAD, prints one line, and leaves a detac
     "the task branch starts at the canonical HEAD commit",
   );
   assert.equal(gitOut(second, "rev-parse", "--abbrev-ref", "HEAD"), "second");
+  assert.equal(gitOut(join(cwd, "oms", "api"), "branch", "--show-current"), "main");
   assertRootSnapshot(cwd, before);
 
   const wt = join(cwd, "oms", "api");
@@ -67,10 +69,14 @@ test("tree add --from sets the start point, resumes an existing branch, and refu
   const { cwd, bare } = workspaceWithTree();
   const wt = join(cwd, "oms", "api");
 
-  const feature = gitOut(wt, "rev-parse", "HEAD");
+  const baseline = gitOut(wt, "rev-parse", "origin/main");
+  git(wt, "commit", "--allow-empty", "-m", "canonical work");
+  const canonical = gitOut(wt, "rev-parse", "HEAD");
+  assert.notEqual(canonical, baseline);
   const fromResult = run(["tree", "add", "api", "from-task", "--from", "origin/main"], { cwd });
   assert.equal(fromResult.status, 0, fromResult.stdout + fromResult.stderr);
-  assert.equal(gitOut(join(cwd, ".oms-tree", "api", "from-task"), "rev-parse", "HEAD"), feature);
+  assert.equal(gitOut(join(cwd, ".oms-tree", "api", "from-task"), "rev-parse", "HEAD"), baseline);
+  assert.equal(gitOut(wt, "rev-parse", "HEAD"), canonical);
 
   const remove = run(["tree", "remove", "api", "t1"], { cwd });
   assert.equal(remove.status, 0, remove.stdout + remove.stderr);
@@ -79,18 +85,19 @@ test("tree add --from sets the start point, resumes an existing branch, and refu
   const conflict = run(["tree", "add", "api", "t1", "--from", "origin/main"], { cwd });
   const conflictOutput = conflict.stdout + conflict.stderr;
   assert.equal(conflict.status, 1, conflictOutput);
-  assert.match(conflictOutput, /branch "t1" already exists, so --from cannot set its start point/);
+  assert.match(conflictOutput, /branch "t1" already exists.*[Oo]mit --from/);
   assert.equal(existsSync(join(cwd, ".oms-tree", "api", "t1")), false, "no worktree was created");
 
   const resume = run(["tree", "add", "api", "t1"], { cwd });
   const resumeOutput = resume.stdout + resume.stderr;
   assert.equal(resume.status, 0, resumeOutput);
   assert.match(resumeOutput, /resumed branch t1/);
+  assert.equal(gitOut(join(cwd, ".oms-tree", "api", "t1"), "rev-parse", "HEAD"), baseline);
   assert.equal(existsSync(bare), true);
 });
 
 test("tree add refuses duplicate paths including foreign directories, invalid names, and unknown aliases", () => {
-  const { cwd } = workspaceWithTree();
+  const { cwd, bare } = workspaceWithTree();
 
   const duplicate = run(["tree", "add", "api", "t1"], { cwd });
   const duplicateOutput = duplicate.stdout + duplicate.stderr;
@@ -108,9 +115,21 @@ test("tree add refuses duplicate paths including foreign directories, invalid na
   assert.match(slash.stdout + slash.stderr, /task names must not contain "\/"/);
   assert.equal(existsSync(join(cwd, ".oms-tree", "api", "feat")), false);
 
+  const invalidRef = run(["tree", "add", "api", "a..b"], { cwd });
+  assert.equal(invalidRef.status, 1, invalidRef.stdout + invalidRef.stderr);
+  assert.match(invalidRef.stdout + invalidRef.stderr, /valid branch name/);
+  assert.equal(existsSync(join(cwd, ".oms-tree", "api", "a..b")), false);
+
   const unknown = run(["tree", "add", "missing", "t"], { cwd });
   assert.equal(unknown.status, 1, unknown.stdout + unknown.stderr);
   assert.match(unknown.stdout + unknown.stderr, /Unknown alias "missing"/);
+
+  writeSources(cwd, sourcesFor(["api", "missing"].map((alias) => ({ alias, bare }))));
+  const notCloned = run(["tree", "add", "missing", "t"], { cwd });
+  assert.equal(notCloned.status, 1, notCloned.stdout + notCloned.stderr);
+  assert.match(notCloned.stdout + notCloned.stderr, /oms clone missing/);
+  assert.equal(existsSync(join(cwd, "oms", "missing")), false);
+  assert.equal(existsSync(join(cwd, ".oms-tree", "missing")), false);
 
   rmSync(join(cwd, ".oms-tree", "api", "t1"), { recursive: true });
   const api = join(cwd, "oms", "api");
@@ -128,13 +147,13 @@ test("tree add refuses duplicate paths including foreign directories, invalid na
 });
 
 test("tree add works offline and asserts the exclude entry idempotently with no root commit", () => {
-  const { cwd } = workspaceWithTree("only");
+  const { cwd, bare } = workspaceWithTree("only");
   const before = rootSnapshot(cwd);
   const excludePath = join(cwd, ".git", "info", "exclude");
   const excludeAfterFirstAdd = readFileSync(excludePath, "utf8");
   assert.match(excludeAfterFirstAdd, /\.oms-tree\//);
 
-  git(join(cwd, "oms", "api"), "remote", "set-url", "origin", "http://127.0.0.1:9/unreachable");
+  renameSync(bare, `${bare}-offline`);
   const offline = run(["tree", "add", "api", "offline-task"], { cwd });
   assert.equal(offline.status, 0, offline.stdout + offline.stderr);
 
@@ -174,7 +193,6 @@ test("tree remove refuses a dirty worktree, force discards it, and both preserve
 
 test("tree remove prunes a broken tree and cleans up empty parents through the namespace root", () => {
   const { cwd, task } = workspaceWithTree();
-  const outer = join(cwd, "..");
   const moved = `${cwd}-moved`;
 
   renameSync(cwd, moved);
@@ -188,7 +206,7 @@ test("tree remove prunes a broken tree and cleans up empty parents through the n
   assert.equal(result.status, 0, output);
   assert.equal(existsSync(join(moved, ".oms-tree", "api", task)), false);
   assert.equal(existsSync(join(moved, ".oms-tree")), false, "the namespace root is deleted");
-  assert.match(output, /pruned/);
+  assert.match(output, /stale metadata removed/);
   assert.equal(
     gitOut(join(moved, "oms", "api"), "for-each-ref", "--format=%(refname:short)", `refs/heads/${task}`).trim(),
     task,
@@ -232,7 +250,7 @@ test("tree remove deletes an empty foreign directory and refuses a non-empty one
   const full = run(["tree", "remove", "api", "full-stray"], { cwd });
   const fullOutput = full.stdout + full.stderr;
   assert.equal(full.status, 1, fullOutput);
-  assert.match(fullOutput, /not a registered worktree and contains files/);
+  assert.match(fullOutput, /not a registered worktree and is not an empty directory/);
   assert.equal(existsSync(join(cwd, ".oms-tree", "api", "full-stray", "file.txt")), true);
 
   const forced = run(["tree", "remove", "api", "full-stray", "--force"], { cwd });
@@ -241,7 +259,7 @@ test("tree remove deletes an empty foreign directory and refuses a non-empty one
 });
 
 test("tree remove resolves omitted arguments interactively and fails non-interactively", () => {
-  const { cwd, task } = workspaceWithTree("sel-a");
+  const { cwd } = workspaceWithTree("sel-a");
   run(["tree", "add", "api", "sel-b"], { cwd });
 
   const bare = run(["tree", "remove"], { cwd });
@@ -275,9 +293,11 @@ test("tree-cwd guard refuses alias commands before any mutation while read-only 
   assert.equal(gitOut(tree, "status", "--porcelain"), "", "no commit or staging happened in the tree");
   assert.deepEqual(treeBranches(cwd), branchesBefore);
 
-  const record = run(["record"], { cwd: tree });
-  assert.equal(record.status, 1, record.stdout + record.stderr);
-  assert.match(record.stdout + record.stderr, /inside a managed tree/);
+  const exec = run(["exec", "api", "--", process.execPath, "-e", "require('fs').writeFileSync('ran', 'yes')"], { cwd: tree });
+  assert.equal(exec.status, 1, exec.stdout + exec.stderr);
+  assert.match(exec.stdout + exec.stderr, /inside a managed tree/);
+  assert.equal(existsSync(join(cwd, "oms", "api", "ran")), false);
+  assert.equal(existsSync(join(tree, "ran")), false);
 
   const bare = run(["branch"], { cwd: tree, env: queueEnv([{ type: "select", value: "list" }]) });
   assert.equal(bare.status, 1, bare.stdout + bare.stderr);
@@ -288,8 +308,19 @@ test("tree-cwd guard refuses alias commands before any mutation while read-only 
   assert.match(push.stdout + push.stderr, /inside a managed tree/);
   assertRootSnapshot(cwd, before);
 
-  const status = run(["status"], { cwd: tree });
+  const status = run(["status", "--json"], { cwd: tree });
   assert.equal(status.status, 0, status.stdout + status.stderr);
+  const json = JSON.parse(status.stdout);
+  assert.equal(json.schemaVersion, 2);
+  assert.equal(json.currentAlias, null);
+  assert.equal(Object.hasOwn(json.root, "submodulePointers"), false);
+  assert.equal(Object.hasOwn(json.repos[0], "pin"), false);
+  assert.deepEqual(json.trees.map(({ alias, task }) => [alias, task]), [["api", "t1"]]);
+  const unknownStatus = run(["status", "missing", "--json"], { cwd: tree });
+  assert.equal(unknownStatus.status, 1, unknownStatus.stdout + unknownStatus.stderr);
+  assert.equal(unknownStatus.stdout, "");
+  assert.match(unknownStatus.stderr, /Unknown alias.*missing/);
+  assert.match(unknownStatus.stderr, /oms clone --list/);
   const list = run(["tree", "list"], { cwd: tree });
   assert.equal(list.status, 0, list.stdout + list.stderr);
   assert.match(list.stdout + list.stderr, /api\s+t1\s+t1\s+no\s+ok/);
@@ -298,23 +329,23 @@ test("tree-cwd guard refuses alias commands before any mutation while read-only 
   assert.notEqual(doctor.status, 1);
 });
 
-test("unsync refuses while inventory entries exist, force included, and proceeds after removal", () => {
+test("remove refuses while inventory entries exist, force included, and proceeds after removal", () => {
   const { cwd, tree } = workspaceWithTree();
   const before = rootSnapshot(cwd);
 
-  const refused = run(["unsync", "api", "--no-commit"], { cwd });
+  const refused = run(["remove", "api", "--yes"], { cwd });
   const refusedOutput = refused.stdout + refused.stderr;
-  assert.equal(refused.status, 1, refusedOutput);
-  assert.match(refusedOutput, /managed trees exist \(\.oms-tree\/api\/t1\)/);
-  assert.match(refusedOutput, /oms tree remove api <task>/);
+  assert.equal(refused.status, 2, refusedOutput);
+  assert.match(refusedOutput, /managed tree \.oms-tree\/api\/t1 exists/);
+  assert.match(refusedOutput, /oms tree remove/);
   assert.equal(existsSync(tree), true);
   assert.equal(existsSync(join(cwd, "oms", "api")), true);
   assertRootSnapshot(cwd, before);
 
-  const forced = run(["unsync", "api", "--force", "--no-commit"], { cwd });
+  const forced = run(["remove", "api", "--force", "--yes"], { cwd });
   const forcedOutput = forced.stdout + forced.stderr;
-  assert.equal(forced.status, 1, forcedOutput);
-  assert.match(forcedOutput, /managed trees exist/);
+  assert.equal(forced.status, 2, forcedOutput);
+  assert.match(forcedOutput, /managed tree \.oms-tree\/api\/t1 exists/);
 
   rmSync(tree, { recursive: true });
   const api = join(cwd, "oms", "api");
@@ -322,8 +353,10 @@ test("unsync refuses while inventory entries exist, force included, and proceeds
   const branch = gitOut(api, "rev-parse", "t1");
   const registration = gitOut(api, "worktree", "list", "--porcelain");
   for (const force of [false, true]) {
-    const brokenBlocked = run(["unsync", "api", ...(force ? ["--force"] : []), "--no-commit"], { cwd });
-    assert.equal(brokenBlocked.status, 1, brokenBlocked.stdout + brokenBlocked.stderr);
+    const brokenBlocked = run(["remove", "api", ...(force ? ["--force"] : []), "--yes"], { cwd });
+    const output = brokenBlocked.stdout + brokenBlocked.stderr;
+    assert.equal(brokenBlocked.status, 2, output);
+    assert.match(output, /\.oms-tree\/api\/t1/);
     assert.equal(existsSync(join(api, ".git")), true);
     assert.equal(gitOut(api, "rev-parse", "t1"), branch);
     assert.equal(gitOut(api, "worktree", "list", "--porcelain"), registration);
@@ -333,19 +366,33 @@ test("unsync refuses while inventory entries exist, force included, and proceeds
 
   run(["tree", "remove", "api", "t1"], { cwd });
   mkdirSync(join(cwd, ".oms-tree", "api", "lost"), { recursive: true });
-  const foreignBlocked = run(["unsync", "api", "--no-commit"], { cwd });
+  const foreignBlocked = run(["remove", "api", "--force", "--yes"], { cwd });
   const foreignOutput = foreignBlocked.stdout + foreignBlocked.stderr;
-  assert.equal(foreignBlocked.status, 1, foreignOutput);
-  assert.match(foreignOutput, /managed trees exist \(\.oms-tree\/api\/lost\)/);
+  assert.equal(foreignBlocked.status, 2, foreignOutput);
+  assert.match(foreignOutput, /managed tree \.oms-tree\/api\/lost exists/);
 
-  rmSync(join(cwd, ".oms-tree"), { recursive: true, force: true });
-  const cleared = run(["unsync", "api", "--no-commit"], { cwd });
+  rmSync(join(cwd, ".oms-tree"), { recursive: true });
+  const external = join(tempWorkspace(), ".oms-tree", "api", "external");
+  git(api, "worktree", "add", "-b", "external", external);
+  const listed = run(["tree", "list"], { cwd });
+  assert.equal(listed.status, 0, listed.stdout + listed.stderr);
+  assert.match(listed.stdout + listed.stderr, /No managed trees/);
+  const externalBlocked = run(["remove", "api", "--force", "--yes"], { cwd });
+  const externalOutput = externalBlocked.stdout + externalBlocked.stderr;
+  assert.equal(externalBlocked.status, 2, externalOutput);
+  assert.match(externalOutput, /linked worktree .*\/\.oms-tree\/api\/external exists/);
+  assert.equal(existsSync(join(api, ".git")), true);
+  assert.equal(existsSync(join(external, ".git")), true);
+  git(api, "worktree", "remove", external);
+
+  const cleared = run(["remove", "api", "--yes"], { cwd });
   assert.equal(cleared.status, 0, cleared.stdout + cleared.stderr);
-  assert.equal(existsSync(join(cwd, "oms", "api")), false);
+  assert.equal(existsSync(api), false);
+  assertRootSnapshot(cwd, before);
 });
 
 test("doctor reports broken trees with repair guidance and a missing exclude entry", () => {
-  const { cwd, task } = workspaceWithTree();
+  const { cwd } = workspaceWithTree();
   const moved = `${cwd}-moved`;
 
   const healthy = run(["doctor"], { cwd });
@@ -355,7 +402,7 @@ test("doctor reports broken trees with repair guidance and a missing exclude ent
   renameSync(cwd, moved);
   const broken = run(["doctor"], { cwd: moved });
   const brokenOutput = broken.stdout + broken.stderr;
-  assert.match(brokenOutput, /\.oms-tree\/api\/t1: worktree link is broken/);
+  assert.match(brokenOutput, /\.oms-tree\/api\/t1: (?:worktree link is broken|gitdir file points to non-existent location)/);
   assert.match(brokenOutput, /git -C oms\/api worktree repair/);
 
   writeFileSync(join(moved, ".git", "info", "exclude"), "# entry removed manually\n");

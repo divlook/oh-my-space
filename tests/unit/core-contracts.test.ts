@@ -1,35 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseManifest, validateSources } from "../../scripts/lib/manifest.js";
-import {
-  inferAliasFromCwd,
-  pendingAddTopology,
-  pendingRemovalTopology,
-  partialRemovalTopology,
-  recordVerdict,
-  rootFollowupAction,
-  type GitlinkState,
-} from "../../scripts/lib/workspace-state.js";
-
-const oid = "a".repeat(40);
-
-function state(overrides: Partial<GitlinkState> = {}): GitlinkState {
-  return {
-    alias: "api",
-    headOid: oid,
-    indexOid: oid,
-    worktreeOid: oid,
-    conflict: false,
-    initialized: true,
-    pathExists: true,
-    gitmodulesEntry: true,
-    moved: false,
-    staged: false,
-    split: false,
-    pin: "ok",
-    ...overrides,
-  };
-}
+import { inferAliasFromCwd } from "../../scripts/lib/source-workspace.js";
 
 test("manifest validation normalizes valid repositories and rejects structural ambiguity", () => {
   assert.deepEqual(
@@ -46,41 +18,14 @@ test("manifest validation normalizes valid repositories and rejects structural a
   for (const [value, message] of invalid) assert.throws(() => validateSources(value), message);
 });
 
-test("manifest parses registration commit opt-in as an optional boolean", () => {
+test("normal manifest parsing rejects legacy registration settings and points to migration", () => {
   const text = "repos:\n  - alias: api\n    remotes:\n      origin: https://example.com/api.git\n";
   const repos = [{ alias: "api", remotes: { origin: "https://example.com/api.git" }, branch: undefined }];
-  assert.deepEqual(parseManifest(text), { repos, autoCommitRegistration: false });
-  assert.deepEqual(parseManifest(`autoCommitRegistration: false\n${text}`), { repos, autoCommitRegistration: false });
-  assert.deepEqual(parseManifest(`autoCommitRegistration: true\n${text}`), { repos, autoCommitRegistration: true });
-  for (const value of ['"true"', "1", "", "null", "[]", "{}"]) {
-    assert.throws(() => parseManifest(`autoCommitRegistration: ${value}\n${text}`), /"autoCommitRegistration" must be a boolean/);
+  assert.deepEqual(parseManifest(text).repos, repos);
+  for (const value of ["true", "false"]) {
+    assert.throws(() => parseManifest(`autoCommitRegistration: ${value}\n${text}`), /legacy setting.*oms migrate --dry-run/);
   }
-  assert.throws(
-    () => parseManifest(`autoCommit: true\n${text}`),
-    /rename the top-level key "autoCommit" to "autoCommitRegistration"/,
-  );
-});
-
-test("status topology and record decisions distinguish add, removal, split, no-op, and movement", () => {
-  const pendingAdd = state({ headOid: null });
-  assert.equal(pendingAddTopology(pendingAdd), true);
-  const pendingAddVerdict = recordVerdict(pendingAdd, "api");
-  assert.match(pendingAddVerdict.kind === "problem" ? pendingAddVerdict.message : "", /initial topology commit/);
-  assert.equal(rootFollowupAction(pendingAdd), "sync");
-
-  const removal = state({ pathExists: false, gitmodulesEntry: false, initialized: false, worktreeOid: null, pin: "missing" });
-  assert.equal(pendingRemovalTopology(removal), true);
-  assert.equal(partialRemovalTopology(state({ pathExists: false })), true);
-  const removalVerdict = recordVerdict(removal, "api");
-  assert.match(removalVerdict.kind === "problem" ? removalVerdict.message : "", /pending submodule removal/);
-
-  const splitVerdict = recordVerdict(state({ split: true }), "api");
-  assert.match(splitVerdict.kind === "problem" ? splitVerdict.message : "", /differs from the working tree/);
-  assert.deepEqual(recordVerdict(state(), "api"), { kind: "benign", message: "Nothing to record for api." });
-  const moved = state({ worktreeOid: "b".repeat(40), moved: true, pin: "moved" });
-  assert.deepEqual(recordVerdict(moved, "api"), { kind: "recordable" });
-  assert.equal(rootFollowupAction(moved), "record");
-  assert.equal(rootFollowupAction({ ...moved, conflict: true }), null);
+  assert.throws(() => parseManifest(`autoCommit: true\n${text}`), /legacy setting.*OMS 2\.x.*migrating/);
 });
 
 test("status path inference respects alias path segment boundaries", () => {

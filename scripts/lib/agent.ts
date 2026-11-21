@@ -9,10 +9,10 @@ import { canPrompt, guardedSelect, isCancel } from "./prompt-adapter.js";
 const OMS_MARKER_START = "<!-- OMS START -->";
 const OMS_MARKER_END = "<!-- OMS END -->";
 
-const OMS_SCOPE_GUARDRAIL = `- Run \`oms status --json\` before Git work involving \`oms/\` to identify the main project and each source repository.
-- Treat each \`oms/<alias>/\` directory as a separate Git repository.
-- Use \`oms\` commands for workflows in \`oms/<alias>/\`.
-- Create main-project commits for existing pointer updates only when the user explicitly runs \`oms record <alias>\`.`;
+const OMS_SCOPE_GUARDRAIL = `- Run \`oms status --json\` before Git work involving \`oms/\` and check \`schemaVersion: 2\`. Use \`oms status --help\` for the installed version's fields.
+- Choose the repository that owns the change: the workspace root for shared files, or the independent \`oms/<alias>/\` checkout for source work.
+- Commit and push in the intended source checkout without a root pointer step.
+- Use plain Git inside managed trees at \`.oms-tree/<alias>/<task>/\`.`;
 
 const OMS_INSTRUCTION_BLOCK = `${OMS_MARKER_START}
 ## OMS Workspace Rules

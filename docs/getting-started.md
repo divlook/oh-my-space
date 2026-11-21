@@ -1,6 +1,6 @@
 # Getting started
 
-This guide starts with an empty project. It covers workspace synchronization and one complete branch, commit, push, and record workflow.
+This guide starts with an empty project. It covers cloning the workspace sources and making your first branch, commit, and push.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ nvm install 24
 nvm use 24
 ```
 
-`oms init` can create a manifest before you initialize Git. Before synchronizing repositories, run `git init` in the same directory.
+`oms init` can create a manifest before you initialize Git. Before cloning sources, run `git init` in the same directory.
 
 ## Install OMS
 
@@ -53,12 +53,12 @@ repos:
 
 See [Configure your workspace](configure-your-workspace.md) for the complete format and more examples.
 
-## Synchronize the repositories
+## Clone the repositories
 
-Synchronize every declared repository with its configured starting branch, called the baseline. Use `--commit` to save the registrations in the main project before you push and record source changes:
+Clone every declared repository on its configured starting branch, called the baseline:
 
 ```bash
-oms sync --all --commit
+oms clone --all
 ```
 
 Inspect the workspace state:
@@ -67,9 +67,7 @@ Inspect the workspace state:
 oms status
 ```
 
-The repository is now available at `oms/api/`. The main project records its exact commit. `oms/api/` remains a normal Git working tree where you can create branches and make commits.
-
-If you want to review registration changes before committing, run `oms sync --all` with [`autoCommitRegistration` disabled](configure-your-workspace.md#autocommitregistration). Git may still stage changes on affected paths. When ready, run `oms sync --all --commit` before continuing to the first push.
+The repository is now available at `oms/api/`. Commit `oms.yaml` in the workspace root if you want to share the list. Each computer clones and updates its own copy; the workspace root does not pin source commits.
 
 ## Complete the first change
 
@@ -91,7 +89,7 @@ Commit them inside that repository:
 oms commit api -m "feat: add login"
 ```
 
-This command commits only inside `oms/api/`. It does not commit the changed repository reference in the main project.
+This command commits only inside `oms/api/`. It does not change the root repository.
 
 ### 3. Push the source commit
 
@@ -99,23 +97,13 @@ This command commits only inside `oms/api/`. It does not commit the changed repo
 oms push api
 ```
 
-Push before recording the new commit in the main project. Other users must be able to fetch the source commit that the main project records.
-
-### 4. Record the new commit in the main project
-
-```bash
-oms record api
-```
-
-A Git submodule stores an exact source-repository commit in the main project. OMS calls this the **recorded commit**. `oms record` commits the updated recorded commit in the main project without including unrelated paths.
-
-### 5. Confirm both repositories are in the expected state
+### 4. Confirm the workspace state
 
 ```bash
 oms status
 ```
 
-A `moved` pointer means the checked-out source commit differs from the commit recorded by the main project. Push the source commit if needed. Run `oms record <alias>`.
+Check that `api` is on the branch you pushed and that its working files have no unexpected changes. The root may still show unrelated root changes, such as a manifest edit.
 
 ## Continue learning
 

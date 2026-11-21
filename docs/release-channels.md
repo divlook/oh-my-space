@@ -29,6 +29,14 @@ yarn global add oh-my-space@beta
 bun add -g oh-my-space@beta
 ```
 
+## Upgrade to OMS 3.0
+
+OMS 3.0 replaces source submodules with independent Git clones. Use `oms clone` instead of `oms sync`, and `oms remove` instead of `oms unsync`. The `oms record` command, `autoCommitRegistration`, and registration commit flags are removed. Consumers of `oms status --json` must support schema version 2, which omits `repos[].pin` and `root.submodulePointers`.
+
+Run `oms migrate --dry-run` before updating a 2.x workspace. Follow the [per-computer migration guide](migrations/2.x-to-3.0.0.md) to preserve local work. Converted root revisions no longer reproduce the set of source commits.
+
+The pending major Changeset targets `3.0.0`. Previewing a beta derives `3.0.0-beta.sha-<commit>` from that target without publishing or changing npm tags.
+
 ## Maintainer beta flow
 
 Use Node 24 from [`.nvmrc`](../.nvmrc) for stable and beta release preparation.

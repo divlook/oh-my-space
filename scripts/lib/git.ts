@@ -1,12 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIRNAME, MIN_GIT_MAJOR, MIN_GIT_MINOR } from "./constants.js";
 import type { GitResult } from "./types.js";
-export type RawGitRunner = (cwd: string, args: string[], input?: Buffer | null) => GitResult;
+export type RawGitRunner = (cwd: string, args: string[], input?: Buffer | null, stdoutEncoding?: "utf8" | "latin1") => GitResult;
 
 function environmentGitRunner(env?: NodeJS.ProcessEnv): RawGitRunner {
-  return (cwd, args, input) => {
+  return (cwd, args, input, stdoutEncoding = "utf8") => {
     const result = spawnSync("git", args, {
       cwd,
       env,
@@ -16,7 +15,7 @@ function environmentGitRunner(env?: NodeJS.ProcessEnv): RawGitRunner {
     return {
       exitCode: result.status,
       success: result.status === 0,
-      stdout: result.stdout ? result.stdout.toString("utf8") : "",
+      stdout: result.stdout ? result.stdout.toString(stdoutEncoding) : "",
       stderr: result.stderr ? result.stderr.toString("utf8") : "",
     };
   };
@@ -24,8 +23,8 @@ function environmentGitRunner(env?: NodeJS.ProcessEnv): RawGitRunner {
 
 export const productionGitRunner: RawGitRunner = environmentGitRunner();
 
-export const redactingGitRunner: RawGitRunner = (cwd, args, input) => {
-  const result = productionGitRunner(cwd, args, input);
+export const redactingGitRunner: RawGitRunner = (cwd, args, input, stdoutEncoding) => {
+  const result = productionGitRunner(cwd, args, input, stdoutEncoding);
   return input === null
     ? { ...result, stdout: redactSensitiveUrls(result.stdout), stderr: redactSensitiveUrls(result.stderr) }
     : result;
@@ -80,48 +79,14 @@ export function aliasDir(repoRoot: string, alias: string): string {
   return join(repoRoot, DATA_DIRNAME, alias);
 }
 
-/** Submodule name and path are identical under our convention: oms/<alias>. */
-export function submodulePath(alias: string): string {
+/** Repository-relative path of a canonical source checkout. */
+export function sourcePath(alias: string): string {
   return `${DATA_DIRNAME}/${alias}`;
 }
-
-
-export function registeredSubmodulePaths(repoRoot: string): string[] {
-  if (!existsSync(join(repoRoot, ".gitmodules"))) return [];
-
-  const result = runGit(repoRoot, [
-    "config",
-    "--file",
-    ".gitmodules",
-    "--get-regexp",
-    "^submodule\\..*\\.path$",
-  ]);
-  if (!result.success) return [];
-
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/)[1])
-    .filter((p): p is string => Boolean(p));
-}
-
-export function isRegisteredSubmodule(repoRoot: string, sourcePath: string): boolean {
-  return registeredSubmodulePaths(repoRoot).includes(sourcePath);
-}
-
-export function hasRegisteredSubmodules(repoRoot: string): boolean {
-  return registeredSubmodulePaths(repoRoot).length > 0;
-}
-
-export function submoduleInitialized(repoRoot: string, alias: string): boolean {
-  return existsSync(join(aliasDir(repoRoot, alias), ".git"));
-}
-
-/** Detached HEAD and failed inspection both return null for legacy callers. */
+/** Detached HEAD and failed inspection both return null. */
 export function currentBranch(dir: string, runner: RawGitRunner = productionGitRunner): string | null {
-  const r = runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"], false, undefined, runner);
-  if (!r.success) return null;
-  const b = r.stdout.trim();
-  return b && b !== "HEAD" ? b : null;
+  const r = runGit(dir, ["branch", "--show-current"], false, undefined, runner);
+  return r.success ? r.stdout.replace(/\r?\n$/, "") || null : null;
 }
 
 function abbreviatedOid(dir: string, rev: string, runner: RawGitRunner, requireNonempty: boolean): string {
@@ -164,9 +129,9 @@ export function remoteBranchExists(dir: string, branch: string, runner: RawGitRu
 
 /** Local branch short names (refs/heads), e.g. ["main", "dev"]. Empty on failure or none. */
 export function listLocalBranches(dir: string, runner: RawGitRunner = productionGitRunner): string[] {
-  const r = runGit(dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads"], false, undefined, runner);
+  const r = runGit(dir, ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"], false, undefined, runner);
   if (!r.success) return [];
-  return r.stdout.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+  return r.stdout.split(/\r?\n/).filter(Boolean);
 }
 
 export type LocalBranchInfo = {
@@ -183,20 +148,19 @@ export function inspectLocalBranches(
   const refs = runGit(dir, [
     "for-each-ref",
     "--sort=refname",
-    "--format=%(refname:short)\t%(upstream:short)",
+    "--format=%(refname:lstrip=2)\t%(upstream:short)",
     "refs/heads",
   ], false, undefined, runner);
   if (!refs.success) return { ok: false, diagnostic: redactSensitiveUrls(refs.stderr.trim()) };
 
   const branches = refs.stdout
-    .split("\n")
-    .map((line) => line.trim())
+    .split(/\r?\n/)
     .filter(Boolean)
     .map((line): LocalBranchInfo => {
       const [name, configuredUpstream = ""] = line.split("\t");
       const upstream = configuredUpstream || null;
       if (upstream === null) return { name, upstream, ahead: null, behind: null };
-      const divergence = runGit(dir, ["rev-list", "--left-right", "--count", `${name}...${upstream}`], false, undefined, runner);
+      const divergence = runGit(dir, ["rev-list", "--left-right", "--count", `refs/heads/${name}...${upstream}`, "--"], false, undefined, runner);
       const counts = divergence.success ? divergence.stdout.trim().split(/\s+/).map(Number) : [];
       if (counts.length !== 2 || counts.some((count) => !Number.isFinite(count))) {
         return { name, upstream, ahead: null, behind: null };
@@ -221,8 +185,7 @@ export function inspectRemoteBranches(
   if (!r.success) return { ok: false, diagnostic: redactSensitiveUrls(r.stderr.trim()) };
   const prefix = `refs/remotes/${remote}/`;
   const branches = r.stdout
-    .split("\n")
-    .map((s) => s.trim())
+    .split(/\r?\n/)
     .filter((s) => s.length > 0 && s !== `${prefix}HEAD`)
     .map((s) => (s.startsWith(prefix) ? s.slice(prefix.length) : s))
     .filter((s) => s !== "HEAD")
@@ -245,9 +208,4 @@ export function listRemoteBranches(dir: string, runner: RawGitRunner = productio
 export function isDirty(dir: string, runner: RawGitRunner = productionGitRunner): boolean {
   const r = runGit(dir, ["status", "--porcelain"], false, undefined, runner);
   return r.success && r.stdout.trim().length > 0;
-}
-
-export function stagedRootPaths(repoRoot: string): string[] {
-  const result = runGit(repoRoot, ["diff", "--cached", "--name-only", "-z"]);
-  return result.success ? result.stdout.split("\0").filter((path) => path.length > 0) : [];
 }
