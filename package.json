@@ -1,6 +1,6 @@
 {
   "name": "oh-my-space",
-  "version": "2.0.5",
+  "version": "3.0.0",
   "description": "CLI for managing multi-repository workspaces with independent Git clones.",
   "license": "MIT",
   "homepage": "https://github.com/divlook/oh-my-space",
