@@ -117,6 +117,9 @@ export async function runMigrate(aliases: string[], options: { dryRun?: boolean;
       release();
     }
     log.success("Migration complete. Review root changes before committing them; OMS did not commit or push.");
+    if (journal.patch.links.length) {
+      log.info("Until you commit the root conversion, oms status may still report these sources as legacy. Review git diff and git diff --cached, then commit the staged pointer removals together with their .gitmodules registration removals and any related .gitignore or oms.yaml edits.");
+    }
     return 0;
   } catch (error) {
     log.error(redactSensitiveUrls(error instanceof Error ? error.message : String(error)));

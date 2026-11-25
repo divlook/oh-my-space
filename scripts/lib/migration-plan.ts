@@ -48,27 +48,49 @@ function formerlyRegistered(ws: SourceWorkspace, head: string, repo: Repo, path:
   if (!shallow.success || shallow.stdout.trim() !== "false") throw new Error(`root history cannot verify ownership; ${advice}`);
   const log = git(root, ["log", "--first-parent", "--full-history", "--format=%P", head, "--", path, ".gitmodules"]);
   if (!log.success) throw new Error(`could not inspect earlier registrations; ${advice}`);
+  const originMismatch = "historic origin differs from the current declaration; preserve the old Git data separately";
+  const verifyDeclaration = (files: RootEntries) => {
+    const manifest = files.get(MANIFEST_FILENAME)?.[0];
+    if (!manifest || !/^100(644|755)$/.test(manifest.mode)) throw new Error(`the former registration has no verifiable declaration; ${advice}`);
+    const content = git(root, ["cat-file", "blob", manifest.oid]);
+    const declared = content.success && parseManifest(content.stdout, true).repos.find(({ alias }) => alias === repo.alias);
+    if (!declared || declared.remotes.origin !== repo.remotes.origin) throw new Error(originMismatch);
+  };
+  let newestRegistrationOnly: string | undefined;
   for (const line of log.stdout.trimEnd().split("\n")) {
     if (!line) continue;
     const evidence: (string | null)[] = [];
-    for (const parent of line.split(" ")) {
+    const parents = line.split(" ");
+    for (const parent of parents) {
       const files = rootEntries(ws, parent);
       const link = files.get(path)?.find(({ mode }) => mode === "160000");
       const mapping = registration(blobRegistrations(ws, files), path);
-      if (!link && !mapping) { evidence.push(null); continue; }
-      if (!link || !mapping) throw new Error("historical gitlink and registration do not agree");
-      const manifest = files.get(MANIFEST_FILENAME)?.[0];
-      if (!manifest || !/^100(644|755)$/.test(manifest.mode)) throw new Error(`the former registration has no verifiable declaration; ${advice}`);
-      const content = git(root, ["cat-file", "blob", manifest.oid]);
-      const declared = content.success && parseManifest(content.stdout, true).repos.find(({ alias }) => alias === repo.alias);
-      if (!declared || declared.remotes.origin !== repo.remotes.origin ||
-          !registrationMatchesOrigin(mapping, repo.remotes.origin)) {
-        throw new Error("historic origin differs from the current declaration; preserve the old Git data separately");
+      if (!mapping) {
+        if (link) throw new Error("historical gitlink and registration do not agree");
+        if (newestRegistrationOnly) throw new Error("historical .gitmodules registration was removed and restored; preserve the old Git data separately");
+        evidence.push(null);
+        continue;
       }
-      evidence.push(link.oid);
+      if (!link && parents.length > 1) throw new Error("historical merge parents disagree about legacy ownership");
+      verifyDeclaration(files);
+      if (!registrationMatchesOrigin(mapping, repo.remotes.origin)) throw new Error(originMismatch);
+      if (!link) newestRegistrationOnly ??= parent;
+      evidence.push(link?.oid ?? null);
     }
     if (evidence.some(Boolean)) {
       if (evidence.some((value) => value !== evidence[0])) throw new Error("historical merge parents disagree about legacy ownership");
+      if (newestRegistrationOnly) {
+        // A path-filtered log can omit a merge that kept its first parent's registration.
+        const range = `${parents[0]}..${newestRegistrationOnly}`;
+        const merges = git(root, ["rev-list", "--first-parent", "--merges", range]);
+        if (!merges.success) throw new Error("could not verify linear history for the obsolete registration");
+        if (merges.stdout) throw new Error("historical merge prevents verifying legacy ownership through a registration without a gitlink");
+        const manifests = git(root, ["rev-list", "--first-parent", range, "--", MANIFEST_FILENAME]);
+        if (!manifests.success) throw new Error("could not verify declaration history for the obsolete registration");
+        for (const revision of manifests.stdout.trimEnd().split("\n")) {
+          if (revision) verifyDeclaration(rootEntries(ws, revision, [MANIFEST_FILENAME]));
+        }
+      }
       return;
     }
   }
@@ -254,6 +276,12 @@ export function planMigration(ws: SourceWorkspace, repos: Repo[], removeSetting:
           const checkout = inspectSourceCheckout(ws, repo);
           if (checkout.kind === "legacy") throw new Error(checkout.reason);
           continue;
+        }
+        if (rootLink && !stagedLink) {
+          throw new Error("the submodule pointer is still in HEAD but is missing from the index. Review git diff --cached and git diff. If oms migrate already completed, commit the pointer removal together with its .gitmodules registration removal and any related .gitignore or oms.yaml edits. Otherwise, inspect why the pointer was removed before committing or retrying migration.");
+        }
+        if (!rootLink && !stagedLink && headReg && !workingReg && (!stagedReg || sameRegistration(headReg, stagedReg))) {
+          throw new Error("the root no longer tracks this submodule, but its .gitmodules registration still exists in HEAD. If the submodule was removed intentionally, review and commit only the obsolete registration removal, then run oms migrate --dry-run again. Keep the source checkout and its Git data.");
         }
         if (headReg || rootLink || stagedReg || stagedLink || workingReg) {
           if (!headReg || !rootLink || !stagedReg || !workingReg || !stagedLink || current?.length !== 1 || stagedLink.stage !== "0" ||
