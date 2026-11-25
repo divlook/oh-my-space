@@ -9,21 +9,12 @@ export type SourcesOptions = {
   list?: boolean;
 };
 
-export type UnsyncOptions = SourcesOptions & {
-  force?: boolean;
-  commit?: boolean;
-};
-
 export type StatusOptions = SourcesOptions & {
   json?: boolean;
 };
 
 export type CommitOptions = {
   message?: string[];
-};
-
-export type SyncCommitOptions = SourcesOptions & {
-  commit?: boolean;
 };
 
 export type AgentTarget = "agents" | "claude" | "both";
@@ -50,18 +41,11 @@ export type UpdateOptions = {
 };
 
 export type OperationResult =
-  | "added"
-  | "updated"
   | "fetched"
   | "pulled"
   | "pushed"
-  | "unsynced"
-  | "recorded"
   | "skipped"
   | "failed";
-
-export type RemoveOutcome = "removed" | "nothing-to-remove" | "failed";
-
 export type GitResult = {
   exitCode: number | null;
   success: boolean;

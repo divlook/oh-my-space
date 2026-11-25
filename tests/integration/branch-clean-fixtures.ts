@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { runBranchClean } from "../../scripts/lib/branch-clean.js";
-import { planBranchClean, executeBranchClean } from "../../scripts/lib/branch-clean-plan.js";
-import { loadRepos } from "../../scripts/lib/manifest.js";
+import { runSourceBranchClean } from "../../scripts/lib/branch-clean.js";
+import { planSourceBranchClean, executeSourceBranchClean } from "../../scripts/lib/branch-clean-plan.js";
+import { inspectSourceCheckout } from "../../scripts/lib/source-checkout.js";
+import { loadForSources } from "../../scripts/lib/source-workspace.js";
 import { __resetPromptQueueForTests, assertPromptQueueDrained } from "../../scripts/lib/prompt-adapter.js";
-import { git, gitOut, initBareUpstream, initGitWorkspace, queueEnv, syncedSubmodule, tempFixture, testEnv, workspaceWithApi } from "../helpers.js";
+import { configIdentity, git, gitOut, initBareUpstream, initGitWorkspace, queueEnv, sourceFor, tempFixture, testEnv, workspaceWithApi, writeSources } from "../helpers.js";
 
 Object.assign(process.env, testEnv);
 const yes = [{ type: "confirm", value: true }];
@@ -15,7 +16,10 @@ function fixture(base = "main") {
   if (base === "main") return workspaceWithApi();
   const bare = initBareUpstream({ branches: [base] });
   const cwd = initGitWorkspace();
-  const wt = syncedSubmodule(cwd, "api", bare, base);
+  git(cwd, "clone", "--branch", base, `file://${bare}`, "oms/api");
+  const wt = join(cwd, "oms", "api");
+  configIdentity(wt);
+  writeSources(cwd, sourceFor("api", bare, base));
   return { bare, cwd, wt };
 }
 function snapshot(cwd: string, wt: string) {
@@ -42,7 +46,7 @@ async function clean(cwd: string, options: { alias?: string; base?: string; resp
   process.stderr.write = capture as typeof stderr;
   try {
     process.chdir(cwd);
-    const code = await runBranchClean(options.alias ?? "api", { base: options.base });
+    const code = await runSourceBranchClean(options.alias ?? "api", { base: options.base });
     if (code === 0) assertPromptQueueDrained();
     return { code, output };
   } finally {
@@ -58,13 +62,15 @@ function executeAfterChange(cwd: string, change: () => void, env: Record<string,
   const previous = { ...process.env };
   Object.assign(process.env, env);
   try {
-    const loaded = loadRepos({ cwd });
+    const loaded = loadForSources({ cwd });
     assert.ok(loaded);
     const repo = loaded.repos.find((entry) => entry.alias === "api");
     assert.ok(repo);
-    const plan = planBranchClean(loaded.repoRoot, repo, undefined);
+    const checkout = inspectSourceCheckout(loaded.workspace, repo);
+    assert.ok(checkout.kind === "ready");
+    const plan = planSourceBranchClean(loaded.workspace, repo, checkout, undefined);
     change();
-    return executeBranchClean(loaded.repoRoot, repo, plan);
+    return executeSourceBranchClean(loaded.workspace, repo, plan);
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
     Object.assign(process.env, previous);

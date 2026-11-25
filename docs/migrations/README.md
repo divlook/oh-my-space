@@ -2,6 +2,7 @@
 
 Use the guide for the first target version newer than your installed OMS version, then continue through each later version in order.
 
+- [2.x to 3.0.0](2.x-to-3.0.0.md) — converts OMS-managed submodules to independent clones using verified local Git data. Back up work before migrating, especially before pulling the conversion on another computer.
 - [0.14.x to 0.15.0](0.14.x-to-0.15.0.md) — updates the CLI behavior required for the 0.15.0 workspace format.
 - [0.13.x to 0.14.0](0.13.x-to-0.14.0.md) — moves `oms switch` and `oms checkout` under the `oms branch` command group.
 - [0.11.x to 0.12.0](0.11.x-to-0.12.0.md) — adds local branch deletion and declarative `.gitmodules` reconciliation with recovery-safe finalization.
@@ -16,7 +17,9 @@ For current command selection and safety behavior, use the [command guide](../co
 
 ## Opt-in registration commits
 
-`oms sync` and `oms unsync` no longer create main-project commits by default. No manifest edit is needed to switch to the new default. Git can still stage changes on affected paths, including replacing existing staging. Review or save any staged selection you need to preserve before running either command.
+This section records behavior for legacy submodule releases that support `autoCommitRegistration`. OMS 3.0 removed `oms sync`, `oms unsync`, and the registration commit setting and flags. For conversion to independent clones, use the [2.x to 3.0.0 guide](2.x-to-3.0.0.md).
+
+In those releases, `oms sync` and `oms unsync` do not create main-project commits by default. No manifest edit is needed to switch to that default. Git can still stage changes on affected paths, including replacing existing staging. Review or save any staged selection you need to preserve before running either command.
 
 If your automation expects a commit, add `--commit` to its `oms sync` and `oms unsync` invocations. Versions that previously committed by default already accept this flag, so it works in scripts shared with those versions. To restore automatic registration commits for an entire workspace, including registration you approve in other commands, set the top-level `autoCommitRegistration: true` in `oms.yaml`. An explicit `--no-commit` overrides it for that invocation.
 

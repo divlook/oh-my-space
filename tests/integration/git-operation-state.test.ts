@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { gitOperationInProgress, inspectSourceOperations, submoduleOperationInProgress } from "../../scripts/lib/git-operation-state.js";
+import { inspectSourceOperations } from "../../scripts/lib/git-operation-state.js";
 import { git, gitOut, initGitWorkspace, tempFixture, testEnv } from "../helpers.js";
 
 Object.assign(process.env, testEnv);
@@ -27,9 +27,7 @@ test("operation checks detect every operation marker, preserve priority, and obs
   for (const [marker, label] of operations) {
     const path = markerPath(cwd, marker);
     writeFileSync(path, "operation in progress\n");
-    assert.equal(submoduleOperationInProgress(cwd), label, marker);
     assert.deepEqual(inspectSourceOperations(cwd), { kind: "active", label }, marker);
-    assert.equal(gitOperationInProgress(cwd), marker === "sequencer" ? null : label, marker);
     rmSync(path);
     assert.deepEqual(inspectSourceOperations(cwd), { kind: "idle" }, marker);
   }
@@ -56,7 +54,6 @@ test("operation checks isolate linked worktrees with newline-containing Git dire
   const sequencer = markerPath(linked, "sequencer");
   assert.ok(sequencer.includes("\n"));
   mkdirSync(sequencer);
-  assert.equal(submoduleOperationInProgress(linked), "cherry-pick or revert");
   assert.deepEqual(inspectSourceOperations(linked), { kind: "active", label: "cherry-pick or revert" });
   assert.deepEqual(inspectSourceOperations(cwd), { kind: "idle" });
   rmSync(sequencer, { recursive: true });

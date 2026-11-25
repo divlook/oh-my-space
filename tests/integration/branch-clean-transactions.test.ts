@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { configIdentity, git, gitOut, localBranchExists, tempFixture, testEnv, workspaceWithApi } from "../helpers.js";
+import { git, gitOut, initBareUpstream, localBranchExists, tempFixture, testEnv } from "../helpers.js";
 import { yes, shell, fixture, candidates, clean, wrapper } from "./branch-clean-fixtures.js";
 
 test("cleanup expected-tip and expected-base transactions reject races without force retries", async () => {
@@ -65,23 +65,14 @@ test("cleanup emits executable shell-safe recreation and exact configuration rep
   assert.equal(spawnSync("git", ["-C", wt, "config", "--get", `branch.${branch}.description`], { env: testEnv }).status, 1);
 });
 
-test("cleanup initialization failure preserves resumable state and inconsistent registration refuses deletion", async () => {
-  const original = workspaceWithApi();
-  const cwd = tempFixture("clean-init-failed-");
-  execFileSync("git", ["clone", original.cwd, cwd], { env: testEnv, stdio: "ignore" });
-  configIdentity(cwd);
-  const root = gitOut(cwd, "ls-files", "--stage");
-  const interception = wrapper('if [[ "$*" == *"submodule update --init"* ]]; then "$REAL" "$@"; echo initialization-failure >&2; exit 128; fi');
-  const failed = await clean(cwd, { env: interception.env });
-  assert.equal(failed.code, 2, failed.output);
-  assert.ok(existsSync(join(cwd, "oms", "api", ".git")));
-  assert.equal(gitOut(cwd, "ls-files", "--stage"), root);
-  assert.match(failed.output, /initialization-failure/);
-  assert.match(failed.output, /submodule update --init|retry|resum/i);
-  const wt = original.wt;
-  git(wt, "branch", "topic");
-  git(original.cwd, "config", "-f", ".gitmodules", "submodule.oms/api.path", "oms/wrong");
-  const refused = await clean(original.cwd);
+test("cleanup refuses a foreign checkout without attempting mutation", async () => {
+  const { cwd, wt } = fixture();
+  candidates(wt);
+  git(wt, "remote", "set-url", "origin", `file://${initBareUpstream()}`);
+  const intercepted = wrapper("");
+  const refused = await clean(cwd, { responses: [], env: intercepted.env });
   assert.equal(refused.code, 1, refused.output);
-  assert.ok(localBranchExists(wt, "topic"));
+  assert.match(refused.output, /origin does not match.*declaration/);
+  assert.doesNotMatch(readFileSync(intercepted.log, "utf8"), /^(?:clone|update-ref|branch -[dD]|config --local --remove-section) /m);
+  assert.ok(localBranchExists(wt, "a-first") && localBranchExists(wt, "z-last"));
 });

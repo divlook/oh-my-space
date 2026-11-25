@@ -39,7 +39,7 @@ test("raw Git runner receives exact cwd, arguments, and submodule path", () => {
 
 test("branch and dirty classifiers consume raw Git outcomes without a process", () => {
   assert.equal(currentBranch("/repo", () => ok("main\n")), "main");
-  assert.equal(currentBranch("/repo", () => ok("HEAD\n")), null);
+  assert.equal(currentBranch("/repo", () => ok("")), null);
   assert.equal(currentBranch("/repo", () => failed()), null);
   assert.equal(isDirty("/repo", () => ok(" M source.ts\n")), true);
   assert.equal(isDirty("/repo", () => ok("\n")), false);

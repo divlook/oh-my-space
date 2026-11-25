@@ -1,35 +1,31 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { log } from "@clack/prompts";
 import { parse as parseYaml } from "yaml";
 import {
   ALIAS_PATTERN,
-  DATA_DIRNAME,
-  LEGACY_DATA_DIRNAME,
-  LEGACY_MANIFEST,
   MANIFEST_FILENAME,
   REMOTE_NAME_PATTERN,
   REMOTES_MIGRATION_DOC,
-  RENAME_MIGRATION_DOC,
-  WORKTREE_MIGRATION_DOC,
 } from "./constants.js";
 import { docUrl } from "./env.js";
-import { aliasDir } from "./git.js";
-import { inspectWorkspaceGitIdentity, resolveWorkspaceManifest } from "./workspace-discovery.js";
+import { resolveWorkspaceManifest } from "./workspace-discovery.js";
 import type { Repo, WorkspaceOptions } from "./types.js";
 const ALLOWED_ITEM_KEYS = new Set(["alias", "remotes", "branch"]);
 
 type Manifest = { repos: Repo[]; autoCommitRegistration: boolean };
 type LoadedWorkspace = Manifest & { repoRoot: string };
 
-function validateManifest(data: unknown): Manifest {
+function validateManifest(data: unknown, allowLegacyRegistration: boolean): Manifest {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     throw new Error(`${MANIFEST_FILENAME}: root must be a mapping`);
   }
   const obj = data as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
     if (key === "autoCommit") {
-      throw new Error(`${MANIFEST_FILENAME}: rename the top-level key "autoCommit" to "autoCommitRegistration"`);
+      throw new Error(`${MANIFEST_FILENAME}: "autoCommit" is a legacy setting. Resolve it with OMS 2.x before migrating.`);
+    }
+    if (key === "autoCommitRegistration" && !allowLegacyRegistration) {
+      throw new Error(`${MANIFEST_FILENAME}: autoCommitRegistration is a legacy setting. Run oms migrate --dry-run.`);
     }
     if (key !== "repos" && key !== "autoCommitRegistration") {
       throw new Error(`${MANIFEST_FILENAME}: unknown top-level key "${key}"`);
@@ -116,70 +112,14 @@ function validateManifest(data: unknown): Manifest {
 }
 
 export function validateSources(data: unknown): Repo[] {
-  return validateManifest(data).repos;
+  return validateManifest(data, false).repos;
 }
 
-export function parseManifest(text: string): Manifest {
-  return validateManifest(parseYaml(text));
+export function parseManifest(text: string, allowLegacyRegistration = false): Manifest {
+  return validateManifest(parseYaml(text), allowLegacyRegistration);
 }
 
-function emitLegacyRenameMessage(dir: string, found: { manifest: boolean; data: boolean }): void {
-  const artifacts = [
-    found.manifest ? `'${LEGACY_MANIFEST}'` : null,
-    found.data ? `'${LEGACY_DATA_DIRNAME}/'` : null,
-  ]
-    .filter((s): s is string => s !== null)
-    .join(" and ");
-  log.error(
-    `detected legacy ${artifacts} at ${dir}.\n` +
-      `  oh-my-space 0.4.0 renamed the manifest to ${MANIFEST_FILENAME} and the data directory to ${DATA_DIRNAME}/.\n` +
-      `  See ${docUrl(RENAME_MIGRATION_DOC)} for the manual steps. Aborting to avoid destructive change.`,
-  );
-}
-
-/** Block when the active oms.yaml workspace still has 0.3.x rename artifacts at its root. */
-export function abortOnLegacyRenameAt(repoRoot: string): boolean {
-  const manifest = existsSync(join(repoRoot, LEGACY_MANIFEST));
-  const data = existsSync(join(repoRoot, LEGACY_DATA_DIRNAME));
-  if (!manifest && !data) return false;
-  emitLegacyRenameMessage(repoRoot, { manifest, data });
-  return true;
-}
-
-/**
- * When oms.yaml could not be found, walk upward looking for a 0.3.x manifest (sources.yaml).
- * Only the manifest is trusted as a positive signal — a stray sources/ directory by itself
- * could belong to an unrelated tool. Returns true if a hint was emitted.
- */
-export function emitLegacyRenameHintWalkUp(options: WorkspaceOptions = {}): boolean {
-  if (resolveWorkspaceManifest(options).kind !== "missing") return false;
-  let current = resolve(options.cwd ?? process.cwd());
-  while (true) {
-    if (existsSync(join(current, LEGACY_MANIFEST))) {
-      emitLegacyRenameMessage(current, {
-        manifest: true,
-        data: existsSync(join(current, LEGACY_DATA_DIRNAME)),
-      });
-      return true;
-    }
-    const parent = dirname(current);
-    if (parent === current) return false;
-    current = parent;
-  }
-}
-
-/** Detect leftover 0.3.x–0.5.x bare clone + worktree artifacts (oms/<alias>/.bare). */
-export function abortOnLegacyWorktree(repoRoot: string, repos: Repo[]): boolean {
-  const stale = repos.find((repo) => existsSync(join(aliasDir(repoRoot, repo.alias), ".bare")));
-  if (!stale) return false;
-  log.error(
-    `detected a legacy bare clone at ${DATA_DIRNAME}/${stale.alias}/.bare. oh-my-space 0.6.0 manages sources as git submodules.\n` +
-      `  See ${docUrl(WORKTREE_MIGRATION_DOC)} for the manual steps. Aborting to avoid destructive change.`,
-  );
-  return true;
-}
-
-export function loadRepos(options: WorkspaceOptions = {}): LoadedWorkspace | null {
+export function loadRepos(options: WorkspaceOptions & { allowLegacyRegistration?: boolean } = {}): LoadedWorkspace | null {
   const resolution = resolveWorkspaceManifest(options);
   if (resolution.kind === "missing") {
     log.error(
@@ -197,47 +137,11 @@ export function loadRepos(options: WorkspaceOptions = {}): LoadedWorkspace | nul
 
   try {
     return {
-      ...parseManifest(readFileSync(resolution.manifestPath, "utf8")),
+      ...parseManifest(readFileSync(resolution.manifestPath, "utf8"), options.allowLegacyRegistration),
       repoRoot: resolution.repoRoot,
     };
   } catch (e) {
     log.error(e instanceof Error ? e.message : String(e));
     return null;
   }
-}
-
-export function emitWorkspaceGitIdentityError(repoRoot: string): boolean {
-  const identity = inspectWorkspaceGitIdentity(repoRoot);
-  if (identity.kind === "match") return false;
-  if (identity.kind === "no-work-tree") {
-    log.error(
-      `${repoRoot} is not a git repository. oh-my-space manages sources as git submodules; run "git init" at the workspace root first.`,
-    );
-    return true;
-  }
-  if (identity.kind === "mismatch") {
-    log.error(
-      `Workspace manifest directory ${repoRoot} does not match the root Git top-level ${identity.gitTopLevel}. ` +
-        `Move ${MANIFEST_FILENAME} to ${identity.gitTopLevel}, or initialize a separate Git repository at ${repoRoot}.`,
-    );
-    return true;
-  }
-  log.error(
-    `Could not verify that workspace ${repoRoot} is the root Git top-level: ${identity.reason}. ` +
-      "Retry after the workspace path and Git repository are accessible.",
-  );
-  return true;
-}
-
-export function loadForSubmodules(): LoadedWorkspace | null {
-  const loaded = loadRepos();
-  if (!loaded) {
-    emitLegacyRenameHintWalkUp();
-    return null;
-  }
-  const { repoRoot, repos } = loaded;
-  if (abortOnLegacyRenameAt(repoRoot)) return null;
-  if (emitWorkspaceGitIdentityError(repoRoot)) return null;
-  if (abortOnLegacyWorktree(repoRoot, repos)) return null;
-  return loaded;
 }

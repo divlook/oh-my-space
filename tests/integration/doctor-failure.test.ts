@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { runDoctor } from "../../scripts/lib/doctor.js";
-import { currentVersion, initGitWorkspace, testEnv, writeSources } from "../helpers.js";
+import { runIndependentDoctor } from "../../scripts/lib/doctor.js";
+import { productionGitRunner, type RawGitRunner } from "../../scripts/lib/git.js";
+import { currentVersion, git, gitOut, initGitWorkspace, sourceFor, tempWorkspace, testEnv, workspaceWithApi, writeSources } from "../helpers.js";
 
 Object.assign(process.env, testEnv);
 const reference = JSON.stringify({
   "oms-workspace": { version: currentVersion, omsVersion: ">=1.0.0-0" },
-  "oms-pointer": { version: currentVersion, omsVersion: ">=1.0.0-0" },
   "oms-branch": { version: currentVersion, omsVersion: ">=1.0.0-0" },
 });
 
@@ -26,7 +26,7 @@ function skillsHome(): string {
   return home;
 }
 
-async function doctor(cwd: string, home: string, overrides: NodeJS.ProcessEnv): Promise<{ code: number; output: string }> {
+async function doctor(cwd: string, home: string, overrides: NodeJS.ProcessEnv, git?: RawGitRunner): Promise<{ code: number; output: string }> {
   const keys = [
     "OMS_TEST_MODE",
     "OMS_TEST_SKILLS_HOME",
@@ -56,7 +56,7 @@ async function doctor(cwd: string, home: string, overrides: NodeJS.ProcessEnv): 
   });
   try {
     process.chdir(cwd);
-    return { code: await runDoctor(), output };
+    return { code: await runIndependentDoctor(git), output };
   } finally {
     process.chdir(originalCwd);
     process.stdout.write = originalStdout;
@@ -93,4 +93,34 @@ test("doctor keeps skill-channel lookup failures informational", async () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("doctor distinguishes a verified former clone from an unidentified path without contacting origin", async () => {
+  const { cwd, bare, wt } = workspaceWithApi();
+  writeSources(cwd, sourceFor("web", bare));
+  git(cwd, "add", "oms.yaml");
+  git(cwd, "commit", "-m", "remove api declaration");
+  const unidentified = join(cwd, "oms", "unidentified");
+  mkdirSync(unidentified);
+  writeFileSync(join(unidentified, "keep"), "unknown owner");
+  writeFileSync(join(wt, "keep"), "local work");
+  renameSync(bare, `${bare}-offline`);
+  const before = [gitOut(cwd, "status", "--porcelain"), gitOut(wt, "show-ref"), gitOut(wt, "status", "--porcelain")];
+  const remoteCalls: string[][] = [];
+  const result = await doctor(cwd, tempWorkspace(), {}, (dir, args) => {
+    if (args.includes("fetch") || (args.includes("ls-remote") && !args.includes("--get-url"))) {
+      remoteCalls.push([...args]);
+    }
+    return productionGitRunner(dir, args);
+  });
+
+  assert.equal(result.code, 2, result.output);
+  assert.match(result.output, /oms\/api: verified former source checkout/);
+  assert.match(result.output, /oms\/unidentified: unidentified path/);
+  assert.match(result.output, /web: not cloned.*oms clone web/);
+  assert.doesNotMatch(result.output, /oms\/api: unidentified/);
+  assert.deepEqual(remoteCalls, []);
+  assert.deepEqual([gitOut(cwd, "status", "--porcelain"), gitOut(wt, "show-ref"), gitOut(wt, "status", "--porcelain")], before);
+  assert.equal(readFileSync(join(unidentified, "keep"), "utf8"), "unknown owner");
+  assert.equal(readFileSync(join(wt, "keep"), "utf8"), "local work");
 });

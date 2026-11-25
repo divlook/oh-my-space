@@ -2,7 +2,6 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   cpSync,
-  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -150,9 +149,10 @@ function getApiWorkspaceTemplate() {
 
   apiWorkspaceTemplate = initGitWorkspace();
   writeSources(apiWorkspaceTemplate, sourceFor("api", getUpstreamTemplate()));
-  assert.equal(run(["sync", "api", "--no-commit"], { cwd: apiWorkspaceTemplate }).status, 0);
-  git(apiWorkspaceTemplate, "add", "-A");
-  git(apiWorkspaceTemplate, "commit", "-m", "add api submodule");
+  const cloned = run(["clone", "api"], { cwd: apiWorkspaceTemplate });
+  assert.equal(cloned.status, 0, cloned.stdout + cloned.stderr);
+  git(apiWorkspaceTemplate, "add", "oms.yaml");
+  git(apiWorkspaceTemplate, "commit", "-m", "declare api clone");
   return apiWorkspaceTemplate;
 }
 
@@ -208,7 +208,7 @@ function gitTopLevelStubEnv(mode) {
       : 'echo "/path/that/does/not/exist"; exit 0';
   writeFileSync(
     stubGit,
-    `#!/usr/bin/env bash\nif [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then ${response}; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
+    `#!/usr/bin/env bash\nif [ "$1" = "rev-parse" ] && { [ "$2" = "--show-toplevel" ] || { [ "$2" = "--path-format=absolute" ] && [ "$3" = "--show-toplevel" ]; }; }; then ${response}; fi\nexec ${JSON.stringify(realGit)} "$@"\n`,
   );
   chmodSync(stubGit, 0o755);
   return { ...testEnv, PATH: `${stubDir}:${process.env.PATH}` };
@@ -217,13 +217,11 @@ function gitTopLevelStubEnv(mode) {
 function workspaceWithApi() {
   const bare = initBareUpstream();
   const cwd = copyFixture(getApiWorkspaceTemplate(), "oms-test-");
-  git(cwd, "config", "submodule.oms/api.url", `file://${bare}`);
   writeSources(cwd, sourceFor("api", bare));
-  git(cwd, "config", "-f", ".gitmodules", "submodule.oms/api.url", `file://${bare}`);
   const wt = join(cwd, "oms", "api");
   git(wt, "remote", "set-url", "origin", `file://${bare}`);
-  git(wt, "checkout", "-B", "main", "origin/main");
-  git(cwd, "add", "oms.yaml", ".gitmodules");
+  configIdentity(wt);
+  git(cwd, "add", "oms.yaml");
   git(cwd, "commit", "--amend", "--no-edit");
   return { cwd, bare, wt };
 }
@@ -242,52 +240,11 @@ function workspaceWithMovedApi() {
   git(wt, "commit", "-m", "work");
   return { cwd, bare, wt };
 }
-function workspaceCloneWithDriftedBaseline(alias = "api") {
-  const bare = initBareUpstream();
-  const source = initGitWorkspace();
-  syncedSubmodule(source, alias, bare);
-  const pin = gitOut(source, "rev-parse", `:oms/${alias}`);
-
-  const scratch = tempFixture("oms-drift-source-");
-  execFileSync("git", ["clone", bare, scratch], { stdio: "ignore", env: testEnv });
-  configIdentity(scratch);
-  writeFileSync(join(scratch, "advanced.txt"), "baseline advanced\n");
-  git(scratch, "add", "advanced.txt");
-  git(scratch, "commit", "-m", "advance baseline");
-  git(scratch, "push", "origin", "main");
-  const tip = gitOut(scratch, "rev-parse", "HEAD");
-
-  const cwd = tempFixture("oms-drift-clone-");
-  execFileSync("git", ["clone", source, cwd], { stdio: "ignore", env: testEnv });
-  configIdentity(cwd);
-  return { alias, bare, cwd, pin, tip, wt: join(cwd, "oms", alias) };
-}
-
 function sourcesFor(entries) {
   const body = entries
     .map(({ alias, bare }) => `  - alias: ${alias}\n    remotes:\n      origin: file://${bare}\n    branch: main`)
     .join("\n");
   return `repos:\n${body}\n`;
-}
-
-function gitmodulesSectionCount(cwd) {
-  const path = join(cwd, ".gitmodules");
-  if (!existsSync(path)) return 0;
-  const r = spawnSync("git", ["config", "--file", path, "--get-regexp", "^submodule\\..*\\.path$"], {
-    encoding: "utf8",
-    env: testEnv,
-  });
-  if (r.status !== 0) return 0;
-  return r.stdout.split("\n").filter((l) => l.trim().length > 0).length;
-}
-
-function syncedSubmodule(cwd, alias, bare, branch = "main") {
-  writeSources(cwd, sourceFor(alias, bare, branch));
-  const path = join("oms", alias);
-  git(cwd, "submodule", "add", "-b", branch, `file://${bare}`, path);
-  git(cwd, "add", "oms.yaml", ".gitmodules", path);
-  git(cwd, "commit", "-m", `chore(oms): add ${alias} submodule`);
-  return join(cwd, path);
 }
 
 function localBranchExists(dir, branch) {
@@ -322,9 +279,6 @@ export {
   workspaceWithApi,
   statusJson,
   workspaceWithMovedApi,
-  workspaceCloneWithDriftedBaseline,
   sourcesFor,
-  gitmodulesSectionCount,
-  syncedSubmodule,
   localBranchExists,
 };

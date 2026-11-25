@@ -1,56 +1,36 @@
 ---
 name: oms-workspace
-description: Use for ambiguous Git scope, moved pointers, push failures, repository registration, or commands across source repositories in OMS.
-compatibility: Requires oh-my-space >=1.2.0-0.
+description: Use for ambiguous Git scope, missing or legacy OMS checkouts, commands across sources, or work inside managed trees.
+compatibility: Requires oh-my-space >=3.0.0-0.
 metadata:
   author: oh-my-space
-  version: "1.4.0"
-  oh-my-space-version: ">=1.2.0-0"
+  version: "2.0.0"
+  oh-my-space-version: ">=3.0.0-0"
 ---
 
 # OMS workspace scope
 
-Each source repository resides at `oms/<alias>/` as a Git submodule.
-The main project stores a **pointer**, also called a gitlink, to each source commit.
+Each source repository resides at `oms/<alias>/` as an independent Git clone.
+The workspace root shares declarations in `oms.yaml`, not a set of source commits.
 
 ## Scope guardrail
 
-- Run `oms status --json` before Git work involving `oms/` to identify the main project and each source repository.
-- Treat each `oms/<alias>/` directory as a separate Git repository.
-- Use `oms` commands for workflows in `oms/<alias>/`.
-- Create main-project commits for existing pointer updates only when the user explicitly runs `oms record <alias>`.
+- Run `oms status --json` before Git work involving `oms/` and check `schemaVersion: 2`. Use `oms status --help` for the installed version's fields.
+- Choose the repository that owns the change: the workspace root for shared files, or the independent `oms/<alias>/` checkout for source work.
+- Commit and push in the intended source checkout without a root pointer step.
+- Use plain Git inside managed trees at `.oms-tree/<alias>/<task>/`.
 
 ## Choose the repository
 
-1. Read the result of `oms status --json`.
-   Identify the workspace root, current alias, and affected repositories.
-   Read pointer movement from `root.submodulePointers`.
-   Check each source repository's branch, uncommitted changes, and ahead/behind state.
-2. Choose the repository that owns the change.
-   Source changes belong in `oms/<alias>/`.
-   The main project records pointers and repository registration.
-3. For a requested pointer commit, use `oms record <alias>`.
-   Name several aliases when required.
-   Use `--all` only when the request includes every moved pointer.
-   Keep pointer commits separate from source commits.
+1. Read `workspaceRoot`, `currentAlias`, and the selected entries in `repos`.
+2. Check the source branch, uncommitted changes, tracking state, and errors before changing Git scope.
+3. Use `oms <command> --help` for the installed CLI's usage and exit behavior.
 
-These instructions use `oms status --json` schemaVersion 1.
-For another schemaVersion, read `oms status --help` for the installed version's field definitions.
+## Provision or remove a checkout
 
-## Add or remove a repository
-
-Registration changes affect `.gitmodules` and the `oms/<alias>` gitlink.
-An existing pointer update changes only the recorded source commit.
-
-- Use `oms sync <alias>` to add or refresh a repository.
-- Use `oms unsync <alias>` to remove its registration.
-- Use `oms record <alias>` only for existing moved pointers.
-
-`sync` and `unsync` commit registration changes by default.
-Use `--no-commit` to leave those changes unstaged.
-If you choose this mode, commit the registration changes in the main project.
-`oms record` refuses additions and removals.
-Read `oms sync --help` and `oms unsync --help` before selecting other options.
+- Use `oms clone <alias>` to provision a declared, genuinely missing source.
+- Request authorization before `oms remove <alias>`; it deletes the selected local checkout, not its declaration.
+- Use `oms migrate --dry-run` to inspect legacy data. Do not provision or remove a legacy path in its place.
 
 ## Run commands across source repositories
 
@@ -73,8 +53,7 @@ For work inside a managed tree, run the command directly inside that tree.
 OMS runs one child process at a time.
 Each child process runs the supplied command in the selected canonical checkout.
 OMS does not prepare targets.
-Unavailable targets fail with `oms sync <alias>` guidance.
-Do not run `oms sync` unless the request includes repository preparation.
+For missing targets, OMS prints `oms clone <alias>` guidance. Do not provision unless the request includes it.
 
 - Exit `0` means that every selected target succeeded.
 - Exit `1` means a usage, workspace, or selection error.
@@ -94,11 +73,10 @@ A **managed tree** is a disposable Git worktree at `.oms-tree/<alias>/<task>/`.
 It shares the source repository's history and preserves the canonical checkout at `oms/<alias>/`.
 
 1. Use plain Git for source work inside the tree.
-   OMS refuses `commit`, `push`, `branch`, `fetch`, `pull`, `record`, and `exec` there.
+   OMS refuses `commit`, `push`, `branch`, `fetch`, `pull`, and `exec` there.
 2. Push the task branch.
 3. Open a pull request.
 4. After the pull request merges, run `oms pull <alias>` from the workspace root or canonical checkout.
-5. Apply the scope guardrail before a requested `oms record <alias>`.
 
 `oms status --json` reports trees in `trees`.
 `oms doctor` reports broken tree links.

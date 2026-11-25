@@ -1,6 +1,6 @@
 # How OMS works
 
-OMS keeps source repositories beside one another. The main project records each source repository's exact commit. This page explains repository boundaries and safety rules for everyday work and recovery.
+OMS keeps independent Git source repositories beside one another. The workspace root shares their declarations; each computer keeps its own branches and source commits.
 
 ## Workspace layout
 
@@ -8,7 +8,6 @@ A workspace with `api` and `web` looks like this:
 
 ```text
 oms.yaml               # declares each source repository
-.gitmodules            # registers each oms/<alias> Git submodule
 oms/
 ├── api/               # normal Git working tree
 └── web/               # normal Git working tree
@@ -17,45 +16,36 @@ oms/
 
 See [Managed trees](#managed-trees) for machine-local task worktrees under `.oms-tree/`.
 
-`oms.yaml` is the declaration. The main project tracks `.gitmodules` and each `oms/<alias>` entry. Each directory under `oms/` is a separate Git repository where you can branch, edit, commit, pull, and push.
+`oms.yaml` belongs to the root repository. Each directory under `oms/` is an independent Git checkout where you can branch, edit, commit, pull, and push.
 
-Do not add `oms/` to `.gitignore`. The submodule entry is how the main project records each source repository's exact commit. `oms sync` removes the stale `oms/` ignore entry created by older OMS versions.
+OMS ignores the checkout paths individually. Keep `oms/` itself visible so root-owned files such as `oms/AGENTS.md` can be tracked.
 
 ## Two Git boundaries
 
-Every source change crosses two deliberate boundaries:
-
-1. Commit the source change inside `oms/<alias>/`.
-2. Push the source commit.
-3. Record the new source commit in the main project with `oms record <alias>`.
-
-`oms commit`, `oms pull`, and `oms push` operate in the source repository only. They never stage or commit the main project's submodule entry. `oms record` is the command that commits an existing pointer update in the main project.
-
-The exact submodule commit stored by the main project is the **recorded commit**. A source checkout can move to another commit. `git status` and `oms status` show that change until you record it.
+Commit the repository list and other shared workspace files in the root. Commit, pull, and push source work in the relevant checkout. `oms commit`, `oms pull`, and `oms push` act only in the source repository. A root checkout or pull does not update source branches.
 
 ## Managed trees
 
-A **managed tree** is a disposable Git worktree at `.oms-tree/<alias>/<task>/`. It uses the submodule's Git directory and shares its history, branches, remotes, and objects.
+A **managed tree** is a separate Git working directory at `.oms-tree/<alias>/<task>/`. It shares its canonical source's history, branches, remotes, and objects.
 
 Create a managed tree with `oms tree add <alias> <task>`. Managed trees support concurrent tasks without task-specific aliases or extra clones. A new `<task>` branch starts at the canonical checkout's HEAD, or at `--from <ref>`. OMS never moves the canonical checkout.
 
-Adding, listing, and removing trees creates no root commit, `.gitmodules` entry, or gitlink. Task checkouts never enter shared root history.
+Adding, listing, and removing trees does not stage or commit anything in the root. Task checkouts stay on the current computer.
 
-OMS excludes `.oms-tree/` from root status through the root's local `.git/info/exclude` file. OMS never adds a tracked `.gitignore` entry because that entry requires a root commit. Trees are machine-local. A teammate's fresh clone does not contain them.
+Before creating a managed tree, OMS adds the `.oms-tree/` rule to the root repository's local exclude file, usually `.git/info/exclude`. If another process holds the file's lock, OMS stops before creating the tree or its branch. OMS does not add a tracked `.gitignore` entry. Trees are machine-local; a teammate's clone does not contain them.
 
-Use plain Git inside a managed tree. OMS alias commands (`commit`, `record`, `branch`, `fetch`, `pull`, `push`, `exec`) refuse to run there.
+Use plain Git inside a managed tree. OMS source commands (`commit`, `branch`, `fetch`, `pull`, `push`, and `exec`) refuse to run there.
 
 Use this pull-request workflow to return the merged result to the canonical checkout:
 
 1. Commit the `<task>` branch changes inside the tree.
 2. Push the `<task>` branch.
 3. Open its pull request.
-4. After the pull request merges, run `oms pull <alias>` in the canonical checkout to move the submodule branch.
-5. Run `oms record <alias>` to commit the moved root pointer.
+4. After the pull request merges, run `oms pull <alias>` in the canonical checkout.
 
 `oms tree remove <alias> <task>` deletes only the worktree. The `<task>` branch and its commits remain. Delete one branch with `oms branch delete`, or confirm a merged-branch batch with `oms branch clean <alias>`.
 
-`oms unsync` refuses while any tree exists for the alias. Unsync deletes the shared submodule Git directory that those trees use.
+`oms remove` refuses while a managed tree or external linked worktree exists for the source.
 
 `oms status` reports every tree under `.oms-tree/`, including the `trees` array in JSON. `oms doctor` reports broken tree links, for example after you move the workspace root. It recommends `git worktree repair`.
 
@@ -63,48 +53,25 @@ Use this pull-request workflow to return the merged result to the canonical chec
 
 Workspace-aware commands search upward from the current directory and use the nearest `oms.yaml`. OMS treats the nearest entry as authoritative. OMS does not skip an invalid manifest to use an outer workspace.
 
-The manifest must be a regular file or a symbolic link to a regular file. Commands that inspect or change submodules require the manifest directory to be the main Git repository's top level. This prevents a nested manifest from changing the wrong `.gitmodules`, index, or `oms/` directory.
+The manifest must be a regular file or a symbolic link to a regular file. Before a command uses a source checkout, managed tree, or root ignore rules, OMS verifies that the manifest directory is the Git top-level.
 
-You can run workspace-aware commands at the root or below it. Inside a declared `oms/<alias>/`, OMS can infer the alias for commands such as `oms commit` and `oms record`. An explicit alias always wins. Other descendants can discover the workspace but do not become a current alias.
+You can run workspace-aware commands at the root or below it. Inside a declared `oms/<alias>/`, supported commands can infer the alias. An explicit alias wins. Other descendants can discover the workspace without setting a current alias.
 
-`oms sync --list` only reads the manifest, so it remains available before Git initialization.
+`oms clone --list` only reads the manifest, so it remains available before Git initialization.
 
 ## Synchronization
 
-`oms sync` makes the registered workspace match `oms.yaml` without silently advancing source code:
+`oms clone` provisions missing sources on the branch in `oms.yaml`, or the origin default branch when you omit it. It adds the declared remotes and ignores only the checkout paths. It never advances or rewrites a verified existing checkout.
 
-- OMS registers missing repositories with `git submodule add`.
-- OMS initializes registered but uninitialized repositories at the commit recorded by the main project.
-- OMS reconciles declared remotes. `remotes.origin` controls both the local `origin` URL and the `.gitmodules` URL.
-- An explicit `branch` becomes the baseline. If the manifest omits `branch`, OMS uses the remote's default branch.
-- OMS attaches the baseline branch only when this preserves the checked-out commit.
+An existing checkout must have its own `.git` directory and one `origin` that matches the declaration after Git URL rewriting. OMS preserves occupied paths, aliases now assigned to another origin, and legacy submodule data. Use `oms migrate --dry-run` to inspect a legacy workspace.
 
-The remote baseline can advance beyond the recorded commit. In this case, synchronization preserves the checkout at the recorded commit and explains how to switch and pull. A fresh clone remains reproducible. Synchronization does not implicitly update source code.
+## Preparation and consent
 
-`oms sync` and `oms unsync` do not create a main-project commit by default. Pass `--commit` for one run or set `autoCommitRegistration: true` in `oms.yaml` for the workspace. Use `--no-commit` to override that setting. Git may stage changes on affected paths, including paths that were already staged, even when no commit is made. A failed baseline check leaves the alias's metadata unchanged. OMS reports the failure without printing remote URLs.
+`fetch`, `pull`, `branch list`, `branch switch`, and `branch checkout` may offer to clone missing sources in a terminal. OMS lists the missing targets and asks once. Decline leaves them absent; eligible existing targets can continue. Commands that require existing local work, including `commit`, `push`, and `exec`, do not offer to clone.
 
-## Registration and preparation
+A **detached HEAD** means Git uses a commit directly instead of a branch. Before an operation that requires a branch, OMS may attach a local branch at that same commit. If attachment requires moving to another commit, OMS asks first or prints `oms branch switch` guidance.
 
-Commands other than `oms exec` use these registration and preparation rules:
-
-- **Registered and initialized:** Commands continue normally.
-- **Registered but uninitialized:** Commands initialize the repository without changing the main project's registered paths. They then continue.
-- **Pending source registration:** `fetch`, `pull`, `commit`, `branch list`, `branch switch`, `branch checkout`, and `tree add` can use the checkout without recording its registration. `push`, `branch delete`, `branch clean`, `exec`, and `record` require a committed registration. Run `oms sync <alias> --commit` first.
-- **Declared but unregistered:** Read-only or fetch-like workflows may offer `oms sync`. Commit, push, branch deletion, and other commands that require existing local work refuse. A fresh checkout cannot contain that work.
-- **Partially or inconsistently registered:** Commands refuse and direct you to `oms sync`. They do not guess which state is correct.
-
-OMS never registers a repository silently. In a non-interactive session, an operation that needs your decision fails without changing the registered workspace.
-
-If some registrations in an approved batch fail, OMS continues for eligible successful targets and reports a nonzero exit. A failure in shared root finalization instead prevents the requested operation from running for any target.
-
-Before commit, pull, or push, OMS may attach a detached checkout to a local branch that points to the same commit. A **detached HEAD** means Git uses a commit directly instead of a branch. If attachment requires a different commit, OMS asks first or prints `oms branch switch` guidance.
-
-`oms exec` does not use automatic preparation.
-It checks each selected canonical checkout immediately before it starts the child process.
-OMS accepts initialized repositories with consistent registration, including dirty or detached checkouts.
-Missing, uninitialized, occupied, or inconsistent targets fail with `oms sync <alias>` guidance.
-OMS preserves those targets and continues with later eligible targets.
-It does not prepare targets or offer repair prompts.
+`oms exec` verifies each target just before starting the child process. It accepts dirty and detached checkouts but never prepares an unavailable target. It reports the failure and continues with eligible targets.
 
 ## Command execution boundaries
 
@@ -133,7 +100,7 @@ OMS streams output under a header that identifies the alias.
 Child processes consume input sequentially.
 OMS does not replay piped input for each target.
 
-OMS does not initialize, register, fetch, switch branches, record pointers, or repair targets around execution.
+OMS does not clone, migrate, fetch, switch branches, or repair targets around execution.
 It does not implicitly commit, push, or undo changes.
 It performs no additional network operations.
 Child processes retain your permissions.
@@ -171,55 +138,47 @@ See [Run commands across repositories](commands.md#run-commands-across-repositor
 
 ## Status
 
-`oms status` reports each repository's branch, dirtiness, ahead/behind state, and pointer state:
+`oms status` reports the branch, current commit, dirtiness, and tracking divergence for each selected declaration. A missing checkout is `(not cloned)` and adds no error. A blocked checkout is `(unavailable)` with a diagnostic and makes the command exit `2`. A legacy submodule, an occupied path, or an unsafe checkout can block inspection. `oms doctor` separately identifies former checkouts and paths whose ownership cannot be verified.
 
-- `ok`: checked out at the recorded commit.
-- `moved`: The checkout uses a different commit. Use `oms record` after the source commit is available remotely.
-- `uninit`: registered but not initialized.
-- `missing`: expected repository state is absent.
-- `conflict`: the main-project submodule entry is conflicted.
+`oms status --json` emits one JSON object with `schemaVersion: 2`, including the workspace root, current alias, declared source states, and managed trees. Run `oms status --help` for the field contract.
 
-`oms status --json` emits one schema-versioned JSON object for tools and AI agents. It includes the workspace root, current alias, recorded pointers, and source-repository state. Run `oms status --help` for the authoritative field contract.
+In JSON, both missing and blocked checkouts have `initialized: false`. A missing checkout has `error: null`; a blocked checkout has an error message. Do not interpret an uninitialized checkout's default change counts as proof that its files are clean.
 
 ## Branch safety
 
-`oms branch delete` removes only one local source-repository branch. It never deletes remote or remote-tracking branches and never changes the recorded commit.
+`oms branch delete` removes only one local source branch. It never deletes a remote branch or a remote-tracking ref.
 
-OMS protects the current branch and every reliably resolved baseline, including both sides of baseline metadata drift. OMS refuses ambiguous or malformed baseline metadata to protect branches. OMS also refuses deletion during a merge, rebase, cherry-pick, revert, bisect, or sequencer operation.
+OMS protects the current branch and reliably resolved baselines. It also refuses branch deletion during a merge, rebase, cherry-pick, revert, bisect, or sequencer operation.
 
 Safe deletion uses Git's merged-branch check first. Force deletion requires an explicit choice. Before force deletion, OMS prints the branch tip and a recreation command. OMS then checks the tip again. If another process moves the branch, OMS stops deletion to preserve the unexpected commit.
 
 ### Merged branch cleanup safety
 
-`oms branch clean [alias] [--base <ref>]` cleans local branches in exactly one source repository. Omitted aliases always require interactive selection. OMS prepares existing registration without offering new registration; initialization, fetched data, baseline branch creation or attachment, and tracking settings remain if you decline deletion. Managed-tree invocation, inconsistent registration, in-progress source Git operations, and detached HEAD different from the source gitlink committed in root HEAD are refused. A staged gitlink is not the **recorded commit**. Inspection errors fail closed.
+`oms branch clean [alias] [--base <ref>]` cleans local branches in one verified independent checkout. Omitted aliases always require interactive selection. Cleanup never clones a missing source and refuses managed-tree invocation, detached HEAD, in-progress Git operations, or unreliable inspection.
 
 The **comparison base** is the existing local branch named by the selected declaration's `branch`, or by existing `origin/HEAD` when omitted. There is no fixed `main` default, remote substitution, or automatic refresh after preparation. `--base` accepts an unambiguous existing direct local or remote-tracking branch, not a tag, commit ID, or revision expression. Cached remote refs may be behind. Update them deliberately through the existing fetch/pull workflow before a new cleanup invocation. An explicit comparison base never bypasses unresolved **protected baselines**; declare `branch` or repair `origin/HEAD` first.
 
-Eligibility requires the branch tip to be contained in the comparison base's history, regardless of HEAD or upstream. Patch equivalence, squash/rebase results without ancestry, and missing remote branches do not prove a merge. OMS excludes the current branch, local comparison base, every reliably resolved protected baseline (including metadata drift), and branches in any registered worktree, even outside `.oms-tree/`. Dirty files are allowed and preserved. Shallow history allows proven ancestors only; explicitly deepen or repair unproven history before rerunning. No implicit fetch fills the gaps.
+Eligibility requires that the branch tip is in the comparison base's history, regardless of HEAD or upstream. Patch equivalence, squash or rebase results without ancestry, and missing remote branches do not prove a merge. OMS excludes the current branch, local comparison base, protected baselines, and branches in any worktree. Dirty files are preserved. Shallow history protects unproven commits; explicitly deepen or repair it before retrying.
 
-When candidates exist, OMS displays the full base ref and commit, sorted branch tips, exclusions, actual preparation effects, and concurrency limits before one default-No confirmation. Already initialized sources receive no routine preparation notice. After successful inspection, no candidates exits `0` without prompting: an initialized source without exceptional diagnostics prints only an alias-specific no-op summary, not a deletion plan or concurrency warning. Actual initialization effects and applicable safety or shallow-history diagnostics remain visible, including explicit deepen-or-repair guidance when ancestry cannot be proven. A no-op does not imply clean working files or that every topic branch was merged. Inspection failures remain nonzero. Decline, cancellation, or candidates without an interactive terminal exits `1` without deletion. There is no force, workspace-wide, standalone preview, or confirmation-bypass mode.
+When candidates exist, OMS displays the base ref and commit, sorted branch tips, exclusions, and concurrency limits before one default-No confirmation. With no candidates and no exceptional diagnostic, it prints an alias-specific summary and exits `0`. A no-op does not imply clean working files or that all topic branches were merged.
 
-Before each candidate, OMS rereads the selected declaration, registration, root-committed gitlink, source safety, protected baselines, all-worktree occupancy, ref types and commits, and ancestry. A changed candidate is preserved. A changed base or selected context, unsafe source state, or unreliable shared inspection stops remaining work. Unrelated declarations or root commits alone do not invalidate the plan. Each ref transaction verifies the displayed base and candidate commit values before deleting that candidate; it never switches the checkout or retries with force.
+Before each candidate, OMS rereads the selected declaration, checkout identity, source safety, protected baselines, worktree occupancy, ref types and commits, and ancestry. A changed candidate is preserved. A changed base or selected context, or unreliable shared safety, stops remaining work. Unrelated declarations or root commits alone do not invalidate the plan. Each ref transaction verifies the displayed base and candidate commits before deleting, without switching or retrying with force.
 
 **External concurrent mutation is unsupported.** Other Git or IDE operations must not change source branches, worktrees, or configuration from confirmation waiting through completion. Commit verification does not atomically guard direct-ref type, branch generation, occupancy, metadata, operation markers, or configuration. Candidate identity is name plus commit ID: recreation at the same name and commit, or movement away and back to that commit, is not distinguished. A worktree introduced after inspection can lose its branch. Recreation between ref deletion and configuration cleanup can lose the new branch's settings. These checks are not a universal repository lock.
 
-Results distinguish deleted, already absent, preserved, failed, and not run. Only successfully deleted branch names have their configuration sections removed; missing configuration is harmless. A configuration failure remains a completed ref deletion with incomplete cleanup, a precise repair command, and exit `2`. Candidate-local failures allow later independently safe candidates; shared safety changes stop them. Successful or already-absent batches exit `0`; incomplete batches exit `2` without rollback. Output includes original full tips and shell-safe recreation commands while commits remain available, plus rerun or repair guidance. There is no durable recovery journal. After preparation, remote refs, source HEAD/files/index, root tracked state, and recorded commits remain unchanged.
+Results distinguish deleted, already absent, preserved, failed, and not run. Only successfully deleted branches have their configuration removed. A configuration failure reports a completed deletion and a repair command. Independently safe candidates can continue. Successful or already-absent batches exit `0`; incomplete batches exit `2` without rollback. Output includes original commit IDs and recreation commands while the commits remain available.
 
 ## Partial success and preserved state
 
-Multi-repository operations isolate failures by alias and summarize partial success. Root finalization records only successful aliases and preserves unrelated staged paths.
+Multi-source operations report per-alias success and failure. `oms remove` is stricter: it checks the entire selection before deleting anything and stops remaining deletions if the approved state changes. Recoverability is checked against current origin refs when origin is available. This check protects Git history, not discarded working files, and it cannot guarantee origin will retain those refs later. See [removal safeguards](commands.md#oms-remove) for the typed-alias exception and what `--force` can discard.
 
-If the main index changes while OMS builds the registration or metadata commit in its temporary index, OMS stops before advancing `HEAD` and keeps the new staging.
-
-When finalizing repository registration or metadata, OMS writes durable recovery state before replacing the main index. If interruption leaves finalization state behind, `oms sync`, `oms unsync`, and `oms record` run a shared recovery preflight. They either complete the known operation safely or stop before making another main-project change.
-
-OMS limits automation to user intent. OMS performs deterministic preparation, but asks before choices such as registering a missing repository. When OMS cannot continue safely, the error names the failed operation and describes preserved state. The error points to an OMS command or limited Git repair.
+`oms migrate` is the one source lifecycle command that updates shared root files and the index. It records a local recovery journal before moving Git data and only resumes from verified states. See the [migration guide](migrations/2.x-to-3.0.0.md).
 
 ## Recovery checklist
 
 1. Run `oms status` to identify the affected repository and Git boundary.
-2. Run `oms doctor` to diagnose the manifest, Git-root identity, registrations, and installed skill versions.
-3. Follow the specific `oms sync`, `oms branch switch`, or `oms record` command printed by the failure.
+2. Run `oms doctor` to diagnose the manifest, Git-root identity, checkout ownership, and installed skills.
+3. Follow the specific clone, migration, branch, or Git repair guidance printed by the failure.
 4. Use manual Git repair only when the error explicitly requires it.
 5. Limit the repair to the named repository and paths.
 

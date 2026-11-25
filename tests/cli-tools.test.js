@@ -51,6 +51,10 @@ test("agent install --target both creates one managed block per file with the du
     const content = readFileSync(file, "utf8");
     assert.equal(content.match(/<!-- OMS START -->/g).length, 1);
     assert.equal(content.match(/<!-- OMS END -->/g).length, 1);
+    assert.match(content, /oms status --json.*schemaVersion: 2/);
+    assert.match(content, /independent `oms\/<alias>\/` checkout/);
+    assert.match(content, /plain Git inside managed trees/);
+    assert.doesNotMatch(content, /oms record/);
   }
 });
 
@@ -158,53 +162,20 @@ test("agent uninstall leaves the file unchanged when the managed block is duplic
 
 
 
-test("legacy bare clone (oms/<alias>/.bare) blocks sync with the 0.6.0 migration hint", () => {
+test("clone preserves legacy bare data and points to the earlier migration guide", () => {
   const bare = initBareUpstream();
   const cwd = initGitWorkspace();
   writeSources(cwd, sourceFor("api", bare));
   mkdirSync(join(cwd, "oms", "api", ".bare"), { recursive: true });
 
-  const result = run(["sync", "api"], { cwd });
+  const result = run(["clone", "api"], { cwd });
   const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
+  assert.equal(result.status, 2, output);
   assert.match(output, /legacy bare clone/);
-  assert.match(
-    output,
-    /https:\/\/github\.com\/divlook\/oh-my-space\/blob\/[^/\s]+\/docs\/migrations\/0\.5\.x-to-0\.6\.0\.md/,
-  );
+  assert.ok(existsSync(join(cwd, "oms", "api", ".bare")));
+  assert.match(output, /docs\/migrations\/0\.5\.x-to-0\.6\.0\.md/);
 });
 
-test("legacy sources.yaml without oms.yaml is blocked with migration hint", () => {
-  const cwd = initGitWorkspace();
-  writeFileSync(
-    join(cwd, "sources.yaml"),
-    "repos:\n  - alias: sample\n    url: git@example.com:org/repo.git\n    branch: main\n",
-  );
-
-  const result = run(["sync", "sample"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /detected legacy 'sources\.yaml'/);
-  assert.match(
-    output,
-    /https:\/\/github\.com\/divlook\/oh-my-space\/blob\/[^/\s]+\/docs\/migrations\/0\.3\.x-to-0\.4\.0\.md/,
-  );
-});
-
-test("legacy sources/ directory inside an oms.yaml workspace is blocked", () => {
-  const cwd = initGitWorkspace();
-  writeSources(cwd);
-  mkdirSync(join(cwd, "sources"));
-
-  const result = run(["sync", "--list"], { cwd });
-  const output = result.stdout + result.stderr;
-  assert.equal(result.status, 1, output);
-  assert.match(output, /detected legacy 'sources\/'/);
-  assert.match(
-    output,
-    /https:\/\/github\.com\/divlook\/oh-my-space\/blob\/[^/\s]+\/docs\/migrations\/0\.3\.x-to-0\.4\.0\.md/,
-  );
-});
 
 test("unrelated sources/ directory above the workspace does not block oms", () => {
   const parent = tempWorkspace();
@@ -214,7 +185,7 @@ test("unrelated sources/ directory above the workspace does not block oms", () =
   execFileSync("git", ["init", "-b", "main", child], { stdio: "ignore", env: testEnv });
   writeSources(child);
 
-  const result = run(["sync", "--list"], { cwd: child });
+  const result = run(["clone", "--list"], { cwd: child });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /sample/);
 });
@@ -630,18 +601,23 @@ test("published skill names match their installation directories", () => {
   const published = readdirSync(resolve("skills"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name);
+  assert.deepEqual(published.sort(), ["oms-branch", "oms-workspace"]);
   for (const name of published) {
     const content = readFileSync(resolve("skills", name, "SKILL.md"), "utf8");
     const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
     assert.notEqual(frontmatter, undefined, `${name}: missing frontmatter`);
-    assert.equal(parseYaml(frontmatter).name, name, `${name}: installation identity`);
+    const metadata = parseYaml(frontmatter);
+    assert.equal(metadata.name, name, `${name}: installation identity`);
+    assert.equal(metadata["metadata"]["oh-my-space-version"], ">=3.0.0-0");
+    assert.equal(metadata.compatibility, "Requires oh-my-space >=3.0.0-0.");
+    assert.match(content, /schemaVersion: 2/);
+    assert.doesNotMatch(content, /oms record/);
   }
 });
 
 
 const SKILL_REFERENCE = JSON.stringify({
   "oms-workspace": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
-  "oms-pointer": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
   "oms-branch": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
 });
 const INCOMPATIBLE_RUNTIME_VERSION = "0.14.2";
@@ -698,13 +674,14 @@ test("doctor keeps malformed skill reference diagnostics informational", () => {
 test("doctor reports an older installed skill and names the skills update command", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd);
-  const home = fakeSkillsHome({ installed: { "oms-branch": "1.0.0", "oms-pointer": "1.1.0" } });
+  const home = fakeSkillsHome({ installed: { "oms-branch": "1.0.0", "oms-workspace": "1.1.0", "oms-pointer": "1.0.0" } });
 
   const { result, output } = doctorWithSkills(cwd, home);
   assert.equal(result.status, 0, output);
   assert.match(output, /oms-branch: skill 1\.0\.0 is older than 1\.1\.0 \(global\)/);
   assert.match(output, /Update or reinstall: npx skills update oms-branch/);
   assert.doesNotMatch(output, /oms-pointer/);
+  assert.doesNotMatch(output, /oms-workspace/);
   assert.doesNotMatch(output, /npx skills update[^\n]*-[gp]\b/);
 });
 
@@ -811,12 +788,12 @@ test("doctor stays silent when skills match, are absent, or the baked reference 
 test("doctor reports only the skills that are installed", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd);
-  const home = fakeSkillsHome({ installed: { "oms-pointer": "1.0.0" } });
+  const home = fakeSkillsHome({ installed: { "oms-workspace": "1.0.0" } });
 
   const { result, output } = doctorWithSkills(cwd, home);
   assert.equal(result.status, 0, output);
-  assert.match(output, /Update or reinstall: npx skills update oms-pointer$/m);
-  assert.doesNotMatch(output, /oms-branch|oms-workspace/);
+  assert.match(output, /Update or reinstall: npx skills update oms-workspace$/m);
+  assert.doesNotMatch(output, /oms-branch|oms-pointer/);
 });
 
 test("doctor finds installs in the canonical directory and in an agent directory alike", () => {
@@ -887,18 +864,18 @@ test("doctor merges scopes that drifted alike and splits scopes at different ver
 test("doctor skips a baked version that is not valid semver instead of failing", () => {
   const cwd = initGitWorkspace();
   writeSources(cwd);
-  const home = fakeSkillsHome({ installed: { "oms-branch": "1.0.0", "oms-pointer": "1.0.0" } });
+  const home = fakeSkillsHome({ installed: { "oms-branch": "1.0.0", "oms-workspace": "1.0.0" } });
 
   const { result, output } = doctorWithSkills(cwd, home, {
     OMS_TEST_SKILL_REFERENCES: JSON.stringify({
       "oms-branch": { version: "1.1", omsVersion: ">=1.0.0-0" },
-      "oms-pointer": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
+      "oms-workspace": { version: "1.1.0", omsVersion: ">=1.0.0-0" },
     }),
   });
   assert.equal(result.status, 0, output);
   assert.doesNotMatch(output, /Invalid Version/);
   assert.doesNotMatch(output, /oms-branch/);
-  assert.match(output, /oms-pointer: skill 1\.0\.0 is older than 1\.1\.0 \(global\)/);
+  assert.match(output, /oms-workspace: skill 1\.0\.0 is older than 1\.1\.0 \(global\)/);
 });
 
 test("update does not point at doctor for a locked skill this build does not publish", () => {

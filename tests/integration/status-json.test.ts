@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { runStatus } from "../../scripts/lib/status.js";
+import { runIndependentStatus as runStatus } from "../../scripts/lib/status.js";
 import { git, gitOut, sourcesFor, tempWorkspace, testEnv, workspaceWithApi, writeSources } from "../helpers.js";
+
+Object.assign(process.env, testEnv);
 
 test("status JSON keeps its schema and canonical workspace path through a symlinked cwd", async () => {
   const { cwd } = workspaceWithApi();
@@ -37,23 +38,29 @@ test("status JSON keeps its schema and canonical workspace path through a symlin
     "trees",
     "workspaceRoot",
   ]);
-  assert.equal(data.schemaVersion, 1);
+  assert.equal(data.schemaVersion, 2);
   assert.equal(typeof data.toolVersion, "string");
   assert.equal(data.workspaceRoot, realpathSync(cwd));
   assert.equal(data.currentAlias, null);
   assert.deepEqual(data.errors, []);
-  assert.ok(data.root && typeof data.root === "object");
+  assert.deepEqual(data.root, {
+    branch: "main",
+    head: gitOut(cwd, "rev-parse", "--short", "HEAD"),
+    detached: false,
+    dirty: false,
+    changes: { staged: 0, unstaged: 0, untracked: 0 },
+  });
   const repo = data.repos[0];
   assert.equal(repo.alias, "api");
   assert.equal(repo.path, "oms/api");
   assert.equal(repo.absolutePath, join(realpathSync(cwd), "oms", "api"));
   assert.equal(repo.configured, true);
   assert.equal(repo.initialized, true);
-  assert.equal(repo.pin, "ok");
+  assert.equal(Object.hasOwn(repo, "pin"), false);
   assert.equal(repo.error, null);
 });
 
-async function statusJsonAt(cwd: string, aliases: string[] = []) {
+async function statusJsonAt(cwd: string, aliases: string[] = [], expectedExit = 0) {
   const originalCwd = process.cwd();
   const originalWrite = process.stdout.write;
   let output = "";
@@ -63,7 +70,7 @@ async function statusJsonAt(cwd: string, aliases: string[] = []) {
   }) as typeof process.stdout.write;
   try {
     process.chdir(cwd);
-    assert.equal(await runStatus(aliases, { json: true }), 0);
+    assert.equal(await runStatus(aliases, { json: true }), expectedExit);
   } finally {
     process.chdir(originalCwd);
     process.stdout.write = originalWrite;
@@ -71,11 +78,12 @@ async function statusJsonAt(cwd: string, aliases: string[] = []) {
   return JSON.parse(output);
 }
 
-test("status JSON projects branch, source, and pointer states in one Git journey", async () => {
+test("status JSON projects branch, tracking, and independent root and source changes in one Git journey", async () => {
   const { cwd, bare } = workspaceWithApi();
   const api = join(cwd, "oms", "api");
   git(api, "switch", "-c", "feature/no-upstream");
   const untracked = (await statusJsonAt(cwd)).repos[0];
+  assert.equal(untracked.branch, "feature/no-upstream");
   assert.equal(untracked.trackingBranch, null);
   assert.equal(untracked.ahead, null);
   assert.equal(untracked.behind, null);
@@ -85,55 +93,66 @@ test("status JSON projects branch, source, and pointer states in one Git journey
   git(api, "add", "-A");
   git(api, "commit", "-m", "local work");
   const ahead = (await statusJsonAt(cwd)).repos[0];
+  assert.equal(ahead.trackingBranch, "origin/main");
   assert.equal(ahead.ahead, 1);
   assert.equal(ahead.behind, 0);
 
-  writeFileSync(join(cwd, "NOTES.md"), "hi");
-  writeFileSync(join(api, "feature.txt"), "x");
-  git(api, "add", "-A");
-  git(api, "commit", "-m", "feature");
-  writeFileSync(join(api, "scratch.txt"), "y");
-  let data = await statusJsonAt(cwd);
-  assert.equal(data.root.changes.untracked, 1);
-  assert.equal(data.root.changes.staged, 0);
-  assert.deepEqual(data.root.submodulePointers.moved, ["api"]);
-  assert.equal(data.repos[0].changes.untracked, 1);
+  const remoteWriter = tempWorkspace();
+  git(remoteWriter, "clone", "--branch", "main", `file://${bare}`, ".");
+  writeFileSync(join(remoteWriter, "upstream.txt"), "remote");
+  git(remoteWriter, "add", "upstream.txt");
+  git(remoteWriter, "commit", "-m", "upstream work");
+  git(remoteWriter, "push", "origin", "main");
+  git(api, "fetch", "origin");
+
+  writeFileSync(join(cwd, "NOTES.md"), "root notes");
+  writeFileSync(join(api, "staged.txt"), "staged");
+  git(api, "add", "staged.txt");
+  writeFileSync(join(api, "ahead.txt"), "changed");
+  writeFileSync(join(api, "scratch.txt"), "untracked");
+  const data = await statusJsonAt(api, ["api"]);
+  assert.equal(data.currentAlias, "api");
+  assert.deepEqual(data.root.changes, { staged: 0, unstaged: 0, untracked: 1 });
+  assert.equal(data.root.dirty, true);
+  assert.deepEqual(data.repos[0].changes, { staged: 1, unstaged: 1, untracked: 1 });
   assert.equal(data.repos[0].dirty, true);
+  assert.equal(data.repos[0].ahead, 1);
+  assert.equal(data.repos[0].behind, 1);
 
-  git(cwd, "add", "oms/api");
-  data = await statusJsonAt(cwd);
-  assert.deepEqual(data.root.submodulePointers.staged, ["api"]);
-  assert.deepEqual(data.root.submodulePointers.moved, ["api"]);
-  assert.deepEqual(data.root.submodulePointers.split, []);
+  git(api, "switch", "--detach");
+  const detached = (await statusJsonAt(cwd)).repos[0];
+  assert.equal(detached.branch, null);
+  assert.equal(detached.detached, true);
+  assert.equal(detached.head, gitOut(api, "rev-parse", "--short", "HEAD"));
+  assert.equal(detached.trackingBranch, null);
+  assert.equal(detached.ahead, null);
+  assert.equal(detached.behind, null);
+});
 
-  writeFileSync(join(api, "second.txt"), "next");
-  git(api, "add", "second.txt");
-  git(api, "commit", "-m", "second");
-  data = await statusJsonAt(cwd, ["api"]);
-  assert.deepEqual(data.repos.map((repo: { alias: string }) => repo.alias), ["api"]);
-  assert.equal(data.repos[0].pin, "moved");
-  assert.deepEqual(data.root.submodulePointers.moved, ["api"]);
-  assert.deepEqual(data.root.submodulePointers.split, ["api"]);
-  assert.deepEqual(data.root.submodulePointers.staged, ["api"]);
+test("status JSON isolates unavailable source errors and preserves the occupied path", async () => {
+  const { cwd, bare } = workspaceWithApi();
+  writeSources(cwd, sourcesFor(["api", "api-extra", "missing"].map((alias) => ({ alias, bare }))));
+  const occupiedPath = join("oms", "api-extra", "with\ta newline\nand spaces ");
+  mkdirSync(join(cwd, "oms", "api-extra"));
+  writeFileSync(join(cwd, occupiedPath), "root-owned file");
+  git(cwd, "add", "--", occupiedPath);
+  const index = gitOut(cwd, "ls-files", "--stage");
 
-  git(cwd, "add", "oms/api");
-  data = await statusJsonAt(cwd, ["api"]);
-  assert.deepEqual(data.root.submodulePointers.split, []);
-  assert.deepEqual(data.root.submodulePointers.staged, ["api"]);
-
-  writeSources(cwd, sourcesFor([{ alias: "api", bare }, { alias: "api-extra", bare }]));
-  const blob = gitOut(cwd, "rev-parse", "HEAD:oms.yaml");
-  const conflictedPath = "oms/api-extra/with\ta newline\nand spaces ";
-  execFileSync("git", ["update-index", "-z", "--index-info"], {
-    cwd,
-    env: testEnv,
-    input: `100644 ${blob} 1\t${conflictedPath}\0` + `100644 ${blob} 2\t${conflictedPath}\0`,
-  });
-  data = await statusJsonAt(cwd, ["api-extra", "api", "api-extra"]);
-  assert.deepEqual(data.repos.map(({ alias, pin }: { alias: string; pin: string }) => [alias, pin]), [
-    ["api-extra", "conflict"],
-    ["api", "moved"],
-  ]);
-  assert.deepEqual(data.root.submodulePointers, { moved: ["api"], staged: ["api"], split: [], conflict: ["api-extra"] });
-  assert.deepEqual((await statusJsonAt(cwd, ["api"])).root.submodulePointers.conflict, []);
+  const data = await statusJsonAt(cwd, ["api-extra", "api", "api-extra", "missing"], 2);
+  assert.deepEqual(data.repos.map(({ alias }: { alias: string }) => alias), ["api-extra", "api", "missing"]);
+  const [blocked, ready, absent] = data.repos;
+  assert.equal(blocked.initialized, false);
+  assert.match(blocked.error, /oms\/api-extra is tracked by the workspace root/);
+  assert.equal(blocked.branch, null);
+  assert.equal(blocked.head, null);
+  assert.deepEqual(blocked.changes, { staged: 0, unstaged: 0, untracked: 0 });
+  assert.equal(ready.initialized, true);
+  assert.equal(ready.error, null);
+  assert.equal(absent.initialized, false);
+  assert.equal(absent.error, null);
+  assert.deepEqual(data.errors, [blocked.error]);
+  assert.equal(data.root.changes.staged, 1);
+  assert.deepEqual((await statusJsonAt(cwd, ["api"])).errors, []);
+  assert.equal(readFileSync(join(cwd, occupiedPath), "utf8"), "root-owned file");
+  assert.equal(gitOut(cwd, "ls-files", "--stage"), index);
 });

@@ -1,21 +1,22 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
   cli, git, initBareUpstream, initGitWorkspace, run, sourcesFor,
-  syncedSubmodule, testEnv, writeSources,
+  testEnv, writeSources,
 } from "./helpers.js";
 
 function workspace(aliases = ["api", "web"]) {
   const cwd = initGitWorkspace();
   const bare = initBareUpstream();
-  for (const alias of aliases) syncedSubmodule(cwd, alias, bare);
+  for (const alias of aliases) git(cwd, "clone", "--branch", "main", `file://${bare}`, `oms/${alias}`);
+  appendFileSync(join(cwd, ".git", "info", "exclude"), aliases.map((alias) => `/oms/${alias}/\n`).join(""));
   writeSources(cwd, sourcesFor(aliases.map((alias) => ({ alias, bare }))));
   git(cwd, "add", "oms.yaml");
-  git(cwd, "commit", "--allow-empty", "-m", "record full manifest");
+  git(cwd, "commit", "-m", "declare sources");
   return cwd;
 }
 
@@ -105,6 +106,16 @@ test("exec production routing preserves literal child arguments and explicit ali
   }
   assert.match(result.stdout, /web/);
   assert.match(result.stdout, /api/);
+
+  const web = join(cwd, "oms", "web");
+  renameSync(web, join(cwd, "saved-web"));
+  const unavailable = run(["exec", "web", "api", "--", process.execPath, script, ...args], { cwd, timeout: 10000 });
+  const output = unavailable.stdout + unavailable.stderr;
+  assert.equal(unavailable.status, 2, output);
+  assert.match(output, /web:.*oms clone web/);
+  assert.match(output, /state was preserved/);
+  assert.equal(existsSync(web), false);
+  assert.deepEqual(reports(cwd).map(({ alias }) => alias), ["web", "api", "api"]);
 });
 
 test("exec --all routes manifest order and takes precedence over explicit aliases", () => {

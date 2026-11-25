@@ -1,137 +1,54 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { listManagedTrees } from "../../scripts/lib/tree-inventory.js";
-import type { GitResult, Repo } from "../../scripts/lib/types.js";
-import type { RawGitRunner } from "../../scripts/lib/git.js";
-const ok = (stdout = ""): GitResult => ({ exitCode: 0, success: true, stdout, stderr: "" });
+import { openSourceWorkspace } from "../../scripts/lib/source-checkout.js";
+import { listIndependentManagedTrees } from "../../scripts/lib/tree-inventory.js";
+import { git, gitOut, testEnv, workspaceWithApi } from "../helpers.js";
 
-const repo = (alias: string): Repo => ({
-  alias,
-  remotes: { origin: `https://example.com/org/${alias}.git` },
-  branch: "main",
-});
+Object.assign(process.env, testEnv);
 
 test("tree-ops classifies the filesystem ∪ porcelain union with foreign directories and undeclared aliases", () => {
-  const root = mkdtempSync(join(tmpdir(), "oms-tree-unit-"));
-  try {
-    mkdirSync(join(root, ".oms-tree/api/fix-auth"), { recursive: true });
-    mkdirSync(join(root, ".oms-tree/api/stray"), { recursive: true });
-    mkdirSync(join(root, ".oms-tree/legacy/task"), { recursive: true });
-    mkdirSync(join(root, "oms/api"), { recursive: true });
-    writeFileSync(join(root, "oms/api/.git"), "gitdir: /repo/.git/modules/oms/api\n");
-    writeFileSync(join(root, ".oms-tree/legacy/task/.git"), "gitdir: /repo/.git/modules/oms/legacy/worktrees/task\n");
+  const { cwd, bare, wt } = workspaceWithApi();
+  git(cwd, "clone", "--branch", "main", `file://${bare}`, "oms/former");
+  git(wt, "worktree", "add", "-b", "fix-auth", join(cwd, ".oms-tree/api/fix-auth"));
+  const detachedTask = "detached with\nspace";
+  const detached = join(cwd, ".oms-tree", "api", detachedTask);
+  git(wt, "worktree", "add", "--detach", detached, "HEAD");
+  git(join(cwd, "oms/former"), "worktree", "add", "-b", "task", join(cwd, ".oms-tree/former/task"));
+  mkdirSync(join(cwd, ".oms-tree/api/stray"));
 
-    const declaredPorcelain = [
-      "worktree /repo/.git/modules/oms/api",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/main",
-      "",
-      "worktree /repo/.oms-tree/api/fix-auth",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/fix-auth",
-      "",
-    ].join("\n");
-    const legacyPorcelain = [
-      "worktree /repo/.git/modules/oms/legacy",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/main",
-      "",
-      "worktree /repo/.oms-tree/legacy/task",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/task",
-      "",
-    ].join("\n");
-    const runner: RawGitRunner = (_cwd, args) => {
-      if (args[0] === "--git-dir") return ok(args[1].includes("legacy") ? legacyPorcelain : declaredPorcelain);
-      assert.equal(args[0], "status");
-      return ok();
-    };
-
-    const trees = listManagedTrees(root, [repo("api")], { dirtyAliases: "all" }, runner);
-    const byPath = new Map(trees.map((tree) => [tree.path, tree]));
-
-    const fixAuth = byPath.get(".oms-tree/api/fix-auth");
-    assert.ok(fixAuth);
-    assert.equal(fixAuth.state, "healthy");
-    assert.equal(fixAuth.branch, "fix-auth");
-    assert.equal(fixAuth.head, "b795c70");
-    assert.equal(fixAuth.dirty, false);
-
-    const stray = byPath.get(".oms-tree/api/stray");
-    assert.ok(stray);
-    assert.equal(stray.state, "foreign");
-    assert.equal(stray.error, "not a registered worktree of any submodule");
-
-    const legacy = byPath.get(".oms-tree/legacy/task");
-    assert.ok(legacy);
-    assert.equal(legacy.state, "healthy");
-    assert.equal(legacy.branch, "task");
-
-    assert.equal(trees.length, 3);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const trees = listIndependentManagedTrees(openSourceWorkspace(cwd), { dirtyAliases: "all" });
+  assert.deepEqual(trees.map((tree) => [tree.path, tree.state, tree.branch, tree.dirty]), [
+    [`.oms-tree/api/${detachedTask}`, "healthy", null, false],
+    [".oms-tree/api/fix-auth", "healthy", "fix-auth", false],
+    [".oms-tree/api/stray", "foreign", null, null],
+    [".oms-tree/former/task", "healthy", "task", false],
+  ]);
+  assert.equal(trees[1]?.head, gitOut(wt, "rev-parse", "--short=7", "HEAD"));
+  assert.equal(trees[2]?.error, "not a registered worktree of any source repository");
 });
 
 test("tree-ops dirty derivation is untracked-inclusive and broken entries keep null fields", () => {
-  const root = mkdtempSync(join(tmpdir(), "oms-tree-unit-"));
-  try {
-    mkdirSync(join(root, ".oms-tree/api/clean"), { recursive: true });
-    mkdirSync(join(root, ".oms-tree/api/dirty"), { recursive: true });
-    writeFileSync(join(root, ".oms-tree/api/dirty/.git"), "gitdir: /repo/.git/modules/oms/api/worktrees/dirty\n");
-    mkdirSync(join(root, "oms/api"), { recursive: true });
-    writeFileSync(join(root, "oms/api/.git"), "gitdir: /repo/.git/modules/oms/api\n");
+  const { cwd, wt } = workspaceWithApi();
+  const missing = join(cwd, ".oms-tree/api/clean");
+  const dirtyPath = join(cwd, ".oms-tree/api/dirty");
+  git(wt, "worktree", "add", "-b", "clean", missing);
+  git(wt, "worktree", "add", "-b", "dirty", dirtyPath);
+  rmSync(missing, { recursive: true });
+  writeFileSync(join(dirtyPath, "untracked.txt"), "keep");
 
-    const porcelain = [
-      "worktree /repo/.git/modules/oms/api",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/main",
-      "",
-      "worktree /repo/.oms-tree/api/clean",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/clean",
-      "prunable gitdir file points to non-existent location",
-      "",
-      "worktree /repo/.oms-tree/api/dirty",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/dirty",
-      "",
-    ].join("\n");
-    const dirtyPorcelain = [
-      "worktree /repo/.git/modules/oms/api/worktrees/dirty",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/dirty",
-      "",
-      "worktree /repo/.oms-tree/api/dirty",
-      "HEAD b795c7074a85f0ff19231b8b43806017200c6ed4",
-      "branch refs/heads/dirty",
-      "",
-    ].join("\n");
-    const runner: RawGitRunner = (_cwd, args) => {
-      if (args[0] === "--git-dir") return ok(args[1].includes("worktrees/dirty") ? dirtyPorcelain : porcelain);
-      assert.equal(args[0], "status");
-      return ok("?? untracked.txt\n");
-    };
-
-    const trees = listManagedTrees(root, [repo("api")], { dirtyAliases: "all" }, runner);
-    const byTask = new Map(trees.map((tree) => [tree.task, tree]));
-
-    const clean = byTask.get("clean");
-    assert.ok(clean);
-    assert.equal(clean.state, "broken");
-    assert.equal(clean.error, "worktree link is broken: gitdir file points to non-existent location");
-    assert.equal(clean.branch, null);
-    assert.equal(clean.head, null);
-    assert.equal(clean.dirty, null);
-
-    const dirty = byTask.get("dirty");
-    assert.ok(dirty);
-    assert.equal(dirty.state, "healthy");
-    assert.equal(dirty.dirty, true, "an untracked file must count as dirty");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const workspace = openSourceWorkspace(cwd);
+  const [broken, dirty] = listIndependentManagedTrees(workspace, { dirtyAliases: "all" });
+  assert.ok(broken);
+  assert.equal(broken.task, "clean");
+  assert.equal(broken.state, "broken");
+  assert.match(broken.error ?? "", /gitdir file points to non-existent location|worktree link is broken/);
+  assert.equal(broken.branch, null);
+  assert.equal(broken.head, null);
+  assert.equal(broken.dirty, null);
+  assert.equal(dirty?.task, "dirty");
+  assert.equal(dirty?.state, "healthy");
+  assert.equal(dirty?.dirty, true, "an untracked file must count as dirty");
+  assert.deepEqual(listIndependentManagedTrees(workspace, { dirtyAliases: [] }).map(({ dirty }) => dirty), [null, null]);
 });
